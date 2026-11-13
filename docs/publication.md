@@ -4,6 +4,8 @@ The agent has no authenticated GitHub CLI session and must not invent a public r
 
 Before publication, inspect `git status`, the semantic review, the verification record, and `THIRD_PARTY.md`. Confirm the right to publish the imported documentation and the two operator-supplied policies. Original SplitCast code is MIT; the OBS patch and historical copy have GPL-2.0-or-later sidecars and retained upstream license text. Generated recordings, private captures, credentials, build residue and raw local command logs remain ignored under `artifacts/`.
 
+The current tree generalizes operational accounts as well as machine labels. Seven historical files in earlier standalone commits still contain source-account identifiers. Current-tree normalization does not anonymize Git history. The audit found no legacy machine aliases or selected credential signatures in the inspected commits, but the owner must still review this intentional historical disclosure. If it is unwanted, prepare a separate clean publication history while preserving the existing private history; do not force-push a public branch or silently rewrite evidence.
+
 From the standalone repository, the authenticated owner can run:
 
 ```sh
