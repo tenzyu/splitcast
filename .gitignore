@@ -1,0 +1,11 @@
+/target/
+/artifacts/
+/result
+/result-*
+**/target/
+**/dist/
+.env
+*.token
+*.password
+*.pem
+*.key

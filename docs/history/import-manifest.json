@@ -1,0 +1,937 @@
+{
+  "source_id": "source-monorepo-20261113",
+  "source_commit": "3c8857353581424e5cca517d7ccf0db8de7514d4",
+  "raw_source_preserved_in_source_git": true,
+  "files": [
+    {
+      "destination": "docs/history/source/.audit/splitcast-rust-completion.tsv",
+      "source_git_blob": "1de57f3c6a0e7ab3145402c8f811f74ab505413b",
+      "source_sha256": "617eee6efadd6da6cf8da1f56e81d6eac099d2f3f0f9e4e405d30e06cad6003b",
+      "imported_sha256": "abeea636b5dd54bb6e598086c00acc549a18df52f8cddb8a0795bc232b3f5b1c",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "abeea636b5dd54bb6e598086c00acc549a18df52f8cddb8a0795bc232b3f5b1c"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-hardware.md",
+      "source_git_blob": "339e12ebb8aa3bd46c74d801658226cdc7dfd118",
+      "source_sha256": "34c416e1a8960ed260c916c21c3c6281298810f2921451074ea804ccfe0c2e3d",
+      "imported_sha256": "c521c56340ac490208efd10c5ad39790aad289a7745e1e9df5a4f9d90adc7cc1",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "c521c56340ac490208efd10c5ad39790aad289a7745e1e9df5a4f9d90adc7cc1"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-history-integration.md",
+      "source_git_blob": "12bb4de9df9f4385f89e3905c9e2553746314fc9",
+      "source_sha256": "7fa177b393f8819132eebbfcad713aeee98809ad1b7676f1ffae753e377be686",
+      "imported_sha256": "239763c05ce2af0f592463a89efca5b1c54c2637e4d8eecc190c9cfe520c5e45",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "239763c05ce2af0f592463a89efca5b1c54c2637e4d8eecc190c9cfe520c5e45"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-check-enumeration.log",
+      "source_git_blob": "82e857a06d6d15a53b88eda2d95959498c8279d9",
+      "source_sha256": "bdd7fabc1dbf709e2fd01b11527ee0b26429b3522b4e3f6106d61fac40c88d88",
+      "imported_sha256": "bdd7fabc1dbf709e2fd01b11527ee0b26429b3522b4e3f6106d61fac40c88d88",
+      "normalization": "none",
+      "publication_sha256": "bdd7fabc1dbf709e2fd01b11527ee0b26429b3522b4e3f6106d61fac40c88d88"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-dependency-diagnostic.log",
+      "source_git_blob": "492ffac1fbee7461dd361e712a828f6fe40af37b",
+      "source_sha256": "2c3c4cbf4637d4bee78b5659edad648501f94d9a05f3cc096e3cae602192594a",
+      "imported_sha256": "ed6c8a2510069b2f6a3eee51bcd7a2b790ec616fcec130f12cde6f93b5478878",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "ed6c8a2510069b2f6a3eee51bcd7a2b790ec616fcec130f12cde6f93b5478878"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-final-artifacts.log",
+      "source_git_blob": "79b7d68fe6a09b13e17a03dab04b93fa41520eec",
+      "source_sha256": "8a13392a4b9491aba4fe988340c97cdc65b5fe00bd06b5e40a037171ba2c4936",
+      "imported_sha256": "ac1d575de079984135ab1ace77b3a16b1168a55706b0269d70df685a556ec0de",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "ac1d575de079984135ab1ace77b3a16b1168a55706b0269d70df685a556ec0de"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-final.log",
+      "source_git_blob": "e3e7f2a957f075d3e7a00d9bd5a4f31839f30b14",
+      "source_sha256": "485ae3d69f518480b07f2649ef0a631fec2a0ace8d9fe8e9ec7b357c30c8b43d",
+      "imported_sha256": "e8a3a011a39b855ebe1ffa64f09317d0fe9f8e6bc226514ef7e77225b2d8a413",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "e8a3a011a39b855ebe1ffa64f09317d0fe9f8e6bc226514ef7e77225b2d8a413"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-final.md",
+      "source_git_blob": "28aff5139402949ab74f911e7db132cd8d9291a0",
+      "source_sha256": "bc4b60b7f59c43ce3291764f6ae1640191dc0de21d420564e0f5a64b89fc3b83",
+      "imported_sha256": "d4041d3227631d9cb74cbcbc4e69704eba6a96d430f4c8ca17e891c9e5ba8309",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "d4041d3227631d9cb74cbcbc4e69704eba6a96d430f4c8ca17e891c9e5ba8309"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-flake-check-confirm.log",
+      "source_git_blob": "3230e16502e2acc40fd556a9e05c6b7668b8a3ff",
+      "source_sha256": "dba40668e28b764c00942db25e73ab2f17ef0fd422384c5664ba1a860fef1258",
+      "imported_sha256": "c641ee007b57bea54f5162ba68b03c27574df0d1abe1afafbbed0907f90cb7e8",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "e4afd19f1dadfe725e33eb0fd243f37cab83e50ab63f52cae13c8cad8d0f971a"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-flake-check-retry.log",
+      "source_git_blob": "8777a8b9c43a48a600b4caccaea9aefbe73d9428",
+      "source_sha256": "6c077ee9c2d3d945df50060a7bfe42b0c0dfd6173643c539e7eef8a24951bfa8",
+      "imported_sha256": "b630911842f1301df630899ede98cebf565b5026cbd82ea55410ae47c3d74785",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "46ff1e6adfb23b57a2a7bbed57d26c80b5ace6c3b36354b2309752f41f420d40"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-flake-check.log",
+      "source_git_blob": "b89f4c8abb31025a9a043bcc58988f6f9cc136ce",
+      "source_sha256": "e7d2efca65ab1556c19731cc4a8d1b4a1b92bbf37bcd0e2f2135e58b734e2bca",
+      "imported_sha256": "3eec3e949c1674983efff1fbb5c9cec67a692dcdf06380e363c1cd38c4658948",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "3eec3e949c1674983efff1fbb5c9cec67a692dcdf06380e363c1cd38c4658948"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-gates.md",
+      "source_git_blob": "65bfeed036a5448205b52ab00a870233f4b5dd47",
+      "source_sha256": "3af734a623a0a1e1d1bada4e917c7faedd97788646d23c44077271785302365a",
+      "imported_sha256": "3ae21fc57aa31d4041cb1bc59c4c734228dfba18651a1c81bcf11a5b475cde3e",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "3ae21fc57aa31d4041cb1bc59c4c734228dfba18651a1c81bcf11a5b475cde3e"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-native-checks.log",
+      "source_git_blob": "27050d23d7514df32823a96016f0f716a3d2f872",
+      "source_sha256": "52d6e6a2f4c5ed77da5e40aad0a1d09999260f1d0c88d256e83bc6887a014281",
+      "imported_sha256": "a07afc30ae858e2d567a6fbd262b380386e01f03c8782ead94f768b4785f5d2a",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "a07afc30ae858e2d567a6fbd262b380386e01f03c8782ead94f768b4785f5d2a"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-capture-host.log",
+      "source_git_blob": "6df603ba91f1fbaf0adfca32a554087a48430e9e",
+      "source_sha256": "1b968e25119557fe2127a12f11c9f379d4eacec2bd2b27aa034a83830e8b88af",
+      "imported_sha256": "8a20d50d723dd06daf7714b6e3e7b5d5d04040eface4da430e569382f32fdcad",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "8a20d50d723dd06daf7714b6e3e7b5d5d04040eface4da430e569382f32fdcad"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-production-host-game-diagnostic.log",
+      "source_git_blob": "7886845c73297ee07a4e8b8fa219d4bc2ab7abbd",
+      "source_sha256": "968f5cbd6dd53da71748cadd65109691921292160544c84fc6c6174d9be74893",
+      "imported_sha256": "b3e973694dc8d3de969d57100b4a7fbe2fef543a0a155c7597dd98961ca566e3",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "b3e973694dc8d3de969d57100b4a7fbe2fef543a0a155c7597dd98961ca566e3"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-production-host-remaining.log",
+      "source_git_blob": "e9ed15e6719ad660275279ddc3189f16c53f00ed",
+      "source_sha256": "d4f9b291b2e23202138da4f3a74b52b05d6f29bf5543657a6059ea226ca47bd6",
+      "imported_sha256": "8382744af38406ca87cda8b6d0e6c22120f18f2f6789933eed4c8a736db47147",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "8382744af38406ca87cda8b6d0e6c22120f18f2f6789933eed4c8a736db47147"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-production-host.log",
+      "source_git_blob": "af9e9aa36618876518f58f469527193c8569e2e2",
+      "source_sha256": "89f02c41ac4618e1e5142e172c9401da4598ec9a11efc8dacc5f3c174f13c2ca",
+      "imported_sha256": "2d2e0bce0f1f2767e7a1b41e80b1edd1266ec0aa929e615ec1afca865132d647",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "2d2e0bce0f1f2767e7a1b41e80b1edd1266ec0aa929e615ec1afca865132d647"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-package-artifact.log",
+      "source_git_blob": "b4b101f3851228a70f414458e54b2825e8af93de",
+      "source_sha256": "7f966acb3731849bf31a2a3572a872558380847e33310118071d558ffa4032b1",
+      "imported_sha256": "7f966acb3731849bf31a2a3572a872558380847e33310118071d558ffa4032b1",
+      "normalization": "none",
+      "publication_sha256": "7f966acb3731849bf31a2a3572a872558380847e33310118071d558ffa4032b1"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-provenance.log",
+      "source_git_blob": "b92833e869db506f5070b66d1977d216ae16d675",
+      "source_sha256": "b31b9e9b2d62a44881aa1b7ed57a5e67288c66a0b187d2207fba09b45b358f50",
+      "imported_sha256": "b31b9e9b2d62a44881aa1b7ed57a5e67288c66a0b187d2207fba09b45b358f50",
+      "normalization": "none",
+      "publication_sha256": "b31b9e9b2d62a44881aa1b7ed57a5e67288c66a0b187d2207fba09b45b358f50"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-nix-voicevox.log",
+      "source_git_blob": "34af1e6235809ebd2280b6d3d661645c88ca41de",
+      "source_sha256": "1a91e9346929d9cdd060b6f232f609c6fc3b58ed63cb6f1345e7a60f28f74155",
+      "imported_sha256": "3d618ec952b065b10d8d80d160e7a2ca47e64b9e640b4539f2f09e99e9f016ef",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "3d618ec952b065b10d8d80d160e7a2ca47e64b9e640b4539f2f09e99e9f016ef"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-rust-regressions-20261113.txt",
+      "source_git_blob": "2b9b7c3bd4b6bdf98be15bfc7deca422b820ee53",
+      "source_sha256": "3213287976254acd2749626fec534e8186f3c9e755740d724e8f734b9ef46dc3",
+      "imported_sha256": "3213287976254acd2749626fec534e8186f3c9e755740d724e8f734b9ef46dc3",
+      "normalization": "none",
+      "publication_sha256": "3213287976254acd2749626fec534e8186f3c9e755740d724e8f734b9ef46dc3"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-synthetic-ssh-20261113.md",
+      "source_git_blob": "a742958db97da984a31eb3ff5aac560876734b63",
+      "source_sha256": "c777b881a048b9281b621c0b2edef4ae660f4c6308e2e1baa084cf294bbcf6e7",
+      "imported_sha256": "f9dd4b5efb2453f4af4051cdcb6920c0c4d7d2c11f723e9f394172cf3395c3b7",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "f9dd4b5efb2453f4af4051cdcb6920c0c4d7d2c11f723e9f394172cf3395c3b7"
+    },
+    {
+      "destination": "docs/history/source/docs/evidence/splitcast-synthetic-ssh-20261113.txt",
+      "source_git_blob": "4f082300f78234b0ed5043d9357c171ad5d7e234",
+      "source_sha256": "6ddb0258d59d8c7eebc082db52e237215940a9e3b825feea0550c96781826f58",
+      "imported_sha256": "32a6b8f0c427541255fef0cc4941ebf0c54f9c51a60eb0f7a41311729dd735fd",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "32a6b8f0c427541255fef0cc4941ebf0c54f9c51a60eb0f7a41311729dd735fd"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/ADR-2026-11-07-performance-first.md",
+      "source_git_blob": "1aa0915dc7237fdb7e8cb3b05acb04a8a6afc0f4",
+      "source_sha256": "a8635532d375fc39c0876dbece5b87d1a724201e650144656ef6b4756fda894c",
+      "imported_sha256": "3d96a08926183ed2535400e92bafa2075d2ad6c2a6f60a4a5af232e956b6ac86",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "3d96a08926183ed2535400e92bafa2075d2ad6c2a6f60a4a5af232e956b6ac86"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/ASSET-MAINTENANCE.md",
+      "source_git_blob": "f49f41a829fc64e3d818873e1caadcc1aa7667ca",
+      "source_sha256": "5e8f9e50622256a6cb0992b94c053b740c351c548a044485a9993740af795e35",
+      "imported_sha256": "21c27f62fd9e06cc3050d1073a93dd094dbe6f4789f5b3998a5b398d5bc3ab99",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "21c27f62fd9e06cc3050d1073a93dd094dbe6f4789f5b3998a5b398d5bc3ab99"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/AUDIO-RUNBOOK-2026-11-12.md",
+      "source_git_blob": "e43d84ed7e31b7140f12b94869efb2e9447b40ba",
+      "source_sha256": "ad0b7e0375a1865c8a013a6a44759d4d4bdf6d151daf6deeb30f6fca02ae7db7",
+      "imported_sha256": "30b31d5d00a593d9ad9366cbee2015f4c9b90d5d892aecfac4fc402778d23c29",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "30b31d5d00a593d9ad9366cbee2015f4c9b90d5d892aecfac4fc402778d23c29"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/DECISIONS-2026-11-06.md",
+      "source_git_blob": "a321bc0814dd5473442235c3b42bd83474915cce",
+      "source_sha256": "b96ac4f4805b4240372ec31c6183eb3cf2d645ded28be3ecc54615a6a4952f5c",
+      "imported_sha256": "da2b30213ce245d1608d7434d26cea7b8c7ce1d9031e9e46c3269069a9fcea36",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "da2b30213ce245d1608d7434d26cea7b8c7ce1d9031e9e46c3269069a9fcea36"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/EVIDENCE-2026-11-07.tsv",
+      "source_git_blob": "6273c5b431857f8ab38c1be1c18096717aee09ac",
+      "source_sha256": "294335b2ff895263214305019dc538778a6bbeac3258067cf02cde85571c2db2",
+      "imported_sha256": "ea9b22227efadca6b110314db02864fde55007717c836df557f1d0224ef36718",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "ea9b22227efadca6b110314db02864fde55007717c836df557f1d0224ef36718"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/EVIDENCE-MATRIX-2026-11-12.tsv",
+      "source_git_blob": "8bb80cfd080c9834a7ad040ea4bc7265bdae0779",
+      "source_sha256": "d21b47bcbe905025b4911e70b58a51cdfbc05ea87e21700801e451b122159ab0",
+      "imported_sha256": "06f68920eee8e28f229761cc86783f2d5733e81d2e86e674c707292120c71ca9",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "06f68920eee8e28f229761cc86783f2d5733e81d2e86e674c707292120c71ca9"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/capture-host-OBSERVED-2026-11-07.md",
+      "source_git_blob": "bb89c4e01fbb16909f664be2f5dc4ae5fa42852c",
+      "source_sha256": "3fcf50f4b3b87c9f84e3b4e5f70de1dc2fffabbbbfdeeec5f2996c9f5c3583fe",
+      "imported_sha256": "0a487b8578f83d8be293cd6b10a85a6b25ce3f8f14b85925842719e282d80231",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "0a487b8578f83d8be293cd6b10a85a6b25ce3f8f14b85925842719e282d80231"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/PRIORITY-2026-11-07.tsv",
+      "source_git_blob": "229061d639a6ccfaa43e7c4e7bb564f26808779b",
+      "source_sha256": "59585fc47a3a74dbfe31c7fb34e1b8f4a8776162441c1019af0ec98a45ee4864",
+      "imported_sha256": "59585fc47a3a74dbfe31c7fb34e1b8f4a8776162441c1019af0ec98a45ee4864",
+      "normalization": "none",
+      "publication_sha256": "59585fc47a3a74dbfe31c7fb34e1b8f4a8776162441c1019af0ec98a45ee4864"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/QUICKSTART-2026-11-07.md",
+      "source_git_blob": "476bd88f211bbe819c7acdc5d140d50cda9c4332",
+      "source_sha256": "b18a22c9a49ac68f5f5869765563ddbe908e2b8e1ef42bb64288499cc87b56dd",
+      "imported_sha256": "fa34bef2138402873e23bdd49c5965cd198323b7d2d5b6008a8b6b77a1edf1a5",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "fa34bef2138402873e23bdd49c5965cd198323b7d2d5b6008a8b6b77a1edf1a5"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/README.md",
+      "source_git_blob": "e16ecf1aafae6b5666e7aa7ac294a754c0615f13",
+      "source_sha256": "d103fbf8c79467a2cec8829dadba3a658b08f7f5f95d224594b2860086847b42",
+      "imported_sha256": "c3b080dfe402664aac78be64c6e8768c5c7c31c4e1fc04e26ff72c6463c2f359",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "c3b080dfe402664aac78be64c6e8768c5c7c31c4e1fc04e26ff72c6463c2f359"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/RESEARCH-2026-11-05.md",
+      "source_git_blob": "5ee177d5bf32f184f5d22ddeb585227d0b84bc81",
+      "source_sha256": "e87931885fbf31f76a63caf4c4ac39d8ad2538c4f480740312a8291e9099de9b",
+      "imported_sha256": "eacb8a604dfec980cf7e3bf0e1db3b91aeb7d8c2e9fdb5829a132fbf7a56f459",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "eacb8a604dfec980cf7e3bf0e1db3b91aeb7d8c2e9fdb5829a132fbf7a56f459"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/SPLITCAST-AGENT-PORTING-2026-11-07.md",
+      "source_git_blob": "eead227938f4707a90e832dccd76df76cdaf0680",
+      "source_sha256": "1d7788e4fa6a106ba325267981bc792c93aa237fade7553433b80177f5b8e9e8",
+      "imported_sha256": "5a3c0d41421c28fc6afe804dba605a3f6bb92fedec9026c5d2f796563c8bef9f",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "5a3c0d41421c28fc6afe804dba605a3f6bb92fedec9026c5d2f796563c8bef9f"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/SYSTEM-RFC.md",
+      "source_git_blob": "df72a25a280034030c28bd4337f82b6ce54af567",
+      "source_sha256": "3b8baa67529e5553fee2d74181d6584f27667fe55162738a28c9c74b1e6ed42d",
+      "imported_sha256": "a70fcf8f37f505ec7b6890b6fa4d6d756e82496d1eedf5dd913700978390ab06",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "a70fcf8f37f505ec7b6890b6fa4d6d756e82496d1eedf5dd913700978390ab06"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/REPORT-2026-11-07.md",
+      "source_git_blob": "e26abd6f866f81a379c797ffa1c3dc2595e4b6f3",
+      "source_sha256": "de9ab531aa39f618f9515f20d4edc26ad54644824a94338867e511b76741af86",
+      "imported_sha256": "8fe2aa030f40504e674494cace10a5443ddf5d3db6be92ffbd4bacadf8267c80",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "8fe2aa030f40504e674494cace10a5443ddf5d3db6be92ffbd4bacadf8267c80"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/audio.svg",
+      "source_git_blob": "4fe41cb9b1e7651edbc46e90c40c374d52b76812",
+      "source_sha256": "e8c8af004516a00e79601ee7c9d8639b4e1877a7acfcfa76bee2f15b1aa324bd",
+      "imported_sha256": "e8c8af004516a00e79601ee7c9d8639b4e1877a7acfcfa76bee2f15b1aa324bd",
+      "normalization": "none",
+      "publication_sha256": "e8c8af004516a00e79601ee7c9d8639b4e1877a7acfcfa76bee2f15b1aa324bd"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/facts-2026-11-07.json",
+      "source_git_blob": "e86dc84b49503b87d72901fb5ef531cc6ef13156",
+      "source_sha256": "c21937cc5ef3e894cf52558dc0c1fc43a07f9c9abc1eab6a7c2b5c7bc5c35492",
+      "imported_sha256": "606e84f92a540d8f963d592078489b3b6c8a13b3a09711612314d9f6db5a66d0",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "606e84f92a540d8f963d592078489b3b6c8a13b3a09711612314d9f6db5a66d0"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/input.svg",
+      "source_git_blob": "3ea9df3397d21c1f3b781239454b206d4ef7056f",
+      "source_sha256": "1aa3b5686ed76dabd1b04ae834fb6c61a29e2f3c1e0b7ed1f4a978b48d0aa478",
+      "imported_sha256": "1aa3b5686ed76dabd1b04ae834fb6c61a29e2f3c1e0b7ed1f4a978b48d0aa478",
+      "normalization": "none",
+      "publication_sha256": "1aa3b5686ed76dabd1b04ae834fb6c61a29e2f3c1e0b7ed1f4a978b48d0aa478"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/kernel.svg",
+      "source_git_blob": "ca90a7c6539f6a8b9cec53b57d8aacd148d591a8",
+      "source_sha256": "dc779443c58a59fc6f13de8d74a4b188a21fd99e981386069a862dac6540cc09",
+      "imported_sha256": "0a8a6c06e2efbb2465548c2aba71992413686327083dbdeb07d95e32d1e90d11",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "0a8a6c06e2efbb2465548c2aba71992413686327083dbdeb07d95e32d1e90d11"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/measured.svg",
+      "source_git_blob": "e59db57d19dd916a1af7463f52a9421725bf1ff5",
+      "source_sha256": "f0ec77ea9384e4514c76778f0e57a196ae0e36974bda9809306997a610d216e3",
+      "imported_sha256": "f0ec77ea9384e4514c76778f0e57a196ae0e36974bda9809306997a610d216e3",
+      "normalization": "none",
+      "publication_sha256": "f0ec77ea9384e4514c76778f0e57a196ae0e36974bda9809306997a610d216e3"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/overview.svg",
+      "source_git_blob": "41ed7b8198a060d67b7c5251cf290abbcb5ac3c9",
+      "source_sha256": "2bd8a1363ed40822834c1cdd5d28d375f01d80dc89a9f41188572c9d40777165",
+      "imported_sha256": "eee692d68e33248f706de27c816ca57de7e79d8797cd3cd76d843f7a87d49d7d",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "eee692d68e33248f706de27c816ca57de7e79d8797cd3cd76d843f7a87d49d7d"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/splitcast.svg",
+      "source_git_blob": "9b04dc2458782489d64ed8efad14df8df6cb2d8a",
+      "source_sha256": "1cafcbd72443d27d55459c7a0216733bb8eec8a2fef6785acaede7b3a07d27e4",
+      "imported_sha256": "c583fdfa627d95348631838af8eca70d45fc509287905515bd23690a218e4a60",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "c583fdfa627d95348631838af8eca70d45fc509287905515bd23690a218e4a60"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/update_draw.svg",
+      "source_git_blob": "d956099bb6ae7c1c742e91cb37f78e4f71a3a201",
+      "source_sha256": "7e8b11d1229292ab52ccf58de7624066f3977778f809e7b3401261ca7f989a47",
+      "imported_sha256": "7e8b11d1229292ab52ccf58de7624066f3977778f809e7b3401261ca7f989a47",
+      "normalization": "none",
+      "publication_sha256": "7e8b11d1229292ab52ccf58de7624066f3977778f809e7b3401261ca7f989a47"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/architecture/verified.svg",
+      "source_git_blob": "bc567d2da801a0a16d9ea397382ab89c3c0a2d13",
+      "source_sha256": "c344568db21f80435a8172bdf4c6194fa234a19f9bbc98bdc5bbcf82db92b7ed",
+      "imported_sha256": "d5f8256db5e182a77792fe1dc948db3999a0355d6fd17db1cce5473b36c8b05d",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "d5f8256db5e182a77792fe1dc948db3999a0355d6fd17db1cce5473b36c8b05d"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/rust-completion-20261113.md",
+      "source_git_blob": "44f294981df1d671da755e2076bf6f9795061586",
+      "source_sha256": "ebcc1f5b3d87f9f8aa23522449cfb7056555a0ffb2be2864db347b8440fce529",
+      "imported_sha256": "bce3e1aeb91d3730891ccbef1786f355a05d833c404149f10cadc0635eaa2513",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "bce3e1aeb91d3730891ccbef1786f355a05d833c404149f10cadc0635eaa2513"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/wiki/INDEX.md",
+      "source_git_blob": "13fbcde46c1ac5caa8d4260cba7c0a0725e6fcfd",
+      "source_sha256": "5bc7b89ee6e9a00d929d0472f323627a11b73778cb3a76293b2021b2f38fcb46",
+      "imported_sha256": "f1f33ceb7f71d138a5c549d9cab80499ea5516ac6f3efcc9c09dd61038e37b3f",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "f1f33ceb7f71d138a5c549d9cab80499ea5516ac6f3efcc9c09dd61038e37b3f"
+    },
+    {
+      "destination": "docs/history/source/docs/graphics-streaming/wiki/design.md",
+      "source_git_blob": "09cfa687a2fd269392ed67517ab8cb647c59f193",
+      "source_sha256": "2f07a031afadeaa2a199a80516b86e8c6171e8b1296a5268828728f1aa529f1b",
+      "imported_sha256": "2f07a031afadeaa2a199a80516b86e8c6171e8b1296a5268828728f1aa529f1b",
+      "normalization": "none",
+      "publication_sha256": "2f07a031afadeaa2a199a80516b86e8c6171e8b1296a5268828728f1aa529f1b"
+    },
+    {
+      "destination": "docs/history/source/docs/splitcast-decisions.tsv",
+      "source_git_blob": "1007872e2d5dafefa9d675c57c2f4def2754521d",
+      "source_sha256": "6fd8bb0653b9f7d06a8fb4fdf9ed5eac2a7cdb5ea4b176f7ec956ebd163ee060",
+      "imported_sha256": "b45359668d927ea529ce3e59553ae5a1742a4e9a1bd0e42965af5b40434ea8c1",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "b45359668d927ea529ce3e59553ae5a1742a4e9a1bd0e42965af5b40434ea8c1"
+    },
+    {
+      "destination": "docs/history/source/docs/splitcast-remote-development.md",
+      "source_git_blob": "e9eba0f109137a61d8ff17e100272faa409bdad7",
+      "source_sha256": "b786b6204ef112f382de2cbe8abf055bc5291bb8b3cdd569df28025c27384c16",
+      "imported_sha256": "10c4d66b8e15320823abf3da25102759ccad03b715d54268682ef732762db0f0",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "10c4d66b8e15320823abf3da25102759ccad03b715d54268682ef732762db0f0"
+    },
+    {
+      "destination": "docs/history/source/memo.md",
+      "source_git_blob": "4d7ebc589b5f3bcadfb410fae925fa2d44a505b2",
+      "source_sha256": "ddf4df510ebd329092bffca052395b45b4851085ec3b4b4483b414485b8a752c",
+      "imported_sha256": "1b8c4434b0aeea1946a15fdcf21bdc2d0fabe84906dcc34ce804d2e2b3ea581f",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "1b8c4434b0aeea1946a15fdcf21bdc2d0fabe84906dcc34ce804d2e2b3ea581f"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast-capture.nix",
+      "source_git_blob": "5a83be3aca9d729679618be4f0910952e60023c5",
+      "source_sha256": "ec447e05aaf9d8fa60110ebc1385bb26f26dd378a806ebaa7b25f5c2a6e0be1d",
+      "imported_sha256": "ec447e05aaf9d8fa60110ebc1385bb26f26dd378a806ebaa7b25f5c2a6e0be1d",
+      "normalization": "none",
+      "publication_sha256": "ec447e05aaf9d8fa60110ebc1385bb26f26dd378a806ebaa7b25f5c2a6e0be1d"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast-checks.nix",
+      "source_git_blob": "5b32c9d064b2b9bdee5470badc4196aa3fb26347",
+      "source_sha256": "a638c36cc0fcb368355584051642e32aaaf44f39f2e431d91893e8165bd8d88c",
+      "imported_sha256": "d23a2d1152f0e20076d1b3d671f1da5f07aef48ad8d68676178e22940b1276e4",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "d23a2d1152f0e20076d1b3d671f1da5f07aef48ad8d68676178e22940b1276e4"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast-packages.nix",
+      "source_git_blob": "bed5300207ce0ed882a6610f2aa7757bebb25e5f",
+      "source_sha256": "1e8918ce703f43ce7c77e07c99f86b3632a0e6eda41ca9c608e58c38dac5b833",
+      "imported_sha256": "1e8918ce703f43ce7c77e07c99f86b3632a0e6eda41ca9c608e58c38dac5b833",
+      "normalization": "none",
+      "publication_sha256": "1e8918ce703f43ce7c77e07c99f86b3632a0e6eda41ca9c608e58c38dac5b833"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast-production.nix",
+      "source_git_blob": "fda0a2bb44953e96ff9d00c16080a93569c50704",
+      "source_sha256": "46485fc3bee61c6835da11c00607affdc20700ac5e43acb6882a9a26b5a29830",
+      "imported_sha256": "46485fc3bee61c6835da11c00607affdc20700ac5e43acb6882a9a26b5a29830",
+      "normalization": "none",
+      "publication_sha256": "46485fc3bee61c6835da11c00607affdc20700ac5e43acb6882a9a26b5a29830"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast-stock-obs-firewall.nix",
+      "source_git_blob": "310a9ae4de5c2ae20d2e2e1d34d68bb880fc6f60",
+      "source_sha256": "7a3a92ce21a0dcbae9d81aa4ff8b33f3dd078b129799e57ad8d433a32b8c91ce",
+      "imported_sha256": "781e4f2d31dcc69ce060854eedb6b32be8db28f8d6785f60711ed50ef8ab8038",
+      "normalization": "role labels and operator-home placeholder only",
+      "publication_sha256": "781e4f2d31dcc69ce060854eedb6b32be8db28f8d6785f60711ed50ef8ab8038"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/README.md",
+      "source_git_blob": "2f668984f168f30517bed52f6910de1a63aae964",
+      "source_sha256": "14427827e58331f77f0e91676afdd0bbe19bae7ec7709db7f9f68f20daf44799",
+      "imported_sha256": "14427827e58331f77f0e91676afdd0bbe19bae7ec7709db7f9f68f20daf44799",
+      "normalization": "none",
+      "publication_sha256": "14427827e58331f77f0e91676afdd0bbe19bae7ec7709db7f9f68f20daf44799"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/VERIFICATION.md",
+      "source_git_blob": "3fa54ca57b2420ffac0b17f1396e1bd5e21c28b3",
+      "source_sha256": "11a44f3f3cc2a071228062a8d7646193bb491a283f9fc1e0ab372fe374362a01",
+      "imported_sha256": "11a44f3f3cc2a071228062a8d7646193bb491a283f9fc1e0ab372fe374362a01",
+      "normalization": "none",
+      "publication_sha256": "11a44f3f3cc2a071228062a8d7646193bb491a283f9fc1e0ab372fe374362a01"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/headless-display.nix",
+      "source_git_blob": "ce28fccd72bb68d6814c9216ddffb2b5d26b7574",
+      "source_sha256": "55d269072e1dde3d6ab572ea7927866b1c89669d610d224728ba3747864c31b7",
+      "imported_sha256": "55d269072e1dde3d6ab572ea7927866b1c89669d610d224728ba3747864c31b7",
+      "normalization": "none",
+      "publication_sha256": "55d269072e1dde3d6ab572ea7927866b1c89669d610d224728ba3747864c31b7"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/home-manager.nix",
+      "source_git_blob": "236754719c11cb553273588986c9f46e96cddcfa",
+      "source_sha256": "8157d400550fb25fa7c8b7352214dc5ea8807d3784f871b524c972cc8b75e824",
+      "imported_sha256": "8157d400550fb25fa7c8b7352214dc5ea8807d3784f871b524c972cc8b75e824",
+      "normalization": "none",
+      "publication_sha256": "8157d400550fb25fa7c8b7352214dc5ea8807d3784f871b524c972cc8b75e824"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/nixos.nix",
+      "source_git_blob": "c28c8d643fa341fde3bd147da24672c799d8817d",
+      "source_sha256": "0c3879250a26f77a3f8996f329cfb3cf67eef070287a11b7e0fd4e916e0e9dc8",
+      "imported_sha256": "0c3879250a26f77a3f8996f329cfb3cf67eef070287a11b7e0fd4e916e0e9dc8",
+      "normalization": "none",
+      "publication_sha256": "0c3879250a26f77a3f8996f329cfb3cf67eef070287a11b7e0fd4e916e0e9dc8"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/obs-websocket-loopback.patch",
+      "source_git_blob": "182c29e483f08a185ea0997f62107f04ecc79aa5",
+      "source_sha256": "ab08130ce6b401897942503e00c819ebde43b80d63e4bc58bb03a6c17a4f8ed8",
+      "imported_sha256": "ab08130ce6b401897942503e00c819ebde43b80d63e4bc58bb03a6c17a4f8ed8",
+      "normalization": "none",
+      "publication_sha256": "ab08130ce6b401897942503e00c819ebde43b80d63e4bc58bb03a6c17a4f8ed8"
+    },
+    {
+      "destination": "docs/history/source/modules/50-features/splitcast/_internal/obs.nix",
+      "source_git_blob": "f58b4fa7899a5c14e01df77cfd3b785ed27b55b9",
+      "source_sha256": "ed6f92d6fd751de971a3b4fda928b2a9ff86739cc16ac1ab87214e711e4a908f",
+      "imported_sha256": "ed6f92d6fd751de971a3b4fda928b2a9ff86739cc16ac1ab87214e711e4a908f",
+      "normalization": "none",
+      "publication_sha256": "ed6f92d6fd751de971a3b4fda928b2a9ff86739cc16ac1ab87214e711e4a908f"
+    },
+    {
+      "destination": "packages/splitcast-protocol/Cargo.toml",
+      "source_git_blob": "cf3db9c89334bdbd60b3fdd2bc8618e213fedeef",
+      "source_sha256": "716dc804ef90cf419e0ec731e5d516c1d7d4ccd1ff6992b2abd86c6491d66b55",
+      "imported_sha256": "716dc804ef90cf419e0ec731e5d516c1d7d4ccd1ff6992b2abd86c6491d66b55",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-protocol/src/lib.rs",
+      "source_git_blob": "d0ae0bf5c3f6ad669288197eba5f5b3fa607abfe",
+      "source_sha256": "fb8f221b90a60481e370f97318959be56e3cb891091879802c818d735833df9e",
+      "imported_sha256": "fb8f221b90a60481e370f97318959be56e3cb891091879802c818d735833df9e",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/Cargo.lock",
+      "source_git_blob": "02377a401fbf0fc5eb12e9279b11c5b55d9df763",
+      "source_sha256": "1a4e05dff2f57e9daf7a648c968957e64430ae4ac856402253e92aa9414ea4ee",
+      "imported_sha256": "1a4e05dff2f57e9daf7a648c968957e64430ae4ac856402253e92aa9414ea4ee",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/Cargo.toml",
+      "source_git_blob": "8d4d74d7eaf71f3f5bb17387ddf058e56b617dec",
+      "source_sha256": "1319df8f2f42213a01cc4a66f8be0e51dbac7387601cc5400fc338506575050c",
+      "imported_sha256": "1319df8f2f42213a01cc4a66f8be0e51dbac7387601cc5400fc338506575050c",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/README.md",
+      "source_git_blob": "c7631460c213f84333f73a93da1fac44e298462b",
+      "source_sha256": "d969c0ede6c84c396b290cb26296edd69b9e996ffeb18e2377b23bff09ebe950",
+      "imported_sha256": "6160c11ca6ec3fd18d5978855c40afe85f79eaae7fcc6c4c9881aa982fc19e6f",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-rs/TUI.md",
+      "source_git_blob": "e964ac330f9c42c59b3b53f30db80576913c7883",
+      "source_sha256": "a6cc97234a9947fc5ddef7824b03e258bd726720b13472df2443871442ffe725",
+      "imported_sha256": "a6cc97234a9947fc5ddef7824b03e258bd726720b13472df2443871442ffe725",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/default.nix",
+      "source_git_blob": "17deca955e14c4bafc0e46e90b2c0420b5c5f476",
+      "source_sha256": "d64359f0942524be67ab274e4016d072ecdb5fe01acbf095e91587e491aa4ac8",
+      "imported_sha256": "d64359f0942524be67ab274e4016d072ecdb5fe01acbf095e91587e491aa4ac8",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/example.toml",
+      "source_git_blob": "1e84e5a1c4159387517f2409c59adb1f45d363f6",
+      "source_sha256": "66a7e8dacf1648db7d335db50410e2cf873a93bdf0fba0b276e5b26fb0904d13",
+      "imported_sha256": "c8efe43f3f528ce52209ac992d68c231200b8ad66ee9d3bf961a00e153bcf646",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/agent.rs",
+      "source_git_blob": "ae17d67bea011c7f099f92b67394e164bbf56cc7",
+      "source_sha256": "8cabdde7e1ac532bfa715d71de16701823c5c5b280d4dace67d96e9f7a5ea519",
+      "imported_sha256": "8cabdde7e1ac532bfa715d71de16701823c5c5b280d4dace67d96e9f7a5ea519",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/audio.rs",
+      "source_git_blob": "0db3c0cf54af8f81e11cb744821f5554c6b0876c",
+      "source_sha256": "7eb1fb2972e1a82c111fa7a828688f4c067ba03226ea369948fe399765c79469",
+      "imported_sha256": "7eb1fb2972e1a82c111fa7a828688f4c067ba03226ea369948fe399765c79469",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/config-schema.json",
+      "source_git_blob": "975bce32995a859ad69b62e17a358b04cd70c9b5",
+      "source_sha256": "74ae993a85b197fe71b87ad01ae440f5ee6a279377430187cde95ee366d78eac",
+      "imported_sha256": "74ae993a85b197fe71b87ad01ae440f5ee6a279377430187cde95ee366d78eac",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/config.rs",
+      "source_git_blob": "f892945d970c0c9258dd1f3967e886e98d690ca2",
+      "source_sha256": "abc881488d7a654c319e3d5c269970cf78e134acbd690d2bdf52b9ffb7646747",
+      "imported_sha256": "7d792eec704620d321f61f4ecb085b3d65595824926028ef4d5aca63b16f50e4",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/control.rs",
+      "source_git_blob": "284c94399ca99cb0fff80cad3cd6d8c9a377788b",
+      "source_sha256": "0d71cf9fa8904f706ee85fbbe6f018eb9c8871250e6da22783107bf46c04e91b",
+      "imported_sha256": "0d71cf9fa8904f706ee85fbbe6f018eb9c8871250e6da22783107bf46c04e91b",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/http.rs",
+      "source_git_blob": "d90814cc1d14432ff41d00760812093915a56791",
+      "source_sha256": "71dc57cebdf826a2fbfb93264e8f8deb8042d86f2030561a4dbf2e896677d437",
+      "imported_sha256": "71dc57cebdf826a2fbfb93264e8f8deb8042d86f2030561a4dbf2e896677d437",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/lib.rs",
+      "source_git_blob": "18cceda2a42e5effb322064d955f1ce690a178da",
+      "source_sha256": "2239f1ab33a79f411e63237674bcef1802c82488885e9324f3d6181e36118d6b",
+      "imported_sha256": "2239f1ab33a79f411e63237674bcef1802c82488885e9324f3d6181e36118d6b",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/lifecycle.rs",
+      "source_git_blob": "6236fcbfe79c31b044d60e63683ad97a36bfa093",
+      "source_sha256": "6b753db78a1f3657158c886ba7662ca9498d055ca068edb65a71e7b7b4e28001",
+      "imported_sha256": "6b753db78a1f3657158c886ba7662ca9498d055ca068edb65a71e7b7b4e28001",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/main.rs",
+      "source_git_blob": "ec8f9b8307955d02b6ceda3e9098fced2ae68445",
+      "source_sha256": "276671975b780f1a90bc57880e5688b43d2471286931313925458cab93623da9",
+      "imported_sha256": "276671975b780f1a90bc57880e5688b43d2471286931313925458cab93623da9",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/media.rs",
+      "source_git_blob": "8c16a506a085e2f7a38fed24dd716164bd3f3f65",
+      "source_sha256": "28d5e8195b349af308e9703223fde6d51be6bc0a34d54f48a147bbc6a18d8276",
+      "imported_sha256": "28d5e8195b349af308e9703223fde6d51be6bc0a34d54f48a147bbc6a18d8276",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/obs.rs",
+      "source_git_blob": "8640b80e5f130103bd58f6762ee2724ede5244a6",
+      "source_sha256": "2e0d3663b117159ec8aeb62260c2195178db3a40abc4a496b262b823ff5a6d45",
+      "imported_sha256": "2e0d3663b117159ec8aeb62260c2195178db3a40abc4a496b262b823ff5a6d45",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/process.rs",
+      "source_git_blob": "b46f338f8815a9c01df61416d6a8712fb0e121d7",
+      "source_sha256": "139dbf538091c3e61456a45779ddd8ef9f08e06afc7b161ce60df3b189a01000",
+      "imported_sha256": "139dbf538091c3e61456a45779ddd8ef9f08e06afc7b161ce60df3b189a01000",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/state.rs",
+      "source_git_blob": "268e142d02fef3234d577e8d3b3f176ca1a8e8a4",
+      "source_sha256": "f4fdcd77fcce04214b6e683be3f1fc85eedd34dca5322a761aa8d7f1993d2ca5",
+      "imported_sha256": "f4fdcd77fcce04214b6e683be3f1fc85eedd34dca5322a761aa8d7f1993d2ca5",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/tts.rs",
+      "source_git_blob": "9eb8cff93f8f5666b9f1a9c1f3fcf974b9b02267",
+      "source_sha256": "6b7698f3894a4d8a8aca32128a6fc39ed631cea089a6fdf114468ae62aa0840b",
+      "imported_sha256": "6b7698f3894a4d8a8aca32128a6fc39ed631cea089a6fdf114468ae62aa0840b",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/tui.rs",
+      "source_git_blob": "9eec753006089948dc63a42a8ca171481202312b",
+      "source_sha256": "360337c96a4006efb70b80c5eecd8566ec8637c532c60bc1a9910de77af4570b",
+      "imported_sha256": "360337c96a4006efb70b80c5eecd8566ec8637c532c60bc1a9910de77af4570b",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/web.rs",
+      "source_git_blob": "85cbbd577d82e0f28ac8961474c5b7242a854814",
+      "source_sha256": "72f522d3c893cc958e7767110d65840a6b5bbe16052a6a3a530a763146bf4d89",
+      "imported_sha256": "72f522d3c893cc958e7767110d65840a6b5bbe16052a6a3a530a763146bf4d89",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/src/workers.rs",
+      "source_git_blob": "66cf6898a5027a93a9b48b15e89d264619583eec",
+      "source_sha256": "4c79f480ca5cd77f81c783c6351871e713b28b643fc20f86379ade087fb48823",
+      "imported_sha256": "4c79f480ca5cd77f81c783c6351871e713b28b643fc20f86379ade087fb48823",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/tests/agent-example.json",
+      "source_git_blob": "b7e1087f2a95a1e5e6d96047746c6f97904db18a",
+      "source_sha256": "c12d9d1fecec61a96af39be5ce1be5ddc40fe9e8045f0e370fc04d92c0f8dbdc",
+      "imported_sha256": "03747c2755d7ad657657ee502fad0e9409906d01b123391c3cacd2c28fd43c02",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-rs/tests/config-corpus.json",
+      "source_git_blob": "0df185cc04a72e68c06590db1a710acc50f28c3e",
+      "source_sha256": "3b97428388e987649ca66d35bd1e42f8de37e96686d710dc4f8a9244bac7e0e5",
+      "imported_sha256": "2cbb020b82d1a42ffc1a22d57607cbd9d852702519b7f923e25eb24e81135c50",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-rs/tests/config_corpus.rs",
+      "source_git_blob": "83cb5c25e4b17287583424bb56f4421bcf415b9a",
+      "source_sha256": "7f56288548760118c5d636184808f4d77c489feac8fc88214b2894c1213b0efd",
+      "imported_sha256": "7f56288548760118c5d636184808f4d77c489feac8fc88214b2894c1213b0efd",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/tests/control_integration.rs",
+      "source_git_blob": "fa132db9c21ac6e389b426e566341f5423df9a1a",
+      "source_sha256": "90b120a1a019d6692e4d04adbd2149d39f6bbf68b06f35a2c360d81886b51e5b",
+      "imported_sha256": "90b120a1a019d6692e4d04adbd2149d39f6bbf68b06f35a2c360d81886b51e5b",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-rs/tests/example.json",
+      "source_git_blob": "869396357bccca677751c09dab4b8809d5bd3292",
+      "source_sha256": "3775e485f77408543c58098ab47595bc0a5f39cd506d2c2d990aeed9a1edf21b",
+      "imported_sha256": "1816132d7b6031aa17d72eda0fa320bd7902024699e16ddfd15510aabf6bcf84",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-rs/tests/synthetic_ssh.rs",
+      "source_git_blob": "1f9ec48ff935696a79375bf4e19611036fe08803",
+      "source_sha256": "7371981807277605f4fe9b5630e540cf53b211b3710b77adf8fc2cf196efb3a3",
+      "imported_sha256": "b7e74eccd2ea408ecb29dfd43426fcfd685262ce0724888d35a95c37ee703118",
+      "normalization": "role labels and operator-home placeholder only"
+    },
+    {
+      "destination": "packages/splitcast-web/.gitignore",
+      "source_git_blob": "a742227c7a841ddce1eb889d35d137844d551353",
+      "source_sha256": "ad8ebeaeb880ec8c2388bbdf361e28d59d1ed0d7ae34a5c0a0e8ba60b7265483",
+      "imported_sha256": "ad8ebeaeb880ec8c2388bbdf361e28d59d1ed0d7ae34a5c0a0e8ba60b7265483",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/Cargo.lock",
+      "source_git_blob": "13906bea86cac2fdeb066d4deb3a6a52232420d1",
+      "source_sha256": "a5357b132dcd11796f22bbe0b79b637a0212ef4f5e02b38352a6bf301fd77ee4",
+      "imported_sha256": "a5357b132dcd11796f22bbe0b79b637a0212ef4f5e02b38352a6bf301fd77ee4",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/Cargo.toml",
+      "source_git_blob": "0096799ac1d53fb14ecb0a2a0461962c55dc7b53",
+      "source_sha256": "c7d12e701b99ea0a264a965ecc995eac299035b57d6bf04e8d2aa26ffd738fa3",
+      "imported_sha256": "c7d12e701b99ea0a264a965ecc995eac299035b57d6bf04e8d2aa26ffd738fa3",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/README.md",
+      "source_git_blob": "862426d9f2e3fd21e3a3a7d15c0355a743c6b1a7",
+      "source_sha256": "6195594682ad1844ad4e340d6da1fc7cf96e2cbd5e719e7f20516d2c8c8e1e08",
+      "imported_sha256": "6195594682ad1844ad4e340d6da1fc7cf96e2cbd5e719e7f20516d2c8c8e1e08",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/assets/index.html",
+      "source_git_blob": "cccb222dac84d92db190d1b2f76ccea4f09dfb08",
+      "source_sha256": "9335ed3fac290a7eb0e7890187faabe708f2597b3cf58f5ec5bc3233200a7a04",
+      "imported_sha256": "9335ed3fac290a7eb0e7890187faabe708f2597b3cf58f5ec5bc3233200a7a04",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/assets/loader.js",
+      "source_git_blob": "5c39bee70600617b964046cd24bb83abb6028540",
+      "source_sha256": "3982cdb2b4881e1631bf612add2c85e5b88be5cc660fc541092759caab6edda7",
+      "imported_sha256": "3982cdb2b4881e1631bf612add2c85e5b88be5cc660fc541092759caab6edda7",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/default.nix",
+      "source_git_blob": "82eb82ee8c689a6c1570d8a7885edd459489a6d7",
+      "source_sha256": "19faae72bdb35b50db821a097af0aab945d0b29cdf2a94f4effd89ad39f56180",
+      "imported_sha256": "19faae72bdb35b50db821a097af0aab945d0b29cdf2a94f4effd89ad39f56180",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/src/browser.rs",
+      "source_git_blob": "564c632e9d289a0414416e044413aeb9663f9254",
+      "source_sha256": "e66e55b5a73824504c41741b667f6f285ba4fb65379a0ae61450afd208c1a34e",
+      "imported_sha256": "e66e55b5a73824504c41741b667f6f285ba4fb65379a0ae61450afd208c1a34e",
+      "normalization": "none"
+    },
+    {
+      "destination": "packages/splitcast-web/src/lib.rs",
+      "source_git_blob": "e321b47ec3e6e3d221f262ba3f5d3aab8cad5cc1",
+      "source_sha256": "1e48b1d1a2a585b2dffa78064aa9262f17cc095f4849baedb9a91fb0a9eadb78",
+      "imported_sha256": "1e48b1d1a2a585b2dffa78064aa9262f17cc095f4849baedb9a91fb0a9eadb78",
+      "normalization": "none"
+    },
+    {
+      "destination": "scripts/build-web.sh",
+      "source_git_blob": "33a33fc1289f742e7ef7364ef8b17f81de2e1480",
+      "source_sha256": "300b60832d95cd7817290d3b6d9d13b4367d3028ac64b7e36217cd402078c0ad",
+      "imported_sha256": "300b60832d95cd7817290d3b6d9d13b4367d3028ac64b7e36217cd402078c0ad",
+      "normalization": "none"
+    },
+    {
+      "destination": "scripts/splitcast/.gitignore",
+      "source_git_blob": "c18dd8d83ceed1806b50b0aaa46beb7e335fff13",
+      "source_sha256": "32dae3052f331ee34d628ef535709b301259a45df7c7522c4d35dcf49873f00b",
+      "imported_sha256": "32dae3052f331ee34d628ef535709b301259a45df7c7522c4d35dcf49873f00b",
+      "normalization": "none"
+    },
+    {
+      "destination": "scripts/splitcast/conditions.example.json",
+      "source_git_blob": "c59aa13389b84897719ab4ed5a27c9b13adfa81b",
+      "source_sha256": "7febf0312d2f90931ee95678b74d40b99a87dbfbd96e3c02f7d332ca279a34b6",
+      "imported_sha256": "7febf0312d2f90931ee95678b74d40b99a87dbfbd96e3c02f7d332ca279a34b6",
+      "normalization": "none"
+    },
+    {
+      "destination": "scripts/splitcast/evidence/synthetic.json",
+      "source_git_blob": "4be7d96a7a24ebd6c81402a090c6a3d117458ba8",
+      "source_sha256": "533fa22f3b94c34fc85d45162472c48e49dd0de303f0d5912639799db9a8ab1f",
+      "imported_sha256": "533fa22f3b94c34fc85d45162472c48e49dd0de303f0d5912639799db9a8ab1f",
+      "normalization": "none"
+    },
+    {
+      "destination": "scripts/splitcast/evidence/verification.json",
+      "source_git_blob": "d5c625d1f33b8c160138079400a5d1a178ce7ad0",
+      "source_sha256": "174a5791c2ca2cbc690e17e6148f3a2424f8df30f2c6e1f1b864401fdc6d31bc",
+      "imported_sha256": "174a5791c2ca2cbc690e17e6148f3a2424f8df30f2c6e1f1b864401fdc6d31bc",
+      "normalization": "none"
+    },
+    {
+      "destination": "scripts/splitcast/isolated-obs-test.sh",
+      "source_git_blob": "53350487a313585d11d4efe3883c9f2d3a222888",
+      "source_sha256": "5cc578fb796cb50fb70e29955a54a119f7bc9be427fa7208702e5758ae7b6dd5",
+      "imported_sha256": "5cc578fb796cb50fb70e29955a54a119f7bc9be427fa7208702e5758ae7b6dd5",
+      "normalization": "none"
+    },
+    {
+      "destination": "docs/history/source/docs/ARCHITECTURE_DECISIONS.md",
+      "source_git_blob": "4f2e462b4f775c55279d69a48009e6c06cd904f9",
+      "source_sha256": "659a50d2a29f014594fd26fe9039ee6f881f552b688cc882cb43da966214b625",
+      "imported_sha256": "05b4587b59353684bd7e75d26706561f86fe6c35f82c8d82d0ed254b6ebc8293",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "05b4587b59353684bd7e75d26706561f86fe6c35f82c8d82d0ed254b6ebc8293"
+    },
+    {
+      "destination": "docs/history/source/docs/E2E_RESULTS.md",
+      "source_git_blob": "cf0f7bf34052e42aa4f5d53a40be70fc1e0f4df1",
+      "source_sha256": "b527521eea7c108a4a6648b9b949679ff973d6531f1f5c668a2b90dac1d51b60",
+      "imported_sha256": "f8642bffda7c47a691cdc35b0c9ec132a5b1acb33b5b9f2e1f8bb8317ef41968",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "f8642bffda7c47a691cdc35b0c9ec132a5b1acb33b5b9f2e1f8bb8317ef41968"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/.gitignore",
+      "source_git_blob": "7a60b85e148f80966a550e5ab6a762a907c69ca6",
+      "source_sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+      "imported_sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/README.md",
+      "source_git_blob": "055420d33c96f4f2636fedf920b2468f37621eb0",
+      "source_sha256": "d23d67ca423fcea3af2045ced374f16d30f3eb60be7de5219771c0844fd635e0",
+      "imported_sha256": "0d3cf39c696ace0f05bb379c740da85b4416873586b620225badc65ada2fc6c6",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "0d3cf39c696ace0f05bb379c740da85b4416873586b620225badc65ada2fc6c6"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/directcast_lab.py.txt",
+      "source_git_blob": "f5d97558ef355f5477dcfd71b838d740588f8356",
+      "source_sha256": "0fceaa87ef535719701526eb9f1c80e3bb8df4d4568e1084376c4c4da291ed80",
+      "imported_sha256": "ed181454b829cd7ff5744ca5d1e83a0edf8113372ee792d3d81cd4f32281e810",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "ed181454b829cd7ff5744ca5d1e83a0edf8113372ee792d3d81cd4f32281e810"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/mediamtx.yml",
+      "source_git_blob": "68bb9ac3f6d9021c805315afac6700ea100dbfdb",
+      "source_sha256": "b27e196a8f2b8385a8d509ba3eb07fcddc1992206c21c2dc9c5a0e5ef06c80be",
+      "imported_sha256": "b27e196a8f2b8385a8d509ba3eb07fcddc1992206c21c2dc9c5a0e5ef06c80be",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "b27e196a8f2b8385a8d509ba3eb07fcddc1992206c21c2dc9c5a0e5ef06c80be"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/obs_stock_boundary.py.txt",
+      "source_git_blob": "79dcea46583f555f832361a49414978ca14b33f0",
+      "source_sha256": "d87e2cf3773ea9ef03d7476370a6f2e9c7c871e8f0b6f4a3b7b7fcb269919140",
+      "imported_sha256": "d87e2cf3773ea9ef03d7476370a6f2e9c7c871e8f0b6f4a3b7b7fcb269919140",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "d87e2cf3773ea9ef03d7476370a6f2e9c7c871e8f0b6f4a3b7b7fcb269919140"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/osu-gl-test.sh",
+      "source_git_blob": "6bb5697f595aff583f0e4ace7c3a16edeadc6a5f",
+      "source_sha256": "8b5e78dd50f6593734ac9b8fd39b68a9a3ebd8c027150fd5fa74d96ee533e091",
+      "imported_sha256": "8b5e78dd50f6593734ac9b8fd39b68a9a3ebd8c027150fd5fa74d96ee533e091",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "8b5e78dd50f6593734ac9b8fd39b68a9a3ebd8c027150fd5fa74d96ee533e091"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/scanout.py.txt",
+      "source_git_blob": "884dcff284f24a3504fdc22e80056dc9456d265f",
+      "source_sha256": "e98b40eee72b24153930759d77c0a98a9d528f054283add8fc1300cc13e857bf",
+      "imported_sha256": "e98b40eee72b24153930759d77c0a98a9d528f054283add8fc1300cc13e857bf",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "e98b40eee72b24153930759d77c0a98a9d528f054283add8fc1300cc13e857bf"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/snapshot.sh",
+      "source_git_blob": "3b08e89a7741b31afaa494616bd045f5677bf30a",
+      "source_sha256": "bbcb5bf24aa9972825cb2b12bd6ec4cc183390e2599831c11f948a9adb774a05",
+      "imported_sha256": "bbcb5bf24aa9972825cb2b12bd6ec4cc183390e2599831c11f948a9adb774a05",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "bbcb5bf24aa9972825cb2b12bd6ec4cc183390e2599831c11f948a9adb774a05"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/tests/test_lab.py.txt",
+      "source_git_blob": "6e7fea58ea7e68d355e064ba5e375926ae8b7d1b",
+      "source_sha256": "71c51bae8f9ab9a03f9195e8d70570a4af2cd033fac921570a4b1a10e52bc4d8",
+      "imported_sha256": "04a725fe862c814b0a00d8eb277f85b80d08833d63f0b71843b83665be6f00d6",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "04a725fe862c814b0a00d8eb277f85b80d08833d63f0b71843b83665be6f00d6"
+    },
+    {
+      "destination": "docs/history/source/scripts/graphics-lab/timerslack_exec.py.txt",
+      "source_git_blob": "7a4dceacf266f0adc083573c737e75bc800b4576",
+      "source_sha256": "4d89a893540938f4875501705d18c1000092c975659a3c7b4e5af0a611d64dc5",
+      "imported_sha256": "4d89a893540938f4875501705d18c1000092c975659a3c7b4e5af0a611d64dc5",
+      "normalization": "role labels, operator-home placeholder, non-executable research archive",
+      "publication_sha256": "4d89a893540938f4875501705d18c1000092c975659a3c7b4e5af0a611d64dc5"
+    }
+  ]
+}
