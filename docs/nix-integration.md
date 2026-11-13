@@ -11,14 +11,15 @@ Their definitions use different import forms:
 
 ```nix
 homeManagerModules.default = {
-  key = "splitcast-home-manager";
+  key = "${self.outPath}/nix/modules/home-manager.nix";
   imports = [(import ./nix/modules/home-manager.nix { inherit self; })];
 };
 nixosModules.default = ./nix/modules/nixos.nix;
 ```
 
 The Home Manager module closes over the SplitCast flake's `self`. The explicit
-module key deduplicates repeated imports by independent role bridges. The
+version-specific module key deduplicates repeated imports by independent role
+bridges without silently merging different SplitCast revisions. The
 NixOS module uses its file path as its canonical import identity. Consumers do
 not need `specialArgs` or a package overlay. The default package is
 `self.packages.${pkgs.stdenv.hostPlatform.system}.default`.

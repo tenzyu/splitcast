@@ -1,0 +1,7 @@
+{
+  "original_records_checked": 124,
+  "publication_snapshots_checked": 78,
+  "consumer_deleted_files_covered": 120,
+  "passed": true,
+  "scope": "content/object preservation, not runtime acceptance"
+}

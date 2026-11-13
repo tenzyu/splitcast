@@ -71,3 +71,24 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 - Rationale: source deployment configuration and historical environment details are not portable product defaults.
 - Counterevidence and limits: historical Nix closure success does not establish that extracted packages, modules, or commands build independently. No fresh standalone tests are claimed here.
 - Source: S00. Related evidence: E06. Related risk: R06.
+
+### D07 correction, 2026-11-14
+
+Fresh E07–E10 now replace the extraction-pass checkpoint's pending local verification. All 124 transferred source files retain original object/content identities. Current code, packages, modules, tests, research and memory live here. The consumer retains only flake wiring and deployment settings. Ignored source-checkout residue is preserved privately under `artifacts/`, not included in publication. No statement about live hardware or production readiness is upgraded.
+
+## D08: Module identity must survive multiple consumer role bridges
+
+- Date: 2026-11-14. Adopted extraction repair.
+- Goal: import the same standalone module through independent consumer role switches without defining the same option twice.
+- Observation that rejected the first shape: actual consumer evaluation reported `services.splitcast.settings` already declared after both anonymous Home Manager imports were loaded. Direct single-import module tests had not caught it.
+- Adopted: a version-specific canonical module key for the curried Home Manager export and a canonical file path for the NixOS export. The consumer's generic role gate evaluator is retained in `nix/consumer-tests.nix`.
+- Rejected: deleting the inactive role's option declarations, global keys that silently merge different revisions, or preserving a second local implementation in the consumer.
+- Evidence: S14, E09. Full consumer checks have an independent baseline Firefox derivation failure, so targeted gate success is not relabeled as full consumer success.
+
+## D09: Publish an honest experimental source repository, not an acceptance claim
+
+- Date: 2026-11-14. Current publication policy.
+- Goal: make the Rust work reviewable and usable by others without transferring personal deployment assumptions or false completion claims.
+- Adopted: MIT for original code, explicit upstream GPL notices/license text for the OBS patch and historical copy, conservative Rust 1.95 support, `publish = false` for crates, a normative agent entrypoint, and separate semantic/operational/evidence records.
+- Rejected: treating compiler or advisory success as a soundness proof, a stable reusable API promise, or approval to enable runtime capture. F02/F03 in S15 remain runtime blockers.
+- Evidence: `THIRD_PARTY.md`, `docs/publication.md`, S14, S15. The human owner still confirms documentation/policy publication rights and creates/pushes the GitHub repository. Until then the consumer uses a pinned local Git bootstrap.

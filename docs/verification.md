@@ -18,8 +18,49 @@ The verifier now retains each run under a distinct `artifacts/verification/runs/
 
 ## Pending or unrun acceptance
 
-The standalone Nix package build and consumer migration verification are pending at this checkpoint. Source integration is being changed to reference the independent flake; a local Git input is a bootstrap until the owner publishes the repository and updates its URL.
+At the initial checkpoint, the standalone Nix build and consumer migration were pending. The completed results below supersede that pending status. A pinned local Git input remains a bootstrap until the owner publishes the repository and updates its URL.
 
 No real two-host SSH trial was run with the newly parameterized harness. No physical GSR, microphone, camera, OBS decode/preview/recording, browser interaction, forced-controller-death, filesystem fault injection, or game-performance baseline was run. Miri, fuzzing, sanitizers, lower compiler versions and other architectures have not been exercised.
 
 The [semantic review](design-review.md) retains blocking runtime limitations in whole-server cancellation and task joining, accepted-request outcome ambiguity, and narrower API/FFI/browser weaknesses. Passing local tests do not close those findings. This remains a disabled partial candidate.
+
+## Completed extraction checks, 2026-11-14 JST
+
+| Portable command form or check | Observed result | Scope |
+| --- | --- | --- |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | All 11 configured steps passed. [Command summary](evidence/standalone-20261114-summary.tsv). | 110 ordinary tests and the declared local feature/WASM/check matrix. Raw final run is `artifacts/verification/runs/1794582289292374056/`. Earlier failed logs remain preserved. |
+| `nix develop -c cargo test -p splitcast-rs-core private_audio_dies --locked --offline -- --ignored --nocapture` | One isolated real-daemon test passed. | Ownership, readiness, process teardown, failed reconnect and socket removal, not physical audio. |
+| `nix develop -c cargo test -p splitcast-rs-core --test local_synthetic --locked --offline -- --ignored --nocapture` | One generated-media test passed. | Local software H.264/AAC recording and full decode, not the agent's media transport. |
+| `nix develop -c cargo audit --json` | Exit zero, zero known vulnerabilities; [database/result snapshot](evidence/cargo-audit-20261114.json). | Database commit `4ef2df8e806a65e2f1ecc14f56f51249062b23d6`, not a complete security proof. |
+| `nix develop -c cargo deny check` | Passed after adding exact internal path dependency versions. | Advisories, bans, licenses and sources pass. Duplicate `base64` and `syn` versions remain warnings, not suppressed failures. |
+| `nix build .#default .#splitcast-web --no-link --print-out-paths` | Both artifacts built. | Native package and WASM assets, including package checks; no activation. |
+| `nix flake check` | Exit zero, all checks passed. | Includes generated capture/production configuration validation. Nix warns that `homeManagerModules` is an unknown conventional output; its module is evaluated separately below. |
+| `nix eval --impure --json --expr '<nix/tests.nix with pinned nixpkgs, Home Manager and self>'` | All 22 Boolean assertions true. [Result](evidence/nix-module-assertions-20261114.json). | Real NixOS/Home Manager evaluators with a synthetic package, including negative options, gated/candidate commands, cgroup limits, optional display/firewall and preserved overrides. |
+| `nix eval --impure --json --expr 'import ./nix/consumer-tests.nix { consumer = builtins.getFlake CONSUMER_GIT_URL; }'` | All five assertions true. [Role-only result](evidence/consumer-gates-20261114.json). | Actual consumer role settings and real external package identity, distinct from the synthetic module package. |
+| Consumer `nix build .#checks.x86_64-linux.splitcast-configs --no-link --print-out-paths` | Exit zero; `/nix/store/1qslxi3gwjf2kbhpc8vf40df1ax9xfrj-splitcast-config-check`. | Independently consumed package/config check through the external input. |
+| Installed `splitcast selfcheck`, `validate`, and offline `doctor` | Selfcheck and example validation succeeded; Doctor returned `ok=false`, no selected capture/game-audio source and `cutover_authorized=false`. | The refusal is the intended unselected-example result, not operational readiness. |
+| Independent preservation and hygiene audit | All 124 original blob/content identities checked, all 120 deleted tracked files covered, and all then-current 76 publication hashes matched. | Original source Git history is unchanged; normalized snapshots are explicitly separate. Later publication normalization updates only the publication hashes. No secrets or legacy machine aliases were found in the reviewed committed snapshots. |
+
+The direct standalone native artifact is `/nix/store/w9k4b02jxsq2d1nnkdjq1v00vaxkd8w3-splitcast-rs-core-0.1.0`. WASM assets are `/nix/store/9c6v0b1xpd2qyvlamcyj2vfp8aiw6anj-splitcast-web-0.1.0`. These are local artifact identities, not paths embedded in runnable configuration. The consumer's package variant and input revision are recorded separately by its gate evaluator. Do not assume a follows-adjusted consumer closure is byte-identical to the direct standalone closure.
+
+The module evaluator accepts `{ nixpkgs, homeManager, self }`; the real consumer evaluator accepts `{ consumer }`. Expressions used local checkouts as inputs during this run. Published results retain role names only. The Home Manager source revision used by the module harness was `6eb2d33d1d0c95a37ef6443c88e6c1686012ee8b`. See [module evidence](evidence/nix-modules-20261113.md) for the separate earlier module-authoring probes and their limitations.
+
+The expression placeholders in the table are portable descriptions, not claimed literal shell invocations. Exact executed expressions and shell wrappers are retained privately in `artifacts/verification/executed-commands.tsv`. The verifier's committed TSV separately records every literal Cargo argument vector. This avoids embedding personal checkout paths in published recipes while preserving the actual commands locally.
+
+## Failures and observations that changed the plan
+
+- The first directly checked protocol Clippy run rejected a needless explicit lifetime. Eliding it fixed the warning; no broad lint allowance was added.
+- Cargo deny initially rejected two unversioned internal path dependencies. Exact matching internal versions fixed the policy violation. The audit itself had passed.
+- The initial Git-backed Nix invocation could not see an unstaged new `flake.nix`. Staging the intended source fixed the filtering error. It was not a runtime failure.
+- Direct single-import module tests passed, but the actual consumer initially failed with an already-declared `services.splitcast.settings` option. The independently imported anonymous Home Manager module needed a canonical, version-specific identity; the NixOS export now uses its canonical file path. Actual consumer role evaluation subsequently passed. This regression is why the separate consumer evaluator is retained.
+- Full consumer `nix flake check --no-build` still fails while evaluating FirefoxColor settings, with invalid derivation `1rv3wnjgsnsg3nri8g271hxyknqin3as-catppuccin-firefox-0-unstable-2023-07-18.drv`. The identical error was reproduced by checking untouched source commit `3c8857353581424e5cca517d7ccf0db8de7514d4`. It is a baseline whole-consumer failure, not a passed check or an observed SplitCast migration regression. No unrelated Firefox or Nix-store repair was attempted. Raw outputs remain in `/tmp/opencode/splitcast-consumer-flake-check.log` and `/tmp/opencode/splitcast-consumer-baseline-flake-check.log`.
+
+## Publication, remaining work and rollback
+
+The independent semantic review and final extraction audit approve a disabled experimental source repository only. Runtime findings F02/F03 and API/FFI/browser findings F04–F07 remain visible in the review. The owner must confirm documentation/policy publication rights before creating the GitHub repository; upstream OBS patch licensing and license text are retained separately from MIT code.
+
+No two-host, physical-device, GPU, browser, forced-crash, performance-baseline, Miri, fuzzing, sanitizer, lower-compiler or alternate-architecture result is claimed. Optional stock OBS and VOICEVOX package definitions were evaluated by flake checking, not separately built or accepted as live features. They are not selected implicitly.
+
+Original source records remain recoverable from EXTRACT and the manifest's Git blobs. Ignored residual build/cache material was moved to the standalone repository's private `artifacts/source-checkout-residue/` rather than discarded or published. The consumer's implementation directories are removed. Its remaining changes are local, reviewable flake/module/settings and external-reference updates, with no consumer commit or push by the agent. [Publication steps](publication.md) require the human owner's authenticated GitHub operation.
+
+Rollback preserves both histories. Build a prior standalone implementation in a separate checkout or restore the prior consumer input in a separate reviewed change. Inspect incomplete remote and cgroup cleanup before any runtime rollback. Do not reset unrelated work, infer an installed Python fallback, or activate a generation without separate permission.

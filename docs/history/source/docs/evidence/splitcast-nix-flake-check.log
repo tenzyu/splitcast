@@ -35,7 +35,7 @@ error:
              |            ^
            38|
 
-       … while evaluating the option `home-manager.users.tenzyu.local.features.splitcast-capture.configFile':
+       … while evaluating the option `home-manager.users.operator.local.features.splitcast-capture.configFile':
 
        (stack trace truncated; use '--show-trace' to show the full, detailed trace)
 

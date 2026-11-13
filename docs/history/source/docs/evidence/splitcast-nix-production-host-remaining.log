@@ -38,7 +38,7 @@ these 36 derivations will be built:
   /nix/store/yivlgh254dymn2207lxzgpaqqr2cvdsb-splitcast-production.service.drv
   /nix/store/3sm4331gj0i3a6c3kzqwpchxgrgvqd59-home-manager-files.drv
   /nix/store/5df4y77n30fq93ihk2mgpsslyw6r6plk-home-manager-generation.drv
-  /nix/store/vwsdnallqqp9hqfq53s5yjxjq7gxsjdz-unit-home-manager-tenzyu.service.drv
+  /nix/store/vwsdnallqqp9hqfq53s5yjxjq7gxsjdz-unit-home-manager-operator.service.drv
   /nix/store/rb0k905hij6s76jrl1dhwjr27dwhnh6d-system-units.drv
   /nix/store/wh12rl2pz198dvndkksgidi9l7bqj2b1-user-environment.drv
   /nix/store/ypzqbbayzrrq8yba3limiv7amrg7rmam-etc.drv

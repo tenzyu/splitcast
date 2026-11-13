@@ -11,6 +11,7 @@
     unit = candidate.home.systemd.user.services."splitcast-${cfg.role}" or null;
   in {
     inherit (cfg) enable role rustCandidate;
+    packagePath = cfg.package.outPath;
     systemEnabled = candidate.system.services.splitcast.enable;
     captureHelper = candidate.system.programs.gpu-screen-recorder.enable;
     servicePresent = unit != null;
@@ -31,6 +32,7 @@
     externalPackages = lib.all (cfg: cfg.packageFromInput) (builtins.attrValues roles);
   };
 in {
+  inputRevision = consumer.inputs.splitcast.rev or "uncommitted-or-path-input";
   inherit roles checks;
   passed = lib.all (value: value) (builtins.attrValues checks);
 }

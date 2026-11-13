@@ -41,7 +41,7 @@
     };
     nixosModules.default = ./nix/modules/nixos.nix;
     homeManagerModules.default = {
-      key = "splitcast-home-manager";
+      key = "${self.outPath}/nix/modules/home-manager.nix";
       imports = [(import ./nix/modules/home-manager.nix {inherit self;})];
     };
   };

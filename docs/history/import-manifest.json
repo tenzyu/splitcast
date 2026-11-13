@@ -57,7 +57,7 @@
       "source_sha256": "485ae3d69f518480b07f2649ef0a631fec2a0ace8d9fe8e9ec7b357c30c8b43d",
       "imported_sha256": "e8a3a011a39b855ebe1ffa64f09317d0fe9f8e6bc226514ef7e77225b2d8a413",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "e8a3a011a39b855ebe1ffa64f09317d0fe9f8e6bc226514ef7e77225b2d8a413"
+      "publication_sha256": "49cf84cd6b0388a976b386baa09b52e994e34e6004bd5999735e5ce4c53b48df"
     },
     {
       "destination": "docs/history/source/docs/evidence/splitcast-nix-final.md",
@@ -89,7 +89,7 @@
       "source_sha256": "e7d2efca65ab1556c19731cc4a8d1b4a1b92bbf37bcd0e2f2135e58b734e2bca",
       "imported_sha256": "3eec3e949c1674983efff1fbb5c9cec67a692dcdf06380e363c1cd38c4658948",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "3eec3e949c1674983efff1fbb5c9cec67a692dcdf06380e363c1cd38c4658948"
+      "publication_sha256": "f11da33adda098194129332312b20301633d7a3f5c9d7cd50eb089960f680763"
     },
     {
       "destination": "docs/history/source/docs/evidence/splitcast-nix-gates.md",
@@ -97,7 +97,7 @@
       "source_sha256": "3af734a623a0a1e1d1bada4e917c7faedd97788646d23c44077271785302365a",
       "imported_sha256": "3ae21fc57aa31d4041cb1bc59c4c734228dfba18651a1c81bcf11a5b475cde3e",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "3ae21fc57aa31d4041cb1bc59c4c734228dfba18651a1c81bcf11a5b475cde3e"
+      "publication_sha256": "f86c8cfe3b6aec1fc6f4939172746e0aaebf1fecf1c8c01eff46add98f7278ed"
     },
     {
       "destination": "docs/history/source/docs/evidence/splitcast-nix-native-checks.log",
@@ -113,7 +113,7 @@
       "source_sha256": "1b968e25119557fe2127a12f11c9f379d4eacec2bd2b27aa034a83830e8b88af",
       "imported_sha256": "8a20d50d723dd06daf7714b6e3e7b5d5d04040eface4da430e569382f32fdcad",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "8a20d50d723dd06daf7714b6e3e7b5d5d04040eface4da430e569382f32fdcad"
+      "publication_sha256": "cb7fbb06d103c96930745a29b4edd5d89432e79245e83d8ce9015fc72fe37cb6"
     },
     {
       "destination": "docs/history/source/docs/evidence/splitcast-nix-production-host-game-diagnostic.log",
@@ -129,7 +129,7 @@
       "source_sha256": "d4f9b291b2e23202138da4f3a74b52b05d6f29bf5543657a6059ea226ca47bd6",
       "imported_sha256": "8382744af38406ca87cda8b6d0e6c22120f18f2f6789933eed4c8a736db47147",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "8382744af38406ca87cda8b6d0e6c22120f18f2f6789933eed4c8a736db47147"
+      "publication_sha256": "e3595433036d276bb3ae1bd738125207a65b4406a6fdfc64f18e0af1abf6b971"
     },
     {
       "destination": "docs/history/source/docs/evidence/splitcast-nix-production-host.log",
@@ -137,7 +137,7 @@
       "source_sha256": "89f02c41ac4618e1e5142e172c9401da4598ec9a11efc8dacc5f3c174f13c2ca",
       "imported_sha256": "2d2e0bce0f1f2767e7a1b41e80b1edd1266ec0aa929e615ec1afca865132d647",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "2d2e0bce0f1f2767e7a1b41e80b1edd1266ec0aa929e615ec1afca865132d647"
+      "publication_sha256": "8bd05487f96def03aa3c2cb93d73857564509ed41bcc251855ac6722951b7a80"
     },
     {
       "destination": "docs/history/source/docs/evidence/splitcast-nix-package-artifact.log",
@@ -273,7 +273,7 @@
       "source_sha256": "e87931885fbf31f76a63caf4c4ac39d8ad2538c4f480740312a8291e9099de9b",
       "imported_sha256": "eacb8a604dfec980cf7e3bf0e1db3b91aeb7d8c2e9fdb5829a132fbf7a56f459",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "eacb8a604dfec980cf7e3bf0e1db3b91aeb7d8c2e9fdb5829a132fbf7a56f459"
+      "publication_sha256": "81eb307ee1c548096810259a48ace77e8676eaafedafa6537df06bc45ed626d9"
     },
     {
       "destination": "docs/history/source/docs/graphics-streaming/SPLITCAST-AGENT-PORTING-2026-11-07.md",
@@ -433,7 +433,7 @@
       "source_sha256": "a638c36cc0fcb368355584051642e32aaaf44f39f2e431d91893e8165bd8d88c",
       "imported_sha256": "d23a2d1152f0e20076d1b3d671f1da5f07aef48ad8d68676178e22940b1276e4",
       "normalization": "role labels and operator-home placeholder only",
-      "publication_sha256": "d23a2d1152f0e20076d1b3d671f1da5f07aef48ad8d68676178e22940b1276e4"
+      "publication_sha256": "c0d07e3ab9cda606ac56d55a1942e01ba703304a275f6410345e37a3f2ce609d"
     },
     {
       "destination": "docs/history/source/modules/50-features/splitcast-packages.nix",
@@ -938,14 +938,17 @@
       "source_git_blob": "7d639c6d70ab44935b19195de753874bc7d0a959",
       "source_sha256": "b44719beef83ca01c8ada9cc9a4d347dc764fe753b02003c5a6e7a1a460a5520",
       "imported_sha256": "ee9a601d2178c637770a3b8994bddace9be48263a312946be74cb417ca43e6f5",
-      "normalization": "role labels, operator-home placeholder, non-executable historical asset generator"
+      "normalization": "role labels, operator-home placeholder, non-executable historical asset generator",
+      "publication_sha256": "ee9a601d2178c637770a3b8994bddace9be48263a312946be74cb417ca43e6f5"
     },
     {
       "destination": "docs/history/source/scripts/osu-performance/verify-assets.py.txt",
       "source_git_blob": "34c7a5431cc35709c2debdebaa776da1347a0e8d",
       "source_sha256": "d68641fef741ed01e51c9fb2dc178cd647ffa074fc5f22c14016c94d68234dec",
       "imported_sha256": "d68641fef741ed01e51c9fb2dc178cd647ffa074fc5f22c14016c94d68234dec",
-      "normalization": "role labels, operator-home placeholder, non-executable historical asset generator"
+      "normalization": "role labels, operator-home placeholder, non-executable historical asset generator",
+      "publication_sha256": "d68641fef741ed01e51c9fb2dc178cd647ffa074fc5f22c14016c94d68234dec"
     }
-  ]
+  ],
+  "publication_policy": "Role labels and operator-home placeholders; operational account identifiers generalized; source URLs invalidated by role normalization point to this manifest rather than a fabricated source path. Original repository attribution URLs are retained intentionally."
 }

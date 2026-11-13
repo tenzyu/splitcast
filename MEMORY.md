@@ -1,6 +1,6 @@
 # SplitCast memory
 
-Updated 2026-11-13. Scope: SplitCast decisions, failures, and evidence across the source monorepo and this standalone repository. This is a knowledge index, not deployment authorization.
+Updated 2026-11-14, Japan Standard Time. Scope: SplitCast decisions, failures, and evidence across the source monorepo and this standalone repository. This is a knowledge index, not deployment authorization.
 
 ## User instruction
 
@@ -11,7 +11,7 @@ Updated 2026-11-13. Scope: SplitCast decisions, failures, and evidence across th
 - The goal is standalone OSS SplitCast, outside the source monorepo, with configurable capture host and production host roles. Personal machine configuration is not a product requirement.
 - Historical Rust publication was explicitly partial and disabled. Feature parity, real game capture, production OBS acceptance, and competitive non-regression were not established.
 - Historical results belong to the source implementation documented at `21a4f88`, including repair `0fbad46`. Extraction baseline `3c8857353581424e5cca517d7ccf0db8de7514d4` is a different identity, not a new test result.
-- Fresh standalone build, test, and runtime evidence is pending in this memory. Do not relabel imported results as standalone verification.
+- Fresh standalone workspace checks, 110 ordinary tests, two isolated local components, Rust/WASM builds, module assertions, and consumer gate assertions now have separate evidence in E07–E10. They do not establish live deployment acceptance. Full consumer flake evaluation still fails in an unrelated Firefox derivation, also reproduced at the untouched extraction baseline.
 - No build, historical approval, or memory update authorizes host activation, privileges, external listeners, public streaming, or game changes.
 
 ## Read by question

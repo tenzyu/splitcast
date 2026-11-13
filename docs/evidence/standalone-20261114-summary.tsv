@@ -1,0 +1,12 @@
+check	result	exit_code	command
+fmt	PASS	0	cargo fmt --all -- --check
+check	PASS	0	cargo check --workspace --all-targets --locked --offline
+clippy	PASS	0	cargo clippy --workspace --all-targets --locked --offline -- -D warnings
+tests	PASS	0	cargo test --workspace --locked --offline
+doc-tests	PASS	0	cargo test --workspace --doc --locked --offline
+no-default-features	PASS	0	cargo test --workspace --no-default-features --locked --offline
+all-features	PASS	0	cargo check --workspace --all-targets --all-features --locked --offline
+wasm	PASS	0	cargo check -p splitcast-web --target wasm32-unknown-unknown --locked --offline
+duplicate-dependencies	PASS	0	cargo tree --duplicates --locked --offline
+dependency-features	PASS	0	cargo tree --edges features --locked --offline
+portability	PASS	0	splitcast-xtask portability

@@ -4,7 +4,7 @@
 
 The extraction baseline is source commit `3c8857353581424e5cca517d7ccf0db8de7514d4`. The original implementation and reports remain in the source repository's Git history. `import-manifest.json` records original Git blob IDs, original SHA-256 values, and imported normalized-content SHA-256 values. Later edits to current code do not change an imported snapshot's historical identity.
 
-Publication normalization replaces machine aliases with role labels and personal home directories with `<operator-home>`. This deliberately changes hashes. Source Git blobs are the references for raw originals. To inspect one, run `git cat-file blob <source_git_blob>` in a checkout that retains the source history. The standalone repository does not pretend to contain those original Git objects.
+Publication normalization replaces machine aliases with role labels, operational user accounts with `operator`, and personal home directories with `<operator-home>`. Source URLs invalidated by that normalization point to the import manifest instead of fabricated repository paths. Original repository attribution URLs are intentionally retained as provenance, not deployment identifiers. This deliberately changes hashes. Source Git blobs are the references for raw originals. To inspect one, run `git cat-file blob <source_git_blob>` in a checkout that retains the source history. The standalone repository does not pretend to contain those original Git objects.
 
 The source corpus includes historical failures, superseded plans, partial passes, and commands that are no longer executable. The memory register identifies which findings remain relevant. Private local logs and recordings are not included merely because a historical report mentions them.
 
