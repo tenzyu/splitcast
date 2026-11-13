@@ -932,6 +932,20 @@
       "imported_sha256": "4d89a893540938f4875501705d18c1000092c975659a3c7b4e5af0a611d64dc5",
       "normalization": "role labels, operator-home placeholder, non-executable research archive",
       "publication_sha256": "4d89a893540938f4875501705d18c1000092c975659a3c7b4e5af0a611d64dc5"
+    },
+    {
+      "destination": "docs/history/source/scripts/osu-performance/refresh-audio-architecture.py.txt",
+      "source_git_blob": "7d639c6d70ab44935b19195de753874bc7d0a959",
+      "source_sha256": "b44719beef83ca01c8ada9cc9a4d347dc764fe753b02003c5a6e7a1a460a5520",
+      "imported_sha256": "ee9a601d2178c637770a3b8994bddace9be48263a312946be74cb417ca43e6f5",
+      "normalization": "role labels, operator-home placeholder, non-executable historical asset generator"
+    },
+    {
+      "destination": "docs/history/source/scripts/osu-performance/verify-assets.py.txt",
+      "source_git_blob": "34c7a5431cc35709c2debdebaa776da1347a0e8d",
+      "source_sha256": "d68641fef741ed01e51c9fb2dc178cd647ffa074fc5f22c14016c94d68234dec",
+      "imported_sha256": "d68641fef741ed01e51c9fb2dc178cd647ffa074fc5f22c14016c94d68234dec",
+      "normalization": "role labels, operator-home placeholder, non-executable historical asset generator"
     }
   ]
 }

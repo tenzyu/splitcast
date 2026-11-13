@@ -39,7 +39,10 @@
         touch "$out"
       '';
     };
-    nixosModules.default = import ./nix/modules/nixos.nix;
-    homeManagerModules.default = import ./nix/modules/home-manager.nix {inherit self;};
+    nixosModules.default = ./nix/modules/nixos.nix;
+    homeManagerModules.default = {
+      key = "splitcast-home-manager";
+      imports = [(import ./nix/modules/home-manager.nix {inherit self;})];
+    };
   };
 }

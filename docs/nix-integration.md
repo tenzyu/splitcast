@@ -10,12 +10,17 @@ The flake exposes `homeManagerModules.default` and `nixosModules.default`.
 Their definitions use different import forms:
 
 ```nix
-homeManagerModules.default = import ./nix/modules/home-manager.nix { inherit self; };
-nixosModules.default = import ./nix/modules/nixos.nix;
+homeManagerModules.default = {
+  key = "splitcast-home-manager";
+  imports = [(import ./nix/modules/home-manager.nix { inherit self; })];
+};
+nixosModules.default = ./nix/modules/nixos.nix;
 ```
 
-The Home Manager module closes over the SplitCast flake's `self`. Consumers do
-not need `specialArgs` or a package overlay. Its default package is
+The Home Manager module closes over the SplitCast flake's `self`. The explicit
+module key deduplicates repeated imports by independent role bridges. The
+NixOS module uses its file path as its canonical import identity. Consumers do
+not need `specialArgs` or a package overlay. The default package is
 `self.packages.${pkgs.stdenv.hostPlatform.system}.default`.
 
 ## Home Manager agent
