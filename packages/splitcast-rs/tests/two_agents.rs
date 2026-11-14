@@ -33,7 +33,30 @@ impl Agent {
         stream.set_write_timeout(Some(LIMIT)).unwrap();
         write!(stream, "POST /api/command HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", self.port, self.port, self.token, body.len()).unwrap();
         let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
+        if let Err(error) = stream.read_to_string(&mut response) {
+            if let Ok(tasks) = fs::read_dir(format!("/proc/{}/task", self.child.id())) {
+                for task in tasks.flatten() {
+                    let path = task.path();
+                    eprintln!(
+                        "agent task {}: name={} wait={} syscall={}",
+                        path.display(),
+                        fs::read_to_string(path.join("comm"))
+                            .unwrap_or_default()
+                            .trim(),
+                        fs::read_to_string(path.join("wchan"))
+                            .unwrap_or_default()
+                            .trim(),
+                        fs::read_to_string(path.join("syscall"))
+                            .unwrap_or_default()
+                            .trim()
+                    );
+                }
+            }
+            panic!(
+                "control port {} {command} {args}: {error}; received {response:?}",
+                self.port
+            );
+        }
         let (head, body) = response.split_once("\r\n\r\n").unwrap();
         let code = head.split_whitespace().nth(1).unwrap().parse().unwrap();
         (code, serde_json::from_str(body).unwrap())
@@ -41,8 +64,41 @@ impl Agent {
 
     fn ok(&self, command: &str, args: Value) -> Value {
         let (code, body) = self.command(command, args);
+        if command == "stop" && code == 202 {
+            assert_eq!(body["stop"], "requested");
+            assert_eq!(body["outcome"], "accepted");
+            return self.wait_for_stop();
+        }
         assert_eq!(code, 200, "{command}: {body}");
         body
+    }
+
+    fn wait_for_stop(&self) -> Value {
+        let end = Instant::now() + LIMIT;
+        loop {
+            // Observe completion; never retransmit Stop or restart an
+            // incomplete cleanup attempt merely to make a test pass.
+            let status = self.ok("status", json!({}));
+            assert_ne!(
+                status["stop"], "incomplete",
+                "Stop cleanup failed: {status}"
+            );
+            assert_ne!(
+                status["cleanup"], "unknown",
+                "Stop cleanup is explicitly unknown: {status}"
+            );
+            if status["stop"] == "completed" {
+                assert_eq!(status["state"], "idle");
+                assert_eq!(status["children"], json!([]));
+                assert_eq!(status["remote_release_pending"], false);
+                return status;
+            }
+            assert!(
+                Instant::now() < end,
+                "accepted Stop never resolved: {status}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn state(&self, expected: &str) -> Value {
@@ -361,6 +417,156 @@ fn two_actual_agents_control_failure_and_explicit_recovery() {
 }
 
 #[test]
+fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
+    let mut f = Fixture::new();
+    let first = "first-observer-owner";
+    let second = "second-observer-owner";
+    f.production.ok("prepare", json!({"_owner":first}));
+    f.production
+        .ok("start", json!({"_owner":first,"output":"recording"}));
+    let pids = f.pids();
+    assert!(!pids.is_empty());
+    // Observe only the 202 status line, then lose the JSON reply. This proves
+    // Stop admission before polling, without observing completion or resending.
+    let body = json!({"command":"stop","args":{"_owner":first}}).to_string();
+    let mut lost = TcpStream::connect(("127.0.0.1", f.production.port)).unwrap();
+    write!(lost, "POST /api/command HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", f.production.port, f.production.port, f.production.token, body.len()).unwrap();
+    lost.set_read_timeout(Some(LIMIT)).unwrap();
+    let mut status_line = Vec::new();
+    while !status_line.ends_with(b"\r\n") {
+        let mut byte = [0];
+        lost.read_exact(&mut byte).unwrap();
+        status_line.push(byte[0]);
+        assert!(status_line.len() < 80);
+    }
+    assert_eq!(status_line, b"HTTP/1.1 202 Accepted\r\n");
+    drop(lost);
+    let end = Instant::now() + LIMIT;
+    loop {
+        let (code, observation) = f.production.command("status", json!({"_owner":first}));
+        assert_eq!(code, 200, "{observation}");
+        if observation["stop"] == "completed" {
+            assert_eq!(observation["owner"], first);
+            assert_eq!(observation["state"], "idle");
+            assert_eq!(observation["children"], json!([]));
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "lost-reply Stop did not resolve: {observation}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    f.released(&pids);
+    f.production.ok("prepare", json!({"_owner":second}));
+    let current = f.production.ok("status", json!({}));
+    assert_eq!(current["state"], "ready");
+    assert!(
+        current["stop"].is_null(),
+        "new session fabricated old completion"
+    );
+    assert!(current["owner"].is_null());
+    assert!(!current["children"].as_array().unwrap().is_empty());
+    for command in ["status", "stop", "prepare", "heartbeat"] {
+        assert_eq!(
+            f.production.command(command, json!({"_owner":first})).0,
+            409,
+            "old {command} interfered with the newer owner"
+        );
+    }
+    f.production
+        .ok("start", json!({"_owner":second,"output":"recording"}));
+    f.production.state("running");
+    f.production.ok("stop", json!({"_owner":second}));
+    let overwritten = f.production.ok("status", json!({"_owner":first}));
+    assert_eq!(overwritten["stop"], "completed");
+    assert_eq!(overwritten["owner"], second);
+    assert_ne!(
+        overwritten["owner"], first,
+        "another session became the first owner's release proof"
+    );
+    assert_eq!(f.production.command("stop", json!({"_owner":first})).0, 409);
+    f.released(&f.pids());
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn completed_stop_is_not_a_cross_host_prepare_replay_fence() {
+    let mut f = Fixture::new();
+    let owner = "replayed-prepare-owner";
+    f.production.ok("prepare", json!({"_owner":owner}));
+    f.production.ok("stop", json!({"_owner":owner}));
+    f.released(&f.pids());
+    // The bearer still authorizes Prepare. Owner IDs are constraints, not a
+    // durable request registry. A later admitted Prepare creates fresh effects.
+    // Supported clients must not replay an uncertain Prepare automatically.
+    f.production.ok("prepare", json!({"_owner":owner}));
+    let fresh = f.production.state("ready");
+    assert!(fresh["stop"].is_null());
+    assert!(fresh["output"].is_null(), "Prepare alone started output");
+    assert!(!fresh["children"].as_array().unwrap().is_empty());
+    let pids = f.pids();
+    f.production.ok("stop", json!({"_owner":owner}));
+    f.released(&pids);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn late_owned_start_cannot_recreate_a_completed_remote_session() {
+    let mut f = Fixture::new();
+    f.capture.ok("prepare", json!({}));
+    f.capture.ok("start", json!({"output":"recording"}));
+    f.capture.ok("stop", json!({}));
+    let completed = f.production.ok("stop", json!({}));
+    let owner = completed["owner"].as_str().unwrap();
+    assert_eq!(
+        f.production
+            .command("start", json!({"_owner":owner,"output":"recording"}))
+            .0,
+        409,
+        "a late Start recreated a completed remote session"
+    );
+    f.production.state("idle");
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn bearer_holder_can_use_unowned_emergency_stop_on_peer_owned_session() {
+    let mut f = Fixture::new();
+    f.capture.ok("prepare", json!({}));
+    f.capture.ok("start", json!({"output":"recording"}));
+    let pids = f.pids();
+    // Capture possesses this same production bearer for peer RPCs. Omitting
+    // _owner intentionally exercises its existing full operator authority.
+    let body = splitcast_rs_core::control::request(
+        f.production.port,
+        f.production.port,
+        &f.production.token,
+        "stop",
+        "{}",
+        LIMIT,
+    )
+    .unwrap();
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert!(matches!(
+        body["stop"].as_str(),
+        Some("requested" | "completed")
+    ));
+    if body["stop"] == "requested" {
+        f.production.wait_for_stop();
+    }
+    f.production.state("idle");
+    f.capture.ok("stop", json!({}));
+    f.capture.state("idle");
+    f.released(&pids);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
 fn sigterm_running_capture_releases_both_agents_workers() {
     let mut fixture = Fixture::new();
     fixture.capture.ok("prepare", json!({}));
@@ -373,6 +579,116 @@ fn sigterm_running_capture_releases_both_agents_workers() {
     fixture.production.state("idle");
     fixture.released(&pids);
     fixture.production.shutdown();
+}
+
+#[test]
+fn stop_during_start_acknowledgment_retains_uncertainty_and_reconciles() {
+    let mut f = Fixture::new();
+    f.capture.ok("prepare", json!({}));
+    let production_dir = f.root.join("production");
+    fs::write(production_dir.join("hold-start-ack"), "hold").unwrap();
+    let capture_port = f.capture.port;
+    let token = f.capture.token.clone();
+    let start = thread::spawn(move || {
+        splitcast_rs_core::control::request(
+            capture_port,
+            capture_port,
+            &token,
+            "start",
+            r#"{"output":"recording"}"#,
+            LIMIT,
+        )
+    });
+    let end = Instant::now() + LIMIT;
+    while !production_dir.join("start-committed").exists() {
+        assert!(
+            Instant::now() < end,
+            "Start did not reach OBS effect boundary"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pids = f.pids();
+    let admitted = Instant::now();
+    let (code, body) = f.capture.command("stop", json!({}));
+    assert_eq!(code, 202, "{body}");
+    assert_eq!(body["stop"], "requested");
+    assert!(admitted.elapsed() <= Duration::from_millis(500));
+    let error = start.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("outcome unknown"), "{error}");
+    // The publication effect was applied but the foreground acknowledgment is
+    // deliberately withheld. Production can accept Stop on another connection.
+    // Its accepted reply is not capture's proof of remote release.
+    let status = f.capture.state("stopping");
+    assert_eq!(status["remote_release_pending"], true);
+    assert_eq!(status["stop"], "requested");
+    assert_eq!(status["resource_observation"], "unknown");
+    fs::remove_file(production_dir.join("hold-start-ack")).unwrap();
+    let end = Instant::now() + LIMIT;
+    loop {
+        let status = f.production.ok("status", json!({}));
+        assert_ne!(
+            status["state"], "running",
+            "cancelled Start committed Running"
+        );
+        if status["state"] == "idle" {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "production cleanup did not complete: {status}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    f.capture.wait_for_stop();
+    f.capture.state("idle");
+    f.released(&pids);
+    let log = fs::read_to_string(production_dir.join("obs-requests.log")).unwrap();
+    assert_eq!(log.lines().filter(|line| *line == "StartRecord").count(), 1);
+    assert!(!log.contains("StartStream"));
+    // Fresh authorization is a positive control, not automatic recovery.
+    f.capture.ok("prepare", json!({}));
+    f.capture.ok("start", json!({"output":"recording"}));
+    f.capture.state("running");
+    f.capture.ok("stop", json!({}));
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn sigterm_during_delayed_prepare_releases_receiver_and_accepted_connections() {
+    let mut f = Fixture::new();
+    let dir = f.root.join("production");
+    fs::write(dir.join("hold-readiness"), "hold").unwrap();
+    let port = f.production.port;
+    let token = f.production.token.clone();
+    let prepare = thread::spawn(move || {
+        splitcast_rs_core::control::request(port, port, &token, "prepare", "{}", LIMIT)
+    });
+    let end = Instant::now() + LIMIT;
+    while !dir.join("prepare-readiness-entered").exists() {
+        assert!(
+            Instant::now() < end,
+            "Prepare never reached the deliberately stalled readiness request"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pids = f.pids();
+    assert_eq!(pids.len(), 1, "only the production receiver should exist");
+    let signalled = Instant::now();
+    f.production.shutdown();
+    assert!(prepare
+        .join()
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("outcome unknown"));
+    f.released(&pids);
+    assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+    println!(
+        "SIGTERM during delayed Prepare: {:?}; receiver and listener released",
+        signalled.elapsed()
+    );
+    f.capture.shutdown();
 }
 
 #[test]
@@ -403,6 +719,17 @@ fn virtual_worker() {
                     assert!(request.len() < 8192);
                 }
                 assert!(request.starts_with(b"GET /v3/paths/list HTTP/1.1"));
+                if dir.join("hold-readiness").exists() {
+                    fs::write(
+                        dir.join("prepare-readiness-entered"),
+                        "request observed; response withheld",
+                    )
+                    .unwrap();
+                    let end = Instant::now() + LIMIT;
+                    while dir.join("hold-readiness").exists() && Instant::now() < end {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                }
                 let body = json!({"items":[
                     {"name":"game","ready":true,"bytesReceived":(n+1)*1024,"tracks":["H264","MPEG-4 Audio"]},
                     {"name":"mic","ready":true,"bytesReceived":(n+1)*512,"tracks":["Opus"]}
@@ -469,7 +796,15 @@ fn virtual_obs(dir: &Path) {
                 "SetInputSettings" | "SetInputAudioSyncOffset" | "SetInputAudioMonitorType" | "SetCurrentProgramScene" => json!({}),
                 other => panic!("unexpected OBS request {other}"),
             };
-            send(&mut socket, json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":true},"responseData":data}}));
+             drop(state);
+             if method == "StartRecord" && dir.join("hold-start-ack").exists() {
+                 fs::write(dir.join("start-committed"), "output active; acknowledgment pending").unwrap();
+                 let end = Instant::now() + LIMIT;
+                 while dir.join("hold-start-ack").exists() && Instant::now() < end {
+                     thread::sleep(Duration::from_millis(10));
+                 }
+             }
+             if socket.send(Message::Text(json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":true},"responseData":data}}).to_string().into())).is_err() { return; }
         }
         });
         }

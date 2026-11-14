@@ -35,10 +35,14 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
 struct DeadlineWriter<'a> {
     stream: &'a mut TcpStream,
     deadline: Instant,
+    operation: Option<&'a crate::request::Operation>,
 }
 
 impl Write for DeadlineWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if let Some(operation) = self.operation {
+            return operation.write(self.stream, bytes, self.deadline);
+        }
         self.stream
             .set_write_timeout(Some(remaining(self.deadline)?))?;
         self.stream.write(bytes).map_err(write_error)
@@ -81,12 +85,19 @@ fn unknown_outcome(error: io::Error) -> io::Error {
     io::Error::new(error.kind(), UnknownOutcome(error))
 }
 
-fn read_until_header(stream: &mut TcpStream, deadline: Instant) -> io::Result<(String, Vec<u8>)> {
+fn read_until_header(
+    stream: &mut TcpStream,
+    deadline: Instant,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<(String, Vec<u8>)> {
     let mut packet = Vec::new();
     loop {
         stream.set_read_timeout(Some(remaining(deadline)?))?;
         let mut buf = [0; 1024];
-        let n = stream.read(&mut buf)?;
+        let n = match operation {
+            Some(operation) => operation.read(stream, &mut buf, deadline)?,
+            None => stream.read(&mut buf)?,
+        };
         if n == 0 {
             return Err(err("premature HTTP EOF"));
         }
@@ -136,6 +147,7 @@ fn read_body(
     mut body: Vec<u8>,
     count: usize,
     deadline: Instant,
+    operation: Option<&crate::request::Operation>,
 ) -> io::Result<Vec<u8>> {
     if body.len() > count {
         return Err(err("HTTP body/length mismatch"));
@@ -144,7 +156,10 @@ fn read_body(
         stream.set_read_timeout(Some(remaining(deadline)?))?;
         let mut buf = [0; 4096];
         let size = buf.len().min(count - body.len());
-        let n = stream.read(&mut buf[..size])?;
+        let n = match operation {
+            Some(operation) => operation.read(stream, &mut buf[..size], deadline)?,
+            None => stream.read(&mut buf[..size])?,
+        };
         if n == 0 {
             return Err(err("short HTTP body"));
         }
@@ -170,7 +185,7 @@ fn recv_until(
     token: &str,
     deadline: Instant,
 ) -> io::Result<Request> {
-    let (head, body) = read_until_header(stream, deadline)?;
+    let (head, body) = read_until_header(stream, deadline, None)?;
     let mut lines = head.split("\r\n");
     let parts = lines.next().unwrap_or("").split(' ').collect::<Vec<_>>();
     if parts.len() != 3 || parts[2] != "HTTP/1.1" || !matches!(parts[0], "GET" | "POST") {
@@ -227,7 +242,7 @@ fn recv_until(
     Ok(Request {
         method: parts[0].to_owned(),
         path: parts[1].to_owned(),
-        body: String::from_utf8(read_body(stream, body, count, deadline)?)
+        body: String::from_utf8(read_body(stream, body, count, deadline, None)?)
             .map_err(|_| err("invalid UTF-8 body"))?,
     })
 }
@@ -243,9 +258,14 @@ fn reply_bytes_until(
     body: &[u8],
     deadline: Instant,
 ) -> io::Result<()> {
-    let mut stream = DeadlineWriter { stream, deadline };
+    let mut stream = DeadlineWriter {
+        stream,
+        deadline,
+        operation: None,
+    };
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         403 => "Forbidden",
         404 => "Not Found",
         503 => "Service Unavailable",
@@ -304,6 +324,18 @@ pub fn request(
     args: &str,
     timeout: Duration,
 ) -> io::Result<String> {
+    request_operation(port, host_port, token, command, args, timeout, None)
+}
+
+pub(crate) fn request_operation(
+    port: u16,
+    host_port: u16,
+    token: &str,
+    command: &str,
+    args: &str,
+    timeout: Duration,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<String> {
     let deadline = Instant::now() + timeout;
     let mut stream = TcpStream::connect_timeout(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
@@ -317,15 +349,22 @@ pub fn request(
     let mut writer = DeadlineWriter {
         stream: &mut stream,
         deadline,
+        operation,
     };
     write!(writer, "POST /api/command HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).map_err(unknown_outcome)?;
     writer.flush().map_err(unknown_outcome)?;
-    let (head, body) = read_until_header(&mut stream, deadline).map_err(unknown_outcome)?;
+    let (head, body) =
+        read_until_header(&mut stream, deadline, operation).map_err(unknown_outcome)?;
     let mut lines = head.split("\r\n");
     let status = lines.next();
     if !matches!(
         status,
-        Some("HTTP/1.1 200 OK" | "HTTP/1.1 409 Conflict" | "HTTP/1.1 503 Service Unavailable")
+        Some(
+            "HTTP/1.1 200 OK"
+                | "HTTP/1.1 202 Accepted"
+                | "HTTP/1.1 409 Conflict"
+                | "HTTP/1.1 503 Service Unavailable"
+        )
     ) {
         return Err(unknown_outcome(err(
             "unrecognized control response; no redirects permitted",
@@ -337,14 +376,25 @@ pub fn request(
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n <= RESPONSE_LIMIT)
         .ok_or_else(|| unknown_outcome(err("bounded control response required")))?;
-    let response =
-        String::from_utf8(read_body(&mut stream, body, size, deadline).map_err(unknown_outcome)?)
-            .map_err(|_| unknown_outcome(err("invalid control response")))?;
+    let response = String::from_utf8(
+        read_body(&mut stream, body, size, deadline, operation).map_err(unknown_outcome)?,
+    )
+    .map_err(|_| unknown_outcome(err("invalid control response")))?;
     if status == Some("HTTP/1.1 200 OK") {
         return Ok(response);
     }
     let document: serde_json::Value = serde_json::from_str(&response)
         .map_err(|_| unknown_outcome(err("invalid control error response")))?;
+    if status == Some("HTTP/1.1 202 Accepted")
+        && command == "stop"
+        && document["stop"] == "requested"
+        && document["outcome"] == "accepted"
+        && matches!(document["cleanup"].as_str(), Some("pending" | "unknown"))
+    {
+        // CLI/TUI callers receive the acknowledged intent. Remote release still
+        // requires the agent's separately checked owner-bound completion proof.
+        return Ok(response);
+    }
     if document["outcome"] == "not_executed" {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -523,6 +573,35 @@ mod tests {
             assert!(!error.to_string().contains("untrusted-peer-message"));
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn accepted_stop_is_not_proof_of_remote_release() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            recv(&mut stream, port, "test-token").unwrap();
+            reply(
+                &mut stream,
+                202,
+                r#"{"stop":"requested","outcome":"accepted","cleanup":"pending"}"#,
+            )
+            .unwrap();
+        });
+        let response = request(
+            port,
+            port,
+            "test-token",
+            "stop",
+            "{}",
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["stop"], "requested");
+        assert_eq!(response["cleanup"], "pending");
+        server.join().unwrap();
     }
 
     #[test]

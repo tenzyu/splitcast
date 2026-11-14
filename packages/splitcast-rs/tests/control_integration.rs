@@ -184,6 +184,41 @@ impl Fixture {
         )
     }
 
+    fn stop(&self) -> Value {
+        let reply = self.command("stop", json!({}));
+        let body = reply.json();
+        if reply.code == 200 || reply.code == 409 {
+            assert_eq!(
+                body["stop"],
+                if reply.code == 200 {
+                    "completed"
+                } else {
+                    "incomplete"
+                }
+            );
+            return body;
+        }
+        assert_eq!(reply.code, 202, "{body}");
+        assert_eq!(body["stop"], "requested");
+        assert_eq!(body["outcome"], "accepted");
+        let end = Instant::now() + LIMIT;
+        loop {
+            // Read-only observation of the accepted intent, not a Stop retry.
+            let reply = self.get("/api/status");
+            assert_eq!(reply.code, 200);
+            let body = reply.json();
+            if body["stop"] == "completed" || body["stop"] == "incomplete" {
+                return body;
+            }
+            assert_eq!(
+                body["stop"], "requested",
+                "accepted Stop lost its observable outcome: {body}"
+            );
+            assert!(Instant::now() < end, "Stop never resolved: {body}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn config(&self) -> Value {
         serde_json::from_slice(&fs::read(&self.config).unwrap()).unwrap()
     }
@@ -269,6 +304,9 @@ enum PeerBehavior {
     RejectPrepare,
     LosePrepareResponse,
     RefuseFirstStop,
+    AcceptFirstStop,
+    BareIdleFirstStop,
+    WrongOwnerFirstStop,
 }
 
 struct Peer {
@@ -355,13 +393,23 @@ impl Peer {
                         status = 409;
                         json!({"error":"injected unconfirmed stop"})
                     }
-                    "prepare" | "start" | "stop" | "heartbeat" => {
+                    "stop" if stop_requests == 0 && matches!(behavior, PeerBehavior::AcceptFirstStop | PeerBehavior::BareIdleFirstStop | PeerBehavior::WrongOwnerFirstStop) => {
+                        stop_requests += 1;
+                        match behavior {
+                            PeerBehavior::AcceptFirstStop => { status = 202; json!({"stop":"requested","outcome":"accepted","cleanup":"pending"}) },
+                            PeerBehavior::BareIdleFirstStop => json!({"state":"idle"}),
+                            PeerBehavior::WrongOwnerFirstStop => json!({"state":"idle","stop":"completed","owner":"unrelated-owner"}),
+                            _ => unreachable!("injected Stop behavior checked above"),
+                        }
+                    }
+                    "stop" => json!({"state":"idle","stop":"completed","owner":request["args"]["_owner"]}),
+                    "prepare" | "start" | "heartbeat" => {
                         json!({"version":1,"role":"production","engine":"rust-candidate","state":"ready"})
                     }
                     command => panic!("unexpected peer command: {command}"),
                 }
                 .to_string();
-                write!(stream, "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", if status == 200 { "OK" } else { "Conflict" }, response.len()).unwrap();
+                write!(stream, "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", match status { 200 => "OK", 202 => "Accepted", _ => "Conflict" }, response.len()).unwrap();
             }
         });
         Self {
@@ -672,9 +720,9 @@ fn real_agent_compatible_prepare_and_stop_release_owned_workers() {
     assert_eq!(prepared.json()["state"], "ready");
     assert_eq!(prepared.json()["children"], json!(["ssh"]));
     let pid = fixture.worker_pid("ssh");
-    let stopped = fixture.command("stop", json!({}));
-    assert_eq!(stopped.code, 200, "{}", stopped.json());
-    assert_idle(&stopped.json());
+    let stopped = fixture.stop();
+    assert_eq!(stopped["stop"], "completed", "{stopped}");
+    assert_idle(&stopped);
     assert_eq!(
         unsafe { libc::kill(pid, 0) },
         -1,
@@ -717,7 +765,7 @@ fn real_agent_failed_remote_prepare_releases_tunnel_and_sends_owned_cleanup() {
         .find(|request| request["command"] == "stop")
         .expect("a peer that received prepare requires owned cleanup");
     assert_eq!(stop["args"]["_owner"], prepare["args"]["_owner"]);
-    assert_eq!(fixture.command("stop", json!({})).code, 200);
+    assert_eq!(fixture.stop()["stop"], "completed");
     assert_idle(&fixture.get("/api/status").json());
 }
 
@@ -733,7 +781,7 @@ fn real_agent_lost_prepare_response_still_requires_owned_cleanup() {
     let prepare = requests.iter().find(|r| r["command"] == "prepare").unwrap();
     let stop = requests.iter().find(|r| r["command"] == "stop").unwrap();
     assert_eq!(stop["args"]["_owner"], prepare["args"]["_owner"]);
-    assert_eq!(fixture.command("stop", json!({})).code, 200);
+    assert_eq!(fixture.stop()["stop"], "completed");
     assert_idle(&fixture.get("/api/status").json());
 }
 
@@ -745,18 +793,49 @@ fn real_agent_unconfirmed_stop_retains_ownership_for_explicit_retry() {
     let _agent = fixture.agent(None);
     assert_eq!(fixture.command("prepare", json!({})).code, 200);
     let pid = fixture.worker_pid("ssh");
-    assert_eq!(fixture.command("stop", json!({})).code, 409);
+    assert_eq!(fixture.stop()["stop"], "incomplete");
     let stopping = fixture.get("/api/status").json();
     assert_eq!(stopping["state"], "stopping");
     assert_eq!(stopping["children"], json!([]));
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
-    assert_eq!(fixture.command("stop", json!({})).code, 200);
+    assert_eq!(fixture.stop()["stop"], "completed");
     assert_idle(&fixture.get("/api/status").json());
     let requests = peer.requests();
     let owner = &requests.iter().find(|r| r["command"] == "prepare").unwrap()["args"]["_owner"];
     let stops: Vec<_> = requests.iter().filter(|r| r["command"] == "stop").collect();
     assert_eq!(stops.len(), 2);
     assert!(stops.iter().all(|r| &r["args"]["_owner"] == owner));
+}
+
+#[test]
+fn remote_stop_requires_matching_completed_proof_not_acceptance_or_idle() {
+    for behavior in [
+        PeerBehavior::AcceptFirstStop,
+        PeerBehavior::BareIdleFirstStop,
+        PeerBehavior::WrongOwnerFirstStop,
+    ] {
+        let fixture = Fixture::new();
+        fixture.stub_workers();
+        let peer = Peer::new(&fixture, behavior);
+        let _agent = fixture.agent(None);
+        assert_eq!(fixture.command("prepare", json!({})).code, 200);
+        let first = fixture.stop();
+        assert_eq!(first["stop"], "incomplete");
+        assert_eq!(first["outcome"], "unknown");
+        assert_eq!(fixture.get("/api/status").json()["state"], "stopping");
+        assert_eq!(
+            fixture.get("/api/status").json()["remote_release_pending"],
+            true
+        );
+        assert_eq!(fixture.command("prepare", json!({})).code, 409);
+        assert_eq!(fixture.stop()["stop"], "completed");
+        assert_idle(&fixture.get("/api/status").json());
+        let requests = peer.requests();
+        let owner = &requests.iter().find(|r| r["command"] == "prepare").unwrap()["args"]["_owner"];
+        let stops: Vec<_> = requests.iter().filter(|r| r["command"] == "stop").collect();
+        assert_eq!(stops.len(), 2);
+        assert!(stops.iter().all(|r| &r["args"]["_owner"] == owner));
+    }
 }
 
 #[test]
@@ -794,7 +873,7 @@ fn real_agent_capture_status_tracks_remote_microphone_mute() {
         assert_eq!(diagnostics.code, 200);
         assert_eq!(diagnostics.json()["mic_muted"], muted);
     }
-    assert_eq!(fixture.command("stop", json!({})).code, 200);
+    assert_eq!(fixture.stop()["stop"], "completed");
     assert_idle(&fixture.get("/api/status").json());
 }
 

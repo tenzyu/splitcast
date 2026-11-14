@@ -224,7 +224,27 @@ impl Agent {
             .output()
             .map(|x| config::json_string(x.as_str()))
             .unwrap_or_else(|| "null".into());
-        format!("{{\"version\":1,\"engine\":\"rust-candidate\",\"role\":{},\"state\":{},\"output\":{out},\"error\":{},\"warnings\":[{notices}],\"mic_muted\":{},\"children\":[{list}]}}",config::json_string(&self.cfg.role),config::json_string(json_state(self.session.state())),config::json_string(&self.error),self.mic_muted)
+        let completed_owner = self.session.control().completed_owner();
+        let owner = completed_owner
+            .as_ref()
+            .map(|owner| config::json_string(owner.as_str()))
+            .unwrap_or_else(|| "null".into());
+        let stop = if self.session.control().stop_pending() {
+            "\"requested\""
+        } else if self.session.state() == Lifecycle::Stopping {
+            "\"incomplete\""
+        } else if self.session.control().stop_completed() {
+            "\"completed\""
+        } else {
+            "null"
+        };
+        let outcome = match stop {
+            "\"requested\"" => "\"accepted\"",
+            "\"incomplete\"" => "\"unknown\"",
+            "\"completed\"" => "\"completed\"",
+            _ => "null",
+        };
+        format!("{{\"version\":1,\"engine\":\"rust-candidate\",\"role\":{},\"state\":{},\"output\":{out},\"error\":{},\"warnings\":[{notices}],\"mic_muted\":{},\"children\":[{list}],\"stop\":{stop},\"outcome\":{outcome},\"owner\":{owner},\"remote_release_pending\":{}}}",config::json_string(&self.cfg.role),config::json_string(json_state(self.session.state())),config::json_string(&self.error),self.mic_muted,self.session.remote_owner().is_some())
     }
     fn spawn(&mut self, worker: Worker, argv: Vec<String>) -> io::Result<()> {
         self.checkpoint()?;
@@ -311,10 +331,7 @@ impl Agent {
                 self.spawn(Worker::Tunnel, media::tunnel(&self.cfg))?;
                 self.wait_ready(|| self.rust_peer_ready())?;
                 self.validate_peer_transport()?;
-                self.session
-                    .record_remote_attempt(OwnerId::parse(&rand_hex()?)?)
-                    .map_err(|_| err("invalid remote preparation transition"))?;
-                self.remote_request(&Command::Prepare)?;
+                self.prepare_remote(OwnerId::parse(&rand_hex()?)?)?;
             } else {
                 self.spawn(Worker::Receiver, media::receiver(&self.cfg)?)?;
                 self.wait_ready(|| {
@@ -360,6 +377,11 @@ impl Agent {
             };
         }
         if self.session.state() == Lifecycle::Idle {
+            if owner.is_some() {
+                return Err(err(
+                    "remote Start requires an existing matching preparation",
+                ));
+            }
             self.prepare(owner)?;
         }
         if self.session.state() != Lifecycle::Ready {
@@ -447,7 +469,29 @@ impl Agent {
                     self.wait_ready(|| self.rust_peer_ready())?;
                     self.validate_peer_transport()?;
                 }
-                self.remote_request(&Command::Stop)?;
+                let mut response: Value =
+                    serde_json::from_str(&self.remote_request(&Command::Stop)?)
+                        .map_err(|_| err("invalid remote Stop completion"))?;
+                loop {
+                    if response["stop"] == "completed"
+                        && response["state"] == "idle"
+                        && response["owner"].as_str()
+                            == self.session.remote_owner().as_ref().map(OwnerId::as_str)
+                    {
+                        break;
+                    }
+                    if response["stop"] != "requested" || response["outcome"] != "accepted" {
+                        return Err(err(
+                            "remote Stop did not prove completion for the owned session",
+                        ));
+                    }
+                    // Observe the same accepted intent. Never retransmit Start
+                    // or Prepare, or silently restart incomplete cleanup.
+                    self.checkpoint()?;
+                    thread::sleep(Duration::from_millis(20));
+                    response = serde_json::from_str(&self.remote_request(&Command::Status)?)
+                        .map_err(|_| err("invalid remote Stop observation"))?;
+                }
                 self.session
                     .remote_released()
                     .map_err(|_| err("invalid remote release transition"))
@@ -468,6 +512,13 @@ impl Agent {
         }
     }
     fn fail(&mut self, cause: io::Error) -> io::Error {
+        if self.session.control().stop_pending() {
+            // The admitted Stop owns compensation. Do not perform two cleanup
+            // attempts or overwrite Stopping while unwinding cancelled work.
+            let _ = self.session.stop();
+            self.error = cause.to_string();
+            return cause;
+        }
         let _ = self.session.fail();
         let error = match self.cleanup() {
             Ok(()) => cause,
@@ -559,6 +610,9 @@ impl Agent {
     fn expire_lease(&mut self) {
         let expired = self.session.lease_expired(Instant::now());
         if expired {
+            // Revoke queued work even when the owner beats the watchdog to
+            // lease expiry and enters Stopping before the next listener poll.
+            self.session.control().expire();
             if self.stop(None).is_ok() {
                 self.warn("production owner lease expired; owned media stopped");
             } else {
@@ -634,11 +688,31 @@ impl Agent {
         if !work.ticket.begin() {
             return;
         }
-        self.operation = Some(crate::request::Operation::new(
-            Arc::clone(shutdown),
-            Some(Arc::clone(&work.ticket)),
-            limits.operation,
-        ));
+        let control = self.session.control();
+        let activation_owner = if self.cfg.role == "production"
+            && matches!(
+                work.invocation.command,
+                Command::Prepare | Command::Start(_)
+            ) {
+            work.invocation.owner.clone()
+        } else {
+            None
+        };
+        if !control.begin(work.generation, activation_owner) {
+            work.ticket.finish(crate::request::error_response(
+                "not_executed",
+                "request superseded by Stop",
+            ));
+            return;
+        }
+        self.operation = Some(
+            crate::request::Operation::new(
+                Arc::clone(shutdown),
+                Some(Arc::clone(&work.ticket)),
+                limits.operation,
+            )
+            .with_control(control.clone(), work.generation),
+        );
         self.expire_lease();
         let response = self
             .execute(work.invocation)
@@ -650,7 +724,30 @@ impl Agent {
                         .to_string(),
                 )
             });
+        control.end();
         work.ticket.finish(response);
+    }
+    fn prepare_remote(&mut self, owner: OwnerId) -> io::Result<String> {
+        let cap = Duration::from_secs(self.cfg.timeout as u64);
+        let operation = self
+            .operation
+            .clone()
+            .unwrap_or_else(|| {
+                crate::request::Operation::new(Arc::new(AtomicBool::new(false)), None, cap)
+            })
+            .with_remote_prepare(self.session.control(), owner.clone());
+        let timeout = operation
+            .deadline(cap)?
+            .saturating_duration_since(Instant::now());
+        control::request_operation(
+            self.cfg.forward_control_port,
+            self.cfg.remote_control_port,
+            &self.cfg.token(true)?,
+            "prepare",
+            &json!({"_owner":owner.as_str()}).to_string(),
+            timeout,
+            Some(&operation),
+        )
     }
     fn remote_request(&self, command: &Command) -> io::Result<String> {
         self.checkpoint()?;
@@ -668,13 +765,14 @@ impl Agent {
             op.deadline(cap)
                 .map(|end| end.saturating_duration_since(Instant::now()))
         })?;
-        control::request(
+        control::request_operation(
             self.cfg.forward_control_port,
             self.cfg.remote_control_port,
             &self.cfg.token(true)?,
             name,
             args,
             timeout,
+            self.operation.as_ref(),
         )
     }
     fn peer_command(&mut self, command: &Command) -> io::Result<String> {
@@ -784,14 +882,30 @@ fn serve_bound(
         agent.cfg.tts_max_text as usize,
         assets,
         Arc::clone(&shutdown),
-        limits,
+        crate::server::Limits {
+            lease: agent.lease_duration(),
+            ..limits
+        },
+        agent.session.control(),
     )?;
     while !shutdown.load(Ordering::Relaxed) {
-        agent.operation = Some(crate::request::Operation::new(
-            Arc::clone(&shutdown),
-            None,
-            limits.operation,
-        ));
+        let control = agent.session.control();
+        if control.stop_pending() {
+            let response = match agent.stop(None) {
+                Ok(()) => {
+                    let mut body: Value = serde_json::from_str(&agent.status()).expect("agent status is JSON");
+                    body["stop"] = json!("completed");
+                    body["outcome"] = json!("completed");
+                    (200, body.to_string())
+                }
+                Err(error) => (409, json!({"error":error.to_string(),"state":json_state(agent.session.state()),"stop":"incomplete","outcome":"unknown","code":"cleanup_incomplete"}).to_string()),
+            };
+            control.finish_stop(response);
+        }
+        agent.operation = Some(
+            crate::request::Operation::new(Arc::clone(&shutdown), None, limits.operation)
+                .with_control(control.clone(), control.generation()),
+        );
         agent.tick();
         match pending.recv_timeout(Duration::from_millis(20)) {
             Ok(work) => {
@@ -837,10 +951,12 @@ mod tests {
 
     fn peer_session(owner: &str, now: Instant, ttl: Duration) -> Session {
         let mut session = Session::new(Role::Production);
+        let owner = OwnerId::parse(owner).unwrap();
         session
-            .prepare(Some(OwnerId::parse(owner).unwrap()), now, ttl)
+            .prepare(Some(owner.clone()), Instant::now(), ttl)
             .unwrap();
         session.prepared().unwrap();
+        session.renew(&owner, now, ttl).unwrap();
         session
     }
 
@@ -907,6 +1023,43 @@ mod tests {
             "expired owner revived its lease"
         );
         assert_eq!(agent.session.state(), Lifecycle::Idle);
+    }
+
+    #[test]
+    fn owner_driven_expiry_fences_queued_prepare_before_the_watchdog_runs() {
+        let mut agent = prepared_agent();
+        agent.session = peer_session(
+            "expired",
+            Instant::now() - Duration::from_secs(2),
+            Duration::from_secs(1),
+        );
+        let generation = agent.session.control().generation();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let queued: Vec<_> = [Command::Prepare, Command::Start(Output::Recording)]
+            .into_iter()
+            .map(|command| crate::server::Work {
+                invocation: Invocation {
+                    command,
+                    owner: Some(OwnerId::parse("expired").unwrap()),
+                },
+                ticket: Arc::new(crate::request::RequestTicket::new(
+                    Instant::now() + Duration::from_secs(5),
+                )),
+                generation,
+            })
+            .collect();
+        // There is deliberately no listener/watchdog. This is the other expiry
+        // ordering, which must revoke before stop changes Phase to Stopping.
+        agent.expire_lease();
+        for work in queued {
+            let ticket = Arc::clone(&work.ticket);
+            agent.execute_work(work, &shutdown, crate::server::Limits::default());
+            let reply: Value = serde_json::from_str(&ticket.response().unwrap().1).unwrap();
+            assert_eq!(reply["outcome"], "not_executed");
+        }
+        assert_eq!(agent.session.state(), Lifecycle::Idle);
+        assert!(agent.children.names().is_empty());
+        assert!(agent.session.output().is_none());
     }
 
     #[test]

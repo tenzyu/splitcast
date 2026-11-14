@@ -26,9 +26,13 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
 struct DeadlineStream {
     stream: TcpStream,
     deadline: Instant,
+    operation: Option<crate::request::Operation>,
 }
 impl Read for DeadlineStream {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if let Some(operation) = &self.operation {
+            return operation.read(&mut self.stream, bytes, self.deadline);
+        }
         self.stream
             .set_read_timeout(Some(remaining(self.deadline)?))?;
         self.stream.read(bytes).map_err(normalize_timeout)
@@ -36,6 +40,9 @@ impl Read for DeadlineStream {
 }
 impl Write for DeadlineStream {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if let Some(operation) = &self.operation {
+            return operation.write(&mut self.stream, bytes, self.deadline);
+        }
         self.stream
             .set_write_timeout(Some(remaining(self.deadline)?))?;
         self.stream.write(bytes).map_err(normalize_timeout)
@@ -112,11 +119,18 @@ impl Obs {
         let deadline = operation
             .as_ref()
             .map_or(Ok(Instant::now() + TIMEOUT), |op| op.deadline(TIMEOUT))?;
-        let mut obs = Self::connect_until(cfg, deadline)?;
+        let mut obs = Self::connect_context(cfg, deadline, operation.clone())?;
         obs.operation = operation;
         Ok(obs)
     }
     fn connect_until(cfg: &Config, deadline: Instant) -> io::Result<Self> {
+        Self::connect_context(cfg, deadline, None)
+    }
+    fn connect_context(
+        cfg: &Config,
+        deadline: Instant,
+        operation: Option<crate::request::Operation>,
+    ) -> io::Result<Self> {
         let password = secret(&cfg.obs_password, 4096)?;
         if password.len() < 16 {
             return Err(err("OBS password is missing or too short"));
@@ -126,7 +140,11 @@ impl Obs {
             &addr.into(),
             remaining(deadline)?.min(Duration::from_secs(2)),
         )?;
-        let stream = DeadlineStream { stream, deadline };
+        let stream = DeadlineStream {
+            stream,
+            deadline,
+            operation,
+        };
         let config = WebSocketConfig::default()
             .max_message_size(Some(LIMIT))
             .max_frame_size(Some(LIMIT))
@@ -430,9 +448,9 @@ mod tests {
     #[test]
     fn profile_uses_the_selected_video_geometry() {
         let fixture = Fixture::new();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut cfg = fixture.config(listener.local_addr().unwrap().port());
-        drop(listener);
+        // This configuration-only test starts no OBS. Let launch_args perform
+        // its own ephemeral bind, without releasing a reservation first.
+        let mut cfg = fixture.config(0);
         cfg.width = 1280;
         cfg.height = 720;
         cfg.fps = 30;
@@ -771,6 +789,7 @@ mod tests {
         let mut stream = DeadlineStream {
             stream,
             deadline: start + Duration::from_millis(100),
+            operation: None,
         };
         assert_eq!(
             stream

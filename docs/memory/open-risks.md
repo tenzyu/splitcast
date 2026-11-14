@@ -33,3 +33,17 @@ S17 does not close a runtime risk. [Production-readiness gates](../production-re
 - R12. Hosted CI, cold-runner Cargo/WASM preparation, current native/WASM Nix packages, cache publication authorization, and fresh-consumer substitution remain unverified. Close with hosted run and output identities, scoped credentials restricted to trusted revisions, and a no-fallback-build consumer result from the intended cache. Cache availability alone does not close R01 through R10.
 
 The source-inspected sandbox shebang and toolchain/cache risks in the handoff are hypotheses to reproduce, not newly proven product failures. Do not weaken assertions or substitute a different OBS backend to hide an infrastructure failure.
+
+## 2026-11-14 PR #2 control-plane follow-up
+
+On `review/urgent-control`, implementation `5125799` supersedes S16's ordinary
+Stop-behind-Prepare limitation with listener-side admission and generation
+fencing. Matching expired owners retain release/retry authority, not renewal or
+activation. Remote obligations begin at positive socket writes. See
+[S19/E15](evidence.md) for red/green evidence and final-head checks in PR #2.
+This is not a main-branch or deployed-state claim.
+
+R09 remains open for parser-slot exhaustion, ephemeral completion observation,
+cross-host Prepare replay, durable outcomes, and aggregate kernel/cleanup bounds.
+R01, R02, R05, R07, actual media-path integration, and F04–F07 retain their
+separate gates. Shared bearer clients share operator authority, not isolation.

@@ -95,4 +95,40 @@ Speech delivery, EventSub, persistent replay, shared selection transactions, ful
 
 Use the candidate's explicit Stop, inspect status and diagnostics, then stop only its enclosing user unit if needed. Do not kill by process name, stop existing OBS, change the default sink, restart the game, or remove unrelated files. If remote release cannot be confirmed, retain the failed/stopping result and inspect the remote ownership lease and service cgroup.
 
+During in-flight work, `202` with `stop: "requested"` confirms intent admission,
+not resource release. Wait for `200` with `stop: "completed"`, or inspect status
+and repeat Stop to retry incomplete cleanup. Status exposes
+`remote_release_pending`; do not treat an empty local child list as remote
+completion. A timeout or lost response remains unknown. Never blindly retry
+Start or Prepare across that uncertainty. A remote Stop completion is bound
+to the held owner. Bare Idle or another owner's completion is not release proof.
+
+During pending cleanup, authenticated GET status remains available from control
+metadata, with `children: null` and unknown resource observation. After the
+observation budget, cleanup can be explicitly unknown while intent remains
+retained. A status HTTP 200 acknowledges an observation, not completed Stop.
+The production bearer also grants unowned emergency Stop. A peer holding that
+bearer is not a separately isolated principal merely because it usually sends
+`_owner`.
+
+On the PR #2 candidate, an expired matching owner can still retry Stop for held
+effects. It cannot renew the expired lease or activate output. A wrong or older
+owner cannot stop a newer session. After removing a cleanup fault, retry with
+the same `_owner` and require its matching completed/Idle proof.
+
+Coordinate clients before the next Prepare. Stop observation is ephemeral and
+has no per-intent ID. If a new session overwrites completion before you observe
+it, treat the earlier result as unknown. Do not use another owner's completion
+or an unowned status snapshot as proof. Pause competing commands and reconcile
+the current ownership explicitly rather than blindly stopping a newer session.
+Never replay an uncertain Prepare. A later Prepare admitted from Idle can create
+new effects; completed Stop is not a cross-host replay fence. Quiesce request
+sources and verify held resources before authorizing another session.
+
+The admission measurements cover ordinary queue pressure after a request can be
+parsed. Eight slow parser/connection clients can still exclude emergency HTTP
+control. Keep access restricted to trusted clients and retain a separately
+authorized enclosing-service recovery path. No universal HTTP deadline or
+deployment containment is established by the local fixture measurements.
+
 For a code rollback, check out a known commit in a separate checkout and build it without overwriting local work. For consumer integration rollback, restore the previously reviewed flake input and settings in a separate reviewable change. Do not activate an older operating-system generation or retained Python implementation without separate approval. A Git rollback is not a deployment rollback.

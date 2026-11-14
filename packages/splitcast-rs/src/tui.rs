@@ -170,6 +170,12 @@ fn list(value: &Value, separator: &str) -> String {
 }
 
 fn status<W: Write>(output: &mut W, value: &Value) -> io::Result<()> {
+    if value["stop"] == "requested" {
+        writeln!(
+            output,
+            "Stop requested; cleanup and current worker state remain unconfirmed."
+        )?;
+    }
     writeln!(
         output,
         "State {} | role {} | output {}",
@@ -263,7 +269,14 @@ where
     F: FnMut(&str, &str) -> io::Result<String>,
 {
     let value = request(dispatch, command, args)?;
-    writeln!(output, "{command} accepted.")?;
+    if command == "stop" && value["stop"] == "requested" {
+        return writeln!(output, "Stop requested. Cleanup is not confirmed. Inspect status and repeat Stop if cleanup is incomplete.");
+    }
+    if command == "stop" && value["stop"] == "completed" {
+        writeln!(output, "Stop completed.")?;
+    } else {
+        writeln!(output, "{command} accepted.")?;
+    }
     if value.get("state").is_some() {
         status(output, &value)?;
     }
@@ -683,6 +696,23 @@ mod tests {
         let starts: Vec<_> = calls.iter().filter(|(name, _)| name == "start").collect();
         assert_eq!(starts.len(), 1);
         assert_eq!(starts[0].1, json!({"output":"recording"}));
+    }
+
+    #[test]
+    fn stop_acceptance_does_not_claim_completed_cleanup() {
+        let mut output = Vec::new();
+        run_with(Cursor::new("7\n0\n"), &mut output, |command, _| {
+            Ok(if command == "stop" {
+                json!({"stop":"requested","outcome":"accepted","cleanup":"pending"})
+            } else {
+                fixture(command)
+            }
+            .to_string())
+        })
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Stop requested. Cleanup is not confirmed."));
+        assert!(!output.contains("Stop completed."));
     }
 
     #[test]
