@@ -92,6 +92,46 @@ sketches and the judgment are retained under
 `/tmp/opencode/splitcast-ci-design/`; the synthesis is the committed durable
 record. Release and fresh hosted consumption remain pending at this checkpoint.
 
+## Source review, permission, and export correction
+
+The actual initial export identified exactly three custom paths: the native
+and web outputs above and
+`/nix/store/azxbfi1l0rp0wz329qqvyiah1xi71js8-obs-studio-splitcast-32.1.2`.
+All 439 other closure members matched official-cache metadata. No additional
+custom dependency was allowed. The generated source archives were inspected:
+project build/lock/patch/GPL inputs exist, the OBS WebSocket license and source
+exist, the vendored Cargo archive contains crate sources and 151 license/notice
+entries, and the Nixpkgs archive contains OBS build expressions and its upstream
+patch. These counts describe this inspected archive, not a universal license
+completeness metric. Archive-presence checks are now executable in preparation.
+
+Terra's read-only implementation review found no other demonstrated security or
+correctness blocker, but correctly blocked publication without this actual
+source review and owner confirmation. After the above inspection, the operator
+was told that the selected OBS includes GPL-2.0-or-later and FDK-AAC, that Nixpkgs'
+redistributability declaration is not a legal/patent audit, and that only these
+three NARs would be hosted with corresponding source. The operator explicitly
+answered **「この構成で公開を承認」**. Separately, the operator authorized merging
+PR #1 after verification and running the public fresh-consumer trial, with no
+service activation. The workflow now requires a distinct
+`reviewed_redistribution` confirmation as well as `publish`, both false by default.
+
+| Exact command | Result |
+| --- | --- |
+| `bash -o pipefail -c 'bash tools/ci/release-sources.sh artifacts/release-sources-local 2>&1 \| tee artifacts/ci/local-release-sources.log'` | Exit 0 at `cf26f0d`; sources produced. Concurrent evaluation emitted ignored SQLite-busy diagnostics. |
+| `bash -o pipefail -c 'nix develop -c cargo run -p splitcast-xtask -- verify 2>&1 \| tee artifacts/ci/local-verify-release.log'` | Exit 0 at clean `cf26f0d`; all 11 steps passed in `1794629927576783101`. |
+| `bash -o pipefail -c 'python3 tools/ci/release_cache.py prepare artifacts/release-bundle-local artifacts/release-sources-local 2>&1 \| tee artifacts/ci/local-cache-prepare.log'` | Exit 1. It identified all 442 entries and exported the three custom NARs, then refused Nix's empty `log` directory as an unsafe asset. Nothing was published. |
+| `env TMPDIR=/tmp/opencode SPLITCAST_CACHE_PROTOCOL_TEST=1 python3 tools/ci/test_release_cache.py NixProtocolTests` | First regression exit 1 with `unsafe release asset: log`. A more precise assertion rerun exited 1 with `['log', 'realisations'] != []`. After initial cleanup it passed, but a new post-sign check reproduced `['log', 'nar', 'realisations'] != []`, exit 1. Nix recreates these directories on opening the file store, not only during export. |
+| `env TMPDIR=/tmp/opencode nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh` | Exit 0 after centralizing post-operation cleanup and source checks. All eight tests passed, including the real signing/empty-store fixture, bad signature/NAR controls, nonempty-directory preservation, and refusal of fake source archives. |
+| `python3 -c 'from tools.ci.release_cache import verify_sources; from pathlib import Path; verify_sources(Path("artifacts/release-sources-local"))'` | Exit 0 on actual generated archives. |
+
+The correction removes only known empty `nar`, `log`, and `realisations`
+directories after file-cache operations. Nonempty directories still fail and
+are preserved. It does not loosen the flat asset inventory or erase the failed
+initial export directory. The source checks and explicit owner confirmation
+address Terra's source-review prerequisite; they are not presented as a legal
+opinion.
+
 ## Design and safety
 
 Validation runs ordinary `verify`, extended `verify-virtual`, and packaging on

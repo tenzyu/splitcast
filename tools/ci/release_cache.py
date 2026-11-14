@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlparse
@@ -21,6 +22,15 @@ NIXOS_KEY = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
 STORE_PATH = re.compile(r"/nix/store/([0-9a-df-np-sv-z]{32})-([^/\s]+)")
 ASSET_NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._+-]*")
 SOURCE_ASSETS = {"project-source.tar.xz", "cargo-sources.tar.xz", "obs-source.tar.xz", "nixpkgs-source.tar.xz", "THIRD_PARTY.md"}
+REQUIRED_SOURCE_MEMBERS = {
+    "project-source.tar.xz": {"Cargo.lock", "flake.lock", "LICENSE", "LICENSES/GPL-2.0-or-later.txt",
+                              "nix/obs-websocket-loopback.patch", "nix/obs-websocket-loopback.patch.license",
+                              "packages/splitcast-rs/default.nix", "packages/splitcast-rs/src/agent.rs"},
+    "obs-source.tar.xz": {"./COPYING", "./plugins/obs-websocket/LICENSE",
+                         "./plugins/obs-websocket/src/websocketserver/WebSocketServer.cpp"},
+    "nixpkgs-source.tar.xz": {"./COPYING", "./pkgs/applications/video/obs-studio/default.nix",
+                             "./pkgs/applications/video/obs-studio/fix-nix-plugin-path.patch"},
+}
 
 
 def run(*args, **kwargs):
@@ -153,14 +163,51 @@ def verify_index(directory, manifest, signed):
             raise ValueError("foreign upstream NAR URL")
     paths = list(manifest["closure"]) if signed else [p for p in manifest["closure"] if p not in manifest["custom"]]
     if paths:
-        run("nix", "store", "verify", "--store", directory.as_uri(), "--no-contents", "--sigs-needed", "1",
-            "--option", "substituters", "", "--option", "trusted-public-keys", trust_keys(), *paths)
+        flat_cache_command(directory, "store", "verify", "--no-contents", "--sigs-needed", "1",
+                           "--option", "substituters", "", "--option", "trusted-public-keys", trust_keys(), *paths)
     if manifest["custom"]:
-        run("nix", "store", "verify", "--store", directory.as_uri(), "--no-trust", *manifest["custom"])
+        flat_cache_command(directory, "store", "verify", "--no-trust", *manifest["custom"])
 
 
 def trust_keys():
     return Path("nix/cache-public-key").read_text().strip() + " " + NIXOS_KEY
+
+
+def verify_sources(directory):
+    for name, required in REQUIRED_SOURCE_MEMBERS.items():
+        with tarfile.open(directory / name) as archive:
+            if not required <= set(archive.getnames()):
+                raise ValueError(f"incomplete corresponding source archive: {name}")
+    with tarfile.open(directory / "cargo-sources.tar.xz") as archive:
+        names = archive.getnames()
+        if not any(name.endswith("/Cargo.toml") for name in names) or not any("license" in name.lower() for name in names):
+            raise ValueError("Cargo source archive lacks crate sources or licenses")
+    print("Source archives contain project build inputs, patches, licenses, Cargo sources, upstream OBS, and pinned Nixpkgs expressions.")
+
+
+def prune_empty_cache_directories(directory):
+    for name in ("nar", "log", "realisations"):
+        if (directory / name).exists():
+            (directory / name).rmdir()
+
+
+def flat_cache_command(directory, *args):
+    try:
+        return run("nix", *args, "--store", directory.as_uri())
+    finally:
+        prune_empty_cache_directories(directory)
+
+
+def flatten_export(destination, custom):
+    for path in custom:
+        metadata = destination / (store_hash(path) + ".narinfo")
+        info = fields(metadata.read_text())
+        nar = destination / info["URL"]
+        if nar.parent != destination / "nar" or not ASSET_NAME.fullmatch(nar.name):
+            raise ValueError("unexpected Nix export layout")
+        nar.rename(destination / nar.name)
+        metadata.write_text(rewrite_url(metadata.read_text(), nar.name))
+    prune_empty_cache_directories(destination)
 
 
 def prepare(destination, sources):
@@ -172,6 +219,7 @@ def prepare(destination, sources):
     closure = json.loads(run("nix", "path-info", "--recursive", "--json", "--json-format", "1", *built))
     closure = {path: {k: info[k] for k in ("narHash", "narSize", "references")} for path, info in closure.items()}
     manifest = {"version": 1, "revision": source, "roots": selected, "closure": closure, "custom": []}
+    verify_sources(sources)
     destination.mkdir(parents=True, exist_ok=False)
     for name in SOURCE_ASSETS:
         shutil.copyfile(sources / name, destination / name)
@@ -183,16 +231,7 @@ def prepare(destination, sources):
                 (destination / (store_hash(path) + ".narinfo")).write_text(text)
     validate_manifest(manifest)
     run("nix", "copy", "--no-recursive", "--to", destination.as_uri(), *manifest["custom"])
-    for path in manifest["custom"]:
-        metadata = destination / (store_hash(path) + ".narinfo")
-        info = fields(metadata.read_text())
-        nar = destination / info["URL"]
-        if nar.parent != destination / "nar" or not ASSET_NAME.fullmatch(nar.name):
-            raise ValueError("unexpected Nix export layout")
-        nar.rename(destination / nar.name)
-        metadata.write_text(rewrite_url(metadata.read_text(), nar.name))
-    if (destination / "nar").exists():
-        (destination / "nar").rmdir()
+    flatten_export(destination, manifest["custom"])
     write_manifest(destination, manifest)
     verify_index(destination, manifest, signed=False)
     print(json.dumps({"custom": manifest["custom"], "assets": len(manifest["assets"]) + 1,
@@ -213,7 +252,7 @@ def sign(directory, expected_hash):
         public = run("nix", "key", "convert-secret-to-public", input=key.read_text())
         if public != Path("nix/cache-public-key").read_text().strip():
             raise ValueError("signing secret does not match the committed public key")
-        run("nix", "store", "sign", "--store", directory.as_uri(), "--key-file", str(key), *manifest["custom"])
+        flat_cache_command(directory, "store", "sign", "--key-file", str(key), *manifest["custom"])
     write_manifest(directory, manifest)
     verify_index(directory, manifest, signed=True)
     print(digest(directory / "manifest.json"))

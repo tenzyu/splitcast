@@ -8,6 +8,11 @@ on:
         type: boolean
         required: true
         default: false
+      reviewed_redistribution:
+        description: Owner reviewed the three custom outputs, source bundles, GPL and codec conditions
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -18,7 +23,7 @@ defaults:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main' && inputs.publish
+    if: github.ref == 'refs/heads/main' && inputs.publish && inputs.reviewed_redistribution
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
@@ -75,7 +80,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.ref == 'refs/heads/main' && inputs.publish
+    if: github.ref == 'refs/heads/main' && inputs.publish && inputs.reviewed_redistribution
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

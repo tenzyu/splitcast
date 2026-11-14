@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,14 @@ spec.loader.exec_module(cache)
 
 
 class MetadataTests(unittest.TestCase):
+    def test_source_asset_filenames_do_not_prove_archive_contents(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name in cache.SOURCE_ASSETS:
+                (directory / name).write_text("not a source archive")
+            with self.assertRaises(tarfile.ReadError):
+                cache.verify_sources(directory)
+
     def test_only_upstream_404_is_a_cache_miss(self):
         path = "/nix/store/" + "a" * 32 + "-fixture"
         for status in (403, 404, 500):
@@ -61,6 +70,16 @@ class MetadataTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cache.inventory(directory)
 
+    def test_normalization_never_discards_nonempty_nix_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "log").mkdir()
+            preserved = directory / "log" / "keep.txt"
+            preserved.write_text("source evidence")
+            with self.assertRaises(OSError):
+                cache.prune_empty_cache_directories(directory)
+            self.assertEqual(preserved.read_text(), "source evidence")
+
     def test_rejects_foreign_paths_and_incomplete_closures(self):
         path = "/nix/store/" + "a" * 32 + "-splitcast-web-0.1.0"
         source = {"sha": "fixture"}
@@ -96,13 +115,16 @@ class NixProtocolTests(unittest.TestCase):
             cache.run("nix", "copy", "--no-recursive", "--to", exported.as_uri(), root)
             metadata = exported / (cache.store_hash(root) + ".narinfo")
             nar = exported / cache.fields(metadata.read_text())["URL"]
-            nar.rename(exported / nar.name)
-            (exported / "nar").rmdir()
-            metadata.write_text(cache.rewrite_url(metadata.read_text(), nar.name))
+            cache.flatten_export(exported, [root])
+            for name in cache.SOURCE_ASSETS:
+                (exported / name).write_text("fixture source")
+            self.assertEqual(sorted(p.name for p in exported.iterdir() if not p.is_file()), [])
+            self.assertIn(nar.name, cache.inventory(exported))
             verify = ["nix", "store", "verify", "--store", exported.as_uri(), "--no-contents", "--sigs-needed", "1",
                       "--option", "trusted-public-keys", public.read_text().strip(), "--option", "substituters", "", root]
             self.assertNotEqual(subprocess.run(verify).returncode, 0, "unsigned fixture was accepted")
-            cache.run("nix", "store", "sign", "--store", exported.as_uri(), "--key-file", str(private), root)
+            cache.flat_cache_command(exported, "store", "sign", "--key-file", str(private), root)
+            self.assertEqual(sorted(p.name for p in exported.iterdir() if not p.is_file()), [])
             subprocess.run(verify, check=True)
             consumer = "local?root=" + str(directory / "consumer")
             cache.run("nix", "copy", "--from", exported.as_uri(), "--to", consumer,
