@@ -16,3 +16,20 @@ Recorded 2026-11-13. These are unresolved historical gates and extraction questi
 | R10 | Full consumer flake evaluation fails at an invalid Firefox theme derivation. | Repair the consumer environment or unrelated derivation in a separate task and rerun the full check. The exact failure also reproduces at untouched EXTRACT; targeted SplitCast config/gate checks pass. | S14, E09 |
 
 Historical approval covered disabled partial publication only. Capture enablement, Rust service selection, host activation, a privileged helper, external listeners, and public streaming require distinct current authorization. No present host state is inferred from a repository boolean.
+
+## 2026-11-14 virtual-software follow-up
+
+S16 narrows R09 with implemented queue-expiry cancellation, explicit unknown outcomes, per-instance shutdown, tracked connection joins, and focused negative-path checks. It does not close the entire risk. Ordinary Stop remains serialized behind Prepare, lease progress is not real-time, and a universal hard shutdown bound is not claimed. F04 through F07, settings durability, and durable command outcomes remain separate work.
+
+R04 now has a generated-only delayed loopback TCP transfer, disconnect cleanup, and a freshly decoded recovery recording. That evidence does not cover the actual agent RTMP and RTSP media path, frame freshness, clock correspondence, or physical latency. Those software integration checks can proceed without hardware-performance acceptance.
+
+R01, R02, R05, and R07 retain their physical, deployment-containment, network-policy, and browser acceptance boundaries. D10 separates them from the local software development gate rather than declaring them passed or making them prerequisites for unrelated software progress.
+
+## 2026-11-14 delivery planning follow-up
+
+S17 does not close a runtime risk. [Production-readiness gates](../production-readiness.md) map the outstanding work to release evidence. [The next-session handoff](../handoff/ci-nix-cache.md) owns the immediate CI/cache task.
+
+- R11. The repaired source is uncommitted while HEAD remains `aa86fe0`. A hosted checkout or new worktree at HEAD alone would test an older artifact. Close with a deliberately reviewed commit and a hosted run for that exact source identity.
+- R12. Hosted CI, cold-runner Cargo/WASM preparation, current native/WASM Nix packages, cache publication authorization, and fresh-consumer substitution remain unverified. Close with hosted run and output identities, scoped credentials restricted to trusted revisions, and a no-fallback-build consumer result from the intended cache. Cache availability alone does not close R01 through R10.
+
+The source-inspected sandbox shebang and toolchain/cache risks in the handoff are hypotheses to reproduce, not newly proven product failures. Do not weaken assertions or substitute a different OBS backend to hide an infrastructure failure.

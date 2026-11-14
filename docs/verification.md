@@ -72,3 +72,24 @@ No two-host, physical-device, GPU, browser, forced-crash, performance-baseline, 
 Original source records remain recoverable from EXTRACT and the manifest's Git blobs. Ignored residual build/cache material was moved to the standalone repository's private `artifacts/source-checkout-residue/` rather than discarded or published. The consumer's implementation directories are removed. Its remaining changes are local, reviewable flake/module/settings and external-reference updates, with no consumer commit or push by the agent. [Publication steps](publication.md) require the human owner's authenticated GitHub operation.
 
 Rollback preserves both histories. Build a prior standalone implementation in a separate checkout or restore the prior consumer input in a separate reviewed change. Inspect incomplete remote and cgroup cleanup before any runtime rollback. Do not reset unrelated work, infer an installed Python fallback, or activate a generation without separate permission.
+
+## Virtual-software follow-up, 2026-11-14 JST
+
+The current run starts at `aa86fe0d443d55a1a66c61198811a5b906ebef57` plus the uncommitted virtual-control changes. Historical extraction results above retain their artifact identities. The new [verification record](evidence/virtual-system-20261114.md) preserves commands, failures, negative controls, independent review scopes, and remaining gaps.
+
+`nix develop -c cargo run -p splitcast-xtask -- verify` passed all 11 steps. After retaining the independent running-SIGTERM probe as a second ordinary two-agent test, `nix develop -c cargo run -p splitcast-xtask -- verify-virtual` passed all 14 steps with 124 ordinary tests and three separately executed local opt-in components. See the [command summary](evidence/virtual-system-20261114-summary.tsv) and [tested source manifest](evidence/virtual-system-20261114-source-sha256.tsv). Raw final logs are in `artifacts/verification/runs/1794622014178620022/`.
+
+The software checks now cover actual local capture and production agents with stand-in workers, owner isolation, repeated recording Start, selected worker failures, explicit recovery, SIGTERM while Running, expired queued requests, running-outcome ambiguity, connection closure and joins, OBS compound cancellation, and generated delayed TCP transfer with disconnect, cleanup, and full decode. Independent integrated runtime reviewers returned no verified scoped defects.
+
+This does not complete SplitCast. Ordinary Stop remains behind active Prepare. Actual agent RTMP and RTSP media integration, congestion recovery, durable outcomes, settings fault injection, browser lifecycle, and physical capture and performance acceptance remain separate work. No new Nix package build, consumer evaluation, deployment, real remote SSH, physical device, real OBS acceptance, or game-performance claim is made. Runtime and autostart gates remain unchanged.
+
+## CI and binary-delivery follow-up, 2026-11-14 JST
+
+S18 preserves the formerly uncommitted source in `7585308` and independently
+builds/tests it through hosted CI. Its [CI/cache record](evidence/ci-nix-cache-20261114.md)
+separates actual hosted jobs, local reruns, package outputs, cache export failures
+and corrections, source/rights review, and public-consumer evidence. GitHub
+Releases supplies the cache transport. No external cache account is assumed.
+Earlier statements about no remote, dirty source, or no new package build apply
+only to their original checkpoints. No delivery result accepts physical capture,
+software media-path integration, browser behavior, host activation, or gameplay.

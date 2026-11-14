@@ -5,7 +5,72 @@ use splitcast_rs_core::{
 use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
+
+static SIGNALLED: AtomicBool = AtomicBool::new(false);
+extern "C" fn signal_shutdown(_: i32) {
+    SIGNALLED.store(true, Ordering::Relaxed);
+}
+struct Signals(Vec<(i32, libc::sighandler_t)>);
+impl Signals {
+    fn install() -> io::Result<Self> {
+        SIGNALLED.store(false, Ordering::Relaxed);
+        let mut signals = Self(Vec::new());
+        for signal in [libc::SIGINT, libc::SIGTERM] {
+            // SAFETY: the process-owned handler only stores a lock-free atomic flag.
+            let previous =
+                unsafe { libc::signal(signal, signal_shutdown as *const () as libc::sighandler_t) };
+            if previous == libc::SIG_ERR {
+                return Err(io::Error::last_os_error());
+            }
+            signals.0.push((signal, previous));
+        }
+        Ok(signals)
+    }
+}
+impl Drop for Signals {
+    fn drop(&mut self) {
+        for (signal, previous) in self.0.drain(..) {
+            // SAFETY: restore the disposition returned by signal for this signal number.
+            unsafe {
+                libc::signal(signal, previous);
+            }
+        }
+    }
+}
+fn serve(cfg: config::Config) -> io::Result<()> {
+    let _signals = Signals::install()?;
+    let shutdown = Arc::new(AtomicBool::new(false));
+    std::thread::scope(|scope| {
+        let cancel = Arc::clone(&shutdown);
+        let bridge = scope.spawn(move || {
+            while !cancel.load(Ordering::Relaxed) {
+                if SIGNALLED.load(Ordering::Relaxed) {
+                    cancel.store(true, Ordering::Relaxed);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        struct CancelOnExit(Arc<AtomicBool>);
+        impl Drop for CancelOnExit {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let cancel = CancelOnExit(Arc::clone(&shutdown));
+        let result = agent::serve(cfg, shutdown);
+        drop(cancel);
+        bridge
+            .join()
+            .map_err(|_| io::Error::other("signal bridge panicked"))?;
+        result
+    })
+}
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -175,7 +240,7 @@ fn run() -> io::Result<()> {
             );
             return Ok(());
         }
-        "agent" => return agent::serve(cfg),
+        "agent" => return serve(cfg),
         "cleanup" => return agent::cleanup_after_exit(cfg),
         "tui" => {
             return tui::run_with(io::stdin().lock(), io::stdout().lock(), |name, args| {

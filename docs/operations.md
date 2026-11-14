@@ -18,6 +18,13 @@ nix flake check
 
 The verifier runs fmt, workspace/all-target check and Clippy, unit and integration tests, doctests, the no-default-features matrix, the valid all-features check, the WASM target check, dependency trees, and repository portability. Each command's output and exit status are retained under `artifacts/verification/`. A failing command makes the verifier fail even if later checks pass.
 
+Hosted CI runs those checks on ephemeral runners. Signed GitHub Releases can
+provide the same pinned package outputs without builds. Follow the exact source,
+cache URL, keys and consumer result in [the CI/cache record](evidence/ci-nix-cache-20261114.md),
+not a moving release tag. Publishing a cache never enables runtime or autostart.
+
+`nix develop -c cargo run -p splitcast-xtask -- verify-virtual` also runs the isolated private-audio, generated-recording, and loopback generated-transport tests. See [virtual system acceptance](virtual-acceptance.md) for the software contracts and separate physical gates. This command does not authorize real SSH, hardware capture, an existing OBS instance, or public streaming.
+
 Ordinary tests exercise authenticated local sockets, protocol rejection, terminal input, output selection, peer ownership, worker failures, and timeouts with stand-in workers. They must not contact a real SSH peer or open capture devices.
 
 Run isolated optional local components separately:

@@ -1,0 +1,156 @@
+name: Release Nix cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a signed experimental cache after validation and source/notice review
+        type: boolean
+        required: true
+        default: false
+      reviewed_redistribution:
+        description: Owner reviewed the three custom outputs, source bundles, GPL and codec conditions
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && inputs.publish && inputs.reviewed_redistribution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      manifest_hash: ${{ steps.bundle.outputs.manifest_hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+          extra_nix_config: |
+            accept-flake-config = false
+            max-jobs = 2
+      - run: bash tools/ci/identity.sh
+      - run: nix develop -c bash tools/ci/prepare.sh 2>&1 | tee artifacts/ci/prepare.log
+      - run: nix develop -c cargo run -p splitcast-xtask -- verify 2>&1 | tee artifacts/ci/verify.log
+      - run: nix develop -c cargo run -p splitcast-xtask -- verify-virtual 2>&1 | tee artifacts/ci/verify-virtual.log
+      - run: bash tools/ci/packages.sh 2>&1 | tee artifacts/ci/packages.log
+      - name: Exercise cache metadata and signature failure controls
+        env:
+          SPLITCAST_CACHE_PROTOCOL_TEST: '1'
+        run: python3 tools/ci/test_release_cache.py 2>&1 | tee artifacts/ci/cache-tests.log
+      - name: Package sources and prepare the unsigned cache
+        id: bundle
+        run: |
+          bash tools/ci/release-sources.sh artifacts/release-sources
+          python3 tools/ci/release_cache.py prepare artifacts/release-bundle artifacts/release-sources 2>&1 | tee artifacts/ci/cache-prepare.log
+          printf 'manifest_hash=%s\n' "$(sha256sum artifacts/release-bundle/manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Retain this trusted run's unsigned bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-bundle
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: artifacts/release-bundle/*
+      - name: Retain build evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-build-evidence-${{ github.run_attempt }}
+          retention-days: 30
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.log
+            artifacts/ci/*.json
+            artifacts/verification/runs/*/summary.tsv
+            artifacts/verification/runs/*/*.log
+            artifacts/verification/runs/*/revision.txt
+            artifacts/verification/runs/*/working-tree.txt
+            artifacts/verification/runs/*/cargo-lock-blob.txt
+            artifacts/verification/runs/*/rustc.txt
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main' && inputs.publish && inputs.reviewed_redistribution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    outputs:
+      cache_url: ${{ steps.publish.outputs.cache_url }}
+      manifest_hash: ${{ steps.sign.outputs.manifest_hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+          extra_nix_config: accept-flake-config = false
+      - run: bash tools/ci/identity.sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-bundle
+          path: artifacts/release-bundle
+          digest-mismatch: error
+      - name: Verify provenance and sign only the approved custom entries
+        id: sign
+        env:
+          NIX_CACHE_SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+          EXPECTED_MANIFEST: ${{ needs.build.outputs.manifest_hash }}
+        run: |
+          final_hash=$(python3 tools/ci/release_cache.py sign artifacts/release-bundle "$EXPECTED_MANIFEST")
+          printf 'manifest_hash=%s\n' "$final_hash" >> "$GITHUB_OUTPUT"
+      - name: Publish an immutable, initially unverified prerelease
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/ci/publish-release.sh artifacts/release-bundle
+      - name: Retain publisher evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-publisher-evidence-${{ github.run_attempt }}
+          retention-days: 30
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.json
+            artifacts/release-bundle/manifest.json
+
+  consume:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+          extra_nix_config: accept-flake-config = false
+      - run: bash tools/ci/identity.sh
+      - name: Obtain exact outputs without builds, then run offline package checks
+        env:
+          CACHE_URL: ${{ needs.publish.outputs.cache_url }}
+          EXPECTED_MANIFEST: ${{ needs.publish.outputs.manifest_hash }}
+        run: python3 tools/ci/release_cache.py consume "$CACHE_URL" "$EXPECTED_MANIFEST" 2>&1 | tee artifacts/ci/consume.log
+      - name: Retain cold-consumer evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-consumer-evidence-${{ github.run_attempt }}
+          retention-days: 30
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.json
+            artifacts/ci/*.log
