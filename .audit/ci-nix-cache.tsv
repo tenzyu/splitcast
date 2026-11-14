@@ -1,0 +1,5 @@
+ts	phase	decision	why	evidence	result
+2026-11-14T00:00:00+09:00	preserve	Commit existing source and handoff before CI changes	The operator asked to commit first and the tested artifact was uncommitted	7585308	49 source hashes match; git diff --check passed
+2026-11-14T00:00:01+09:00	boundary	Implement unprivileged hosted validation before cache publication	Repository secrets and variables are empty and no cache destination is approved	docs/handoff/ci-nix-cache.md:64	publication blocked; validation proceeds
+2026-11-14T00:00:02+09:00	ci	Use three fresh hosted jobs without restoring build artifacts or store caches	PR-produced state must not reach a future secret-bearing publisher	.github/workflows/ci.yml	implemented; execution pending
+2026-11-14T12:51:54+09:00	correction	First three row timestamps are ordering placeholders, not observed wall-clock times	Those rows were drafted without querying the clock; preserve the decisions but do not treat their times as evidence	7585308; .github/workflows/ci.yml	this row supersedes their timestamp claims

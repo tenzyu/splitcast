@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: ${{ matrix.command }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [verify, verify-virtual]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+          extra_nix_config: |
+            accept-flake-config = false
+            max-jobs = 2
+      - name: Record source and runner
+        run: bash tools/ci/identity.sh
+      - name: Prepare compiler, WASM target, and offline dependencies
+        run: nix develop -c bash tools/ci/prepare.sh 2>&1 | tee artifacts/ci/prepare.log
+      - name: Run the declared verifier
+        env:
+          VERIFY_COMMAND: ${{ matrix.command }}
+        run: nix develop -c cargo run -p splitcast-xtask -- "$VERIFY_COMMAND" 2>&1 | tee artifacts/ci/verifier.log
+      - name: Retain allowlisted evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.command }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.log
+            artifacts/verification/runs/*/summary.tsv
+            artifacts/verification/runs/*/*.log
+            artifacts/verification/runs/*/revision.txt
+            artifacts/verification/runs/*/working-tree.txt
+            artifacts/verification/runs/*/cargo-lock-blob.txt
+            artifacts/verification/runs/*/rustc.txt
+
+  packages:
+    name: Native and WASM packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+          extra_nix_config: |
+            accept-flake-config = false
+            max-jobs = 2
+      - name: Record source and runner
+        run: bash tools/ci/identity.sh
+      - name: Build selected packages and standalone checks
+        run: bash tools/ci/packages.sh 2>&1 | tee artifacts/ci/packages.log
+      - name: Retain packaging evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.json
+            artifacts/ci/*.log
