@@ -114,3 +114,13 @@ Fresh E07–E10 now replace the extraction-pass checkpoint's pending local verif
 - Rejected: secret-bearing PR execution, untrusted cache writes, caching all flake outputs by default, treating a warm store as consumption evidence, treating cached binaries as production acceptance, or waiting for physical performance before continuing unrelated software work.
 - Product boundary: a supported release needs declared features and environments. Recording-first scope is a proposal, not an operator decision. Unknown outcomes need honest recovery semantics; a general durable operation registry is not automatically required. P0 through P4 in the readiness document remain software work, while P5 requires separate target-environment authorization.
 - Evidence: S17, [the handoff](../handoff/ci-nix-cache.md), [readiness gates](../production-readiness.md), and [working-state capsule](session-state.md).
+
+## D12: Deliver complete Nix identities through signed GitHub Releases
+
+- Date: 2026-11-14 JST. Operator-selected replacement for D11's proposed external-cache service.
+- Goal: distribute prebuilt SplitCast without another account while preserving the existing wrapped native/WASM/OBS package, source-build path and disabled deployment gates.
+- Adopted: a full flat narinfo index, official signed NAR forwarding, three signed custom NARs with sources/notices, trusted same-run unprivileged build promotion, separate signing and fresh no-build consumer, and unique per-attempt prerelease tags.
+- Rejected: a raw executable-only replacement that drops runtime dependencies; mirroring every third-party NAR; force-moving tags; automatic main rewrites; promoting PR artifacts; and accepting a warm store as cache proof.
+- Contrary observations: file-cache bookkeeping names differ across Nix versions, so normalization removes only empty directories structurally, never contents. Drafts are not visible through the public by-tag endpoint, so the publisher retains the ID from creation. Both failures and their original attempts remain recorded.
+- Authorization: the owner approved the actual native/web/patched-OBS scope with corresponding sources after GPL/FDK-AAC disclosure, key setup, normal merge and the verification prerelease. This is not a legal/patent audit or deployment authorization.
+- Evidence: S18/E14, successful run `43561723796` at `d2205d0`, [receipt](../evidence/ci-nix-cache-20261114-receipt.json), and [download procedure](../binary-cache.md). Next work is P1, not repeating publication or implicitly rotating the configured key.

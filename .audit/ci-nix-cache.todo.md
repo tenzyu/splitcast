@@ -5,8 +5,8 @@
 - [x] Ground the existing packaging and release trust boundaries.
 - [x] Compare independent release-cache sketches and select one.
 - [x] Implement the selected publisher and a fresh no-build consumer.
-- [ ] Verify scripts, failure controls, hosted jobs and actual release consumption.
-- [ ] Reconcile records and review the decision trail.
+- [x] Verify scripts, failure controls, hosted jobs and actual release consumption.
+- [x] Reconcile records and review the decision trail.
 
 Design rubric: exact native/WASM identities and closure coverage; PR/secret
 isolation; immutable releases and retries; redistribution obligations; small,

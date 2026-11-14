@@ -1,5 +1,13 @@
 # CI and cache implementation record
 
+Final status: P0 delivery passes for `d2205d0`, `x86_64-linux`, in
+[run 43561723796](https://github.com/tenzyu/splitcast/actions/runs/43561723796).
+Use [the receipt](ci-nix-cache-20261114-receipt.json) and
+[download guide](../binary-cache.md). Earlier pending or blocked statements below
+belong to their chronological checkpoints. They are preserved failure history,
+not instructions to recreate the signing key or retry an obsolete draft.
+Production readiness, real media integration and deployment remain separate.
+
 The operator requested committing the existing work first, then implementing
 [the CI/cache handoff](../handoff/ci-nix-cache.md). Commit `7585308` preserves the
 previous virtual-control implementation and evidence. All 49 source identities
@@ -255,6 +263,131 @@ tag endpoint before publication. Creation explicitly names the exact source SHA.
 The asset comparison was extracted without changing its contract, so the actual
 draft bytes and the workflow use the same rerunnable verifier. A new trusted
 run is still required to prove the corrected publication path and cold consumer.
+
+## Final hosted delivery result
+
+**Delivery passes for `d2205d06b0dc695c3d9b7372fafa7facee769fa9`,
+`x86_64-linux`, and the pinned locks.**
+[Run 43561723796](https://github.com/tenzyu/splitcast/actions/runs/43561723796)
+has successful `build`, `publish`, and `consume` conclusions. All three retained
+revision files identify that exact commit, with clean worktrees. Its separate
+[ordinary CI run 43561718889](https://github.com/tenzyu/splitcast/actions/runs/43561718889)
+also succeeds.
+
+- Trusted ordinary run `1794634175112896771`: 11 PASS rows.
+- Trusted extended run `1794634269932185211`: 14 PASS rows, including the three
+  opt-in local components. These rerun the ordinary tests, not extra unique tests.
+- Cache controls: ten tests actually execute and pass.
+- Native/web packages, standalone flake checks, corresponding-source checks,
+  full export, signature verification and remote asset comparison pass.
+- Release `445047931` is public (`draft=false`) and remains a prerelease. It has
+  452 assets and targets exactly `d2205d0`. The earlier failed draft `445034829`
+  remains untouched and unpublished.
+- The independent fresh consumer rejects already-present roots, directly checks
+  intended-cache metadata, requires signatures, sets `--max-jobs 0 --builders ''`,
+  and uses the release as its only substituter. Its log reports 441 paths fetched
+  from the release's index; the runner is fresh, not an absolutely empty store,
+  because Nix itself was already installed. Forwarded NAR bytes still come from
+  `cache.nixos.org`. This is not a full independent mirror.
+- Both exact root paths are returned. The fetched package reports
+  `splitcast lifecycle selfcheck passed; no media started`, and example validation
+  returns `valid=true`. No agent, capture or stream is started by these checks.
+
+The publisher and consumer manifest files are byte-identical. The public
+manifest's SHA-256 is
+`fbc58a9d412b7a7c4e59f37c21835fc5cf464e677603f534bf355db43c688387`.
+[The compact receipt](ci-nix-cache-20261114-receipt.json) retains source, locks,
+derivations, outputs, NAR hashes, counts and scope. The complete signed manifest
+is a release asset. [The download guide](../binary-cache.md) provides actual,
+pinned cache and key values without any private credential.
+
+| Exact command | Result |
+| --- | --- |
+| `gh workflow run release-cache.yml --ref main -f publish=true -f reviewed_redistribution=true` | Starts corrected run `43561723796` at `d2205d0`. |
+| `gh run watch 43561723796 --interval 60 --exit-status > artifacts/ci/watch-43561723796.log 2>&1` | Exit 0. API inspection confirms all three job conclusions success. |
+| `gh run download 43561723796 --name release-build-evidence-1 --dir artifacts/ci/release-43561723796-build` | Exit 0; actual ordinary/extended summaries, ten-test result, locks and derivations inspected. |
+| `gh run download 43561723796 --name release-publisher-evidence-1 --dir artifacts/ci/release-43561723796-publisher` | Exit 0; actual draft/create and published IDs, assets and signed manifest inspected. |
+| `gh run download 43561723796 --name release-consumer-evidence-1 --dir artifacts/ci/release-43561723796-consumer` | Exit 0; source, clean tree, manifest, exact outputs and substitution/selfcheck/validate log inspected. |
+
+The external web-rendering tool could not display `nix-cache-info` because
+GitHub serves it as `application/octet-stream`. That tool limitation is not a
+cache failure. An anonymous standard HTTP client fetched it successfully and
+confirmed `StoreDir: /nix/store`; the anonymous public manifest also matched the
+exact digest above. The documented pinned `nix build` and `nix run ... -- selfcheck`
+commands both exited 0 locally. That local store was warm and is explicitly not
+substituted for the fresh hosted consumer proof.
+
+Terra's final read-only audit corroborated the retained successful build,
+publisher and consumer artifacts, all 452 asset records, byte-identical
+manifests, root substitutions and offline checks. It did not independently query
+GitHub's current live state or recover the unavailable transcript. Primary
+session API/HTTP observations supply those separately. It did not review later
+receipt/documentation edits before their own reconciliation check.
+
+Remaining limits: no legal/patent audit, branch protection unchanged, official
+upstream availability still required, no Home Manager assertions added to flake
+checks, no changed-`follows` consumer proof, and no hardware, real agent media,
+browser, crash-containment or deployment acceptance. Runtime and autostart gates
+remain unchanged. This closes P0 for the named delivery, not Production Ready
+status or the remaining P1–P5 work.
+
+### Receipt and guide reconciliation
+
+The following exact anonymous-public comparison exited 0. It checks the new
+receipt against the actual fetched manifest and the hosted consumer's actual
+bytes, rather than accepting a hand-written summary:
+
+```sh
+python3 - <<'PY'
+import hashlib,json
+from pathlib import Path
+from tools.ci.release_cache import read_url
+r=json.loads(Path('docs/evidence/ci-nix-cache-20261114-receipt.json').read_text())
+data=read_url(r['release']['cacheUrl']+'/manifest.json')
+m=json.loads(data)
+assert hashlib.sha256(data).hexdigest()==r['release']['manifestSha256']
+assert r['source']==m['revision']['sha'] and r['system']==m['revision']['system']
+assert r['locks']==m['revision']['locks'] and r['outputs']==m['roots']
+assert r['closure']['paths']==len(m['closure'])
+assert r['release']['assetCount']==len(m['assets'])+1
+assert r['customNarHashes']=={p:m['closure'][p]['narHash'] for p in m['custom']}
+assert len(m['custom'])==r['closure']['customNarsHostedOnGitHub']
+assert len(m['closure'])-len(m['custom'])==r['closure']['officialNarsForwardedToCacheNixosOrg']
+assert data==Path('artifacts/ci/release-43561723796-consumer/consumed-manifest.json').read_bytes()
+print('Receipt identities, hashes, counts, and actual fetched manifest match the public release')
+PY
+```
+
+`gh run view 43561718889 --json headSha,conclusion,jobs,url` also confirms all
+four ordinary CI job conclusions succeed for `d2205d0`. The two documented
+[download commands](../binary-cache.md) were executed with `set -euo pipefail`
+and the exact source/cache/keys printed in that guide: both exit 0, return the
+same two paths, and selfcheck reports no media started. That guide verification
+is a warm local check; the distinct hosted consumer remains the cold proof.
+
+The closeout document review then found no substantive issue in the receipt,
+download guide, readiness status or handoff capsule. It retained the limitations
+on transcript/live-state access. Its complete local report is copied to
+`artifacts/ci/terra-review.md` without altering the original temporary report.
+
+After successful consumption, only the public release's title and description
+were annotated with the verified run and manifest digest. The existing notes
+were retained and the new receipt appended. The exact metadata operation was
+`gh api --method PATCH repos/tenzyu/splitcast/releases/445047931 --input artifacts/ci/verified-release-patch.json > artifacts/ci/verified-release-response.json`,
+exit 0. A subsequent read confirms `Verified Nix delivery candidate d2205d06b0dc`,
+`draft=false`, `prerelease=true`, the same source/tag and 452 assets. No asset or
+tag was replaced, no release was made stable/latest, and the failed old draft
+was left untouched.
+
+### Final local document checks
+
+- `bash -o pipefail -c 'nix develop -c cargo run -p splitcast-xtask -- verify 2>&1 | tee artifacts/ci/local-final-docs-verify.log'`: exit 0, all 11 steps PASS in `1794645511132230894`. Source is `d2205d0` plus the staged closeout documents, not a new Nix release package. The later record append does not claim another matrix run.
+- `env TMPDIR=/tmp/opencode nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh`: exit 0, ten tests plus all delivery linters pass.
+- `git diff --cached --check`: exit 0. A local Python relative-link check resolves all 85 links in the staged current Markdown documents; historical documents are outside that check.
+- `git diff --exit-code 7585308 -- packages Cargo.toml Cargo.lock flake.nix flake.lock nix/modules nix/obs.nix nix/source.nix`: exit 0. Product source, package selection, locks, runtime migration gates and autostart definitions remain unchanged from the deliberately preserved source.
+
+The final closeout commit records these results and consumer instructions only.
+Its identity is not substituted for the actual tested delivery source `d2205d0`.
 
 ## Design and safety
 

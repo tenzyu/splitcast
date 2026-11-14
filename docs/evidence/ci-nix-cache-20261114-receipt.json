@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "source": "d2205d06b0dc695c3d9b7372fafa7facee769fa9",
+  "system": "x86_64-linux",
+  "run": "https://github.com/tenzyu/splitcast/actions/runs/43561723796",
+  "jobs": {
+    "build": "success",
+    "publish": "success",
+    "consume": "success"
+  },
+  "release": {
+    "id": 445047931,
+    "tag": "nix-cache-d2205d06b0dc695c3d9b7372fafa7facee769fa9-43561723796-1",
+    "draft": false,
+    "prerelease": true,
+    "assetCount": 452,
+    "cacheUrl": "https://github.com/tenzyu/splitcast/releases/download/nix-cache-d2205d06b0dc695c3d9b7372fafa7facee769fa9-43561723796-1",
+    "manifestSha256": "fbc58a9d412b7a7c4e59f37c21835fc5cf464e677603f534bf355db43c688387"
+  },
+  "locks": {
+    "Cargo.lock": "148f1d305385c8ad8c94eef8a3d652688d6aaf8e29405aa48552b90bafe8ff9d",
+    "flake.lock": "27c4f4206ffd635aaea7cd0ab6c3c7bf611c5603b0ba72dd2787ef7dfefea220"
+  },
+  "derivations": {
+    "native": "/nix/store/lj1lf8lg4dzkigl33a89qsv8vy32rsmd-splitcast-rs-core-0.1.0.drv",
+    "web": "/nix/store/7r7ihhxk9dm6kcsw08qxqqnsfz3jm96r-splitcast-web-0.1.0.drv"
+  },
+  "outputs": {
+    "native": "/nix/store/jr2y8giph253yyq89rgy1w3l0dzc11fd-splitcast-rs-core-0.1.0",
+    "web": "/nix/store/y7h4pdailgaaiia2nj913l2bi8j719jd-splitcast-web-0.1.0"
+  },
+  "customNarHashes": {
+    "/nix/store/azxbfi1l0rp0wz329qqvyiah1xi71js8-obs-studio-splitcast-32.1.2": "sha256-d4pl20CJffiDwigHwqpgjP7lE/pyFpMB9Rci0vkhT8Q=",
+    "/nix/store/jr2y8giph253yyq89rgy1w3l0dzc11fd-splitcast-rs-core-0.1.0": "sha256-9Vm9VRN4JisnX2itjMilCaPUQ+RjtPHrNQh7xb+VQOI=",
+    "/nix/store/y7h4pdailgaaiia2nj913l2bi8j719jd-splitcast-web-0.1.0": "sha256-uxH2AZInOnP3QTkZvnDg++AJcXQUDCOSPKw6crUaemw="
+  },
+  "closure": {
+    "paths": 442,
+    "customNarsHostedOnGitHub": 3,
+    "officialNarsForwardedToCacheNixosOrg": 439
+  },
+  "verification": {
+    "ordinaryRun": "1794634175112896771",
+    "ordinarySteps": 11,
+    "virtualRun": "1794634269932185211",
+    "virtualSteps": 14,
+    "cacheTests": 10,
+    "consumerRootsInitiallyAbsent": true,
+    "maxJobs": 0,
+    "remoteBuilders": "",
+    "requireSignatures": true,
+    "soleSubstituter": "release cache",
+    "publisherConsumerManifestBytesEqual": true,
+    "selfcheck": "passed; no media started",
+    "exampleValidate": true
+  },
+  "preservedFailedDraft": 445034829,
+  "deploymentAuthorized": false,
+  "productionReady": false
+}

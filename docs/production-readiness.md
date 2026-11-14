@@ -1,6 +1,6 @@
 # Production-readiness gates
 
-SplitCast is not Production Ready. [S16/E12](memory/evidence.md) retains its local 124-test software checkpoint. [S18/E14](memory/evidence.md) adds actual hosted CI and native/WASM Nix builds, plus a signed GitHub Releases cache implementation. Public-cache consumption requires S18's own explicit result; it does not follow from the older local checkpoint. No delivery result establishes deployment acceptance.
+SplitCast is not Production Ready. [S16/E12](memory/evidence.md) retains its local 124-test software checkpoint. [S18/E14](memory/evidence.md) closes P0 for `d2205d0` on `x86_64-linux`: hosted checks, signed GitHub Releases delivery, and fresh signature-enforced no-build consumption all pass. No delivery result establishes software media-path or deployment acceptance.
 
 Production Ready means that a named release, supported feature set, and supported environment meet explicit behavior and failure contracts. CI success and cache availability are necessary delivery properties, not a substitute for runtime acceptance.
 
@@ -16,7 +16,7 @@ Uncertain RPC outcomes are unavoidable after a lost response. A supported releas
 
 | Gate | Work remaining | Evidence required before closing |
 | --- | --- | --- |
-| P0. Reproducible delivery | Source preserved in `7585308`; hosted CI and signed Releases delivery implemented in S18. Complete and retain actual public-cache consumption evidence. | Clean-checkout native and WASM checks, virtual tests, standalone Nix builds/checks, immutable source identity, retained failures, and a fresh consumer obtaining the selected outputs from the intended cache without local builds. |
+| P0. Reproducible delivery | Complete for `d2205d0` and its pinned `x86_64-linux` inputs. Keep the delivery checks for future candidates. | [S18 receipt](evidence/ci-nix-cache-20261114-receipt.json): hosted validation/builds, signed public release, retained failed attempts and fresh no-build consumption. Different inputs require new evidence. |
 | P1. Actual software media path | Connect generated sources to the actual agent RTMP and RTSP receive path. Use real media services rather than fabricated progress counters. | Both agent statuses plus independently decoded video/audio, expected tracks, selected geometry, timestamps or frame-age instrumentation, delayed transport, disconnect, child failure, and explicit recovery. Final recording/output must come from the path under test. |
 | P2. Responsive control and cleanup | Define Stop priority, lease progress, queue saturation policy, and one aggregate cleanup budget. Resolve the current Stop-behind-Prepare restriction. | Delayed Prepare, blocked helper/OBS calls, saturated clients, lost replies, SIGTERM, and authorized crash-containment tests. Observe resources and remote obligations directly. Never report Idle or complete cleanup while effects remain unconfirmed. |
 | P3. State and trust boundaries | Resolve settings commit ambiguity, validated configuration boundaries, machine-readable error recovery, browser command ownership, and supported protocol compatibility. | Post-rename sync failure, restart readback, invalid payloads, owner conflicts, stale browser replies, duplicate clicks, cancellation, and authorization tests through supported interfaces. Document any deliberately unsupported stable-library contract. |
@@ -29,7 +29,7 @@ No program can guarantee a hard stop of uninterruptible kernel I/O. Define the o
 
 ## Work in this order
 
-1. Implement [the CI and cache handoff](handoff/ci-nix-cache.md). Prove a clean consumer can obtain the tested package closure.
+1. P0 is delivered for the named S18 candidate. Preserve [its CI/cache procedure and evidence](binary-cache.md) when changing source or inputs.
 2. Close P1 with generated media through the real agent path. A separate TCP recording test is not sufficient.
 3. Close P2 and P3 with targeted negative-path and state tests. Keep explicit uncertainty where external effects cannot be confirmed.
 4. Close P4 against the declared release workload and failure budgets.

@@ -18,3 +18,7 @@ S18 implements that handoff using signed GitHub Releases rather than an external
 cache account. Its [CI/cache record](../evidence/ci-nix-cache-20261114.md) retains
 hosted identities, actual export failures, source review, operator permissions,
 and the independently scoped publication/consumption results.
+
+P0 is complete for the [named delivery receipt](../evidence/ci-nix-cache-20261114-receipt.json).
+Use [the download procedure](../binary-cache.md) for the real cache values. Next
+is P1's actual agent media path, not another publication run or deployment.

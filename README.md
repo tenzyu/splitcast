@@ -17,6 +17,14 @@ result/bin/splitcast doctor --offline --config packages/splitcast-rs/example.tom
 
 The example has no selected capture or microphone. Doctor must not report it ready to stream. Verification logs go to the ignored `artifacts/verification/` directory. Real audio-daemon and generated-media tests are opt-in; see [operations](docs/operations.md). Ordinary tests use isolated local peers and stand-in workers, not physical capture devices.
 
+## Prebuilt packages
+
+The verified Linux x86-64 candidate is available through a signed GitHub Releases
+Nix cache, including WASM and patched OBS. See [download without compilation](docs/binary-cache.md)
+for the pinned source, cache URL, public keys and no-build commands.
+No external cache account is needed. This does not enable services or establish
+production readiness.
+
 ## What exists
 
 - A typed command protocol shared by the native CLI, line-mode TUI, and Rust/WASM browser client.
