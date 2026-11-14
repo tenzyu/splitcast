@@ -147,6 +147,17 @@ def write_manifest(directory, manifest):
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
+def verify_uploaded_assets(directory, pages):
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    expected = manifest["assets"] | {"manifest.json": {"sha256": digest(manifest_path), "size": manifest_path.stat().st_size}}
+    assets = [asset for page in pages for asset in page]
+    observed = {asset["name"]: {"sha256": asset["digest"].removeprefix("sha256:"), "size": asset["size"]} for asset in assets}
+    if len(assets) != len(observed) or observed != expected:
+        raise ValueError("Remote release assets differ. Leave this release draft.")
+    return len(assets)
+
+
 def verify_index(directory, manifest, signed):
     validate_manifest(manifest)
     if inventory(directory) != manifest["assets"]:

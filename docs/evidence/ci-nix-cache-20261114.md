@@ -193,6 +193,69 @@ and symlink. No files or directory contents are recursively deleted.
 This supersedes the earlier fixed-name cleanup design, not its failure history.
 The pending source/memory documentation was preserved throughout the correction.
 
+## Hosted correction accepted and ordinary merge
+
+[Run 43558332265](https://github.com/tenzyu/splitcast/actions/runs/43558332265)
+passed all four jobs for PR head
+`65f8fb9caff5740200dbc4183a09dfb9ecab75cb`. Actual checkout identity is
+`058a099fedcfee87a0414147e33fea6f719a6722`, GitHub's synthetic merge commit.
+Downloaded ordinary run `1794631663970197646` has 11 PASS rows; extended run
+`1794631663551048932` has 14 PASS rows. `Delivery scripts` actually runs and
+passes nine tests under Nix 2.35.6. Packaged native/web outputs remain identical
+to the earlier paths above.
+
+| Exact command | Result |
+| --- | --- |
+| `bash -o pipefail -c 'nix develop -c cargo run -p splitcast-xtask -- verify 2>&1 \| tee artifacts/ci/local-ordinary-65f8fb9.log'` | Exit 0 on clean `65f8fb9`; all 11 steps pass in `1794631735865345025`. |
+| `gh run watch 43558332265 --interval 60 --exit-status > artifacts/ci/watch-43558332265.log 2>&1` | Exit 0; actual hosted job conclusions subsequently inspected. |
+| `gh run download 43558332265 --dir artifacts/ci/hosted-43558332265` | Exit 0; actual revision, summaries, package outputs and nine-test result inspected. |
+| `gh pr ready 1` | Exit 0; removed draft status without merging. |
+| `gh pr merge 1 --merge --match-head-commit 65f8fb9caff5740200dbc4183a09dfb9ecab75cb` | Exit 0 after all four jobs succeeded and with operator approval. PR API confirms MERGED at `2026-11-14T04:55:56Z`, merge commit `869c965ef2b9751f8e3aee44ad221478a6669fb1`. No squash, force push, tag rewrite or branch deletion. |
+| `git fetch origin main` then `git switch main` then `git merge --ff-only origin/main` | Each exit 0; primary checkout is clean main at the confirmed merge. |
+| `gh workflow run release-cache.yml --ref main -f publish=true -f reviewed_redistribution=true` | Exit 0; starts [release run 43559084940](https://github.com/tenzyu/splitcast/actions/runs/43559084940) for `869c965`. This dispatch is not yet a publication or consumer pass. |
+
+The release workflow repeats ordinary/virtual/package validation on its own
+trusted unprivileged runner. It does not promote the preceding PR artifacts.
+The above PR checks are retained as separate evidence rather than substituted
+for that required trusted build.
+
+## First trusted release attempt: signing succeeds, draft lookup fails
+
+[Release run 43559084940](https://github.com/tenzyu/splitcast/actions/runs/43559084940)
+on `869c965` finishes **failure**. Its trusted `build` succeeds, including both
+verifiers, packages, source checks and full unsigned export. The isolated
+publisher's signing step succeeds and verifies the signed index. Upload also
+succeeds for all 452 assets. The subsequent public tag-lookup endpoint returns
+HTTP 404 for the still-draft release, so publication stops and `consume` is
+skipped. This is a publication failure, not a failed software build or a cache
+consumption pass.
+
+Read-only inspection finds draft ID `445034829`, tag
+`nix-cache-869c965ef2b9751f8e3aee44ad221478a6669fb1-43559084940-1`, still
+`draft=true`. It is preserved unchanged. Its actual uploaded names, sizes and
+SHA-256 digests all match the signed manifest, whose SHA-256 is
+`a28b123d7af8f649de2d8c56849db0b8a66de1e9f821f4d4a21723c088a7ac0d`.
+Do not publish this old draft implicitly or rerun the obsolete tag-lookup code.
+
+| Exact command | Result |
+| --- | --- |
+| `gh run watch 43559084940 --interval 60 --exit-status > artifacts/ci/watch-43559084940.log 2>&1` | Exit 1. Build succeeds, publish fails, consume skipped. |
+| `gh run view 43559084940 --log-failed > artifacts/ci/release-43559084940-failed.log` | Exit 0; original publish HTTP 404 retained. |
+| `gh run download 43559084940 --name release-publisher-evidence-1 --dir artifacts/ci/release-43559084940-publisher` | Exit 0; signed manifest and tag evidence retained. |
+| `gh run download 43559084940 --name release-build-evidence-1 --dir artifacts/ci/release-43559084940-build` | Exit 0; trusted build evidence retained. |
+| `gh api 'repos/tenzyu/splitcast/releases/tags/nix-cache-869c965ef2b9751f8e3aee44ad221478a6669fb1-43559084940-1' --jq .id` | Exit 1, HTTP 404. Directly reproduces the inappropriate draft lookup. |
+| `gh api repos/tenzyu/splitcast/releases/445034829 --jq '{id,tag_name,draft,target_commitish,assets:(.assets\|length)}'` | Exit 0, draft exists with 452 assets. This is the distinguishing positive control for lookup by ID. |
+| `gh api --paginate --slurp 'repos/tenzyu/splitcast/releases/445034829/assets?per_page=100' > artifacts/ci/draft-445034829-assets.json` | Exit 0; all asset metadata obtained without making the draft public. |
+| `python3 -c 'import json; from pathlib import Path; from tools.ci.release_cache import verify_uploaded_assets; print(verify_uploaded_assets(Path("artifacts/ci/release-43559084940-publisher/release-bundle"), json.loads(Path("artifacts/ci/draft-445034829-assets.json").read_text())))'` | Exit 0, prints `452`; every uploaded digest/size/name matches the actual signed manifest. |
+| `env TMPDIR=/tmp/opencode nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh` | After the correction, exit 0 with ten passing tests. New asset-verification controls reject missing assets, duplicates, wrong digest and wrong size. |
+
+The publisher now captures the release ID from the create response and uses that
+same ID to enumerate and publish the draft. It does not depend on the public
+tag endpoint before publication. Creation explicitly names the exact source SHA.
+The asset comparison was extracted without changing its contract, so the actual
+draft bytes and the workflow use the same rerunnable verifier. A new trusted
+run is still required to prove the corrected publication path and cold consumer.
+
 ## Design and safety
 
 Validation runs ordinary `verify`, extended `verify-virtual`, and packaging on

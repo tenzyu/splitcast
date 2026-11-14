@@ -9,7 +9,7 @@ The operator wants software development and virtual acceptance to proceed indepe
 ## Source state
 
 - `7585308` commits the prior virtual-control implementation and handoff. Its 49 source identities match S16's manifest. The initial S17 capsule at that commit describes the formerly dirty tree; it is historical, not current Git status.
-- CI/cache implementation is on `ci/nix-cache`, PR #1, with reviewed code checkpoint `d37c387`. The operator approved an ordinary merge after validation and a verification prerelease, not deployment.
+- CI/cache implementation was merged through PR #1 into `main` at `869c965` after all four hosted jobs passed for head `65f8fb9`. The operator approved this ordinary merge and the separately gated verification prerelease, not deployment. The source-review checkpoint is `d37c387`; the later structural Nix-version correction has its own passing nine-test hosted result.
 - The existing public repository is `tenzyu/splitcast`, default `main`. Read-only inspection found Actions enabled and main unprotected. No repository visibility or branch-protection change was made.
 - `NIX_CACHE_SIGNING_KEY` is configured as a GitHub repository secret. The matching public key is in `nix/cache-public-key`. Do not regenerate or rotate it implicitly. No private key belongs in Git, Nix derivations or evidence uploads.
 - `.github/workflows/ci.yml` owns read-only hosted validation. `release-cache.yml` is manual, main-only, requires separate publication and redistribution confirmation, promotes only its own successful trusted build bundle, and tests consumption on a fresh runner.
@@ -19,6 +19,16 @@ Preserve the working tree. Review its tracked and untracked changes before commi
 ## Last verified software artifact
 
 [S16/E12](evidence.md) identifies its original dirty source, now preserved by `7585308`. Its final [source manifest](../evidence/virtual-system-20261114-source-sha256.tsv) contains 49 identities. Its [command summary](../evidence/virtual-system-20261114-summary.tsv) records 14 passing steps, 124 ordinary tests, and three separate local components. [S18/E14](evidence.md) adds actual clean hosted CI, new package builds and cache-specific evidence without relabeling S16's results. Full local cache preparation passes at `d37c387`; only S18's explicit hosted consumer result can establish public substitution.
+
+The failed hosted `d37c387` run revealed an extra empty `build-trace-v2`
+directory under Nix 2.35.6. Do not restore fixed-name cleanup. Flat cache
+preparation now removes empty directories structurally and refuses nonempty
+ones. The correction passes hosted run `43558332265`. Release run `43559084940`
+then passed its trusted build and signing but failed before publication because
+the public tag endpoint does not resolve drafts. Draft `445034829` with 452
+matching signed assets remains unpublished and preserved. Do not retry the old
+code or publish that draft implicitly. The ID-from-create correction requires a
+new trusted run and its explicit consumer result before delivery is complete.
 
 The two-agent tests use actual capture and production agent processes but stand-in external workers. Generated TCP transfer and full decode are a separate test. Actual agent RTMP and RTSP media integration is not accepted.
 

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +16,22 @@ spec.loader.exec_module(cache)
 
 
 class MetadataTests(unittest.TestCase):
+    def test_uploaded_assets_must_match_all_digests_sizes_and_unique_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            asset = directory / "object.nar.xz"
+            asset.write_text("fixture bytes")
+            record = {"sha256": cache.digest(asset), "size": asset.stat().st_size}
+            manifest = directory / "manifest.json"
+            manifest.write_text(json.dumps({"assets": {asset.name: record}}))
+            uploaded = [{"name": p.name, "digest": "sha256:" + cache.digest(p), "size": p.stat().st_size} for p in (asset, manifest)]
+            self.assertEqual(cache.verify_uploaded_assets(directory, [uploaded]), 2)
+            for bad in (uploaded[:-1], uploaded + uploaded[:1],
+                        [uploaded[0] | {"digest": "sha256:wrong"}, uploaded[1]],
+                        [uploaded[0] | {"size": 0}, uploaded[1]]):
+                with self.assertRaises(ValueError):
+                    cache.verify_uploaded_assets(directory, [bad])
+
     def test_source_asset_filenames_do_not_prove_archive_contents(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

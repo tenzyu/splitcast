@@ -4,7 +4,7 @@
 - [x] Implement read-only CI and start hosted verification.
 - [x] Ground the existing packaging and release trust boundaries.
 - [x] Compare independent release-cache sketches and select one.
-- [ ] Implement the selected publisher and a fresh no-build consumer.
+- [x] Implement the selected publisher and a fresh no-build consumer.
 - [ ] Verify scripts, failure controls, hosted jobs and actual release consumption.
 - [ ] Reconcile records and review the decision trail.
 
