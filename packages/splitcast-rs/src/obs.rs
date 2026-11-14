@@ -96,6 +96,7 @@ pub struct OutputStatus {
 }
 
 pub struct Obs {
+    operation: Option<crate::request::Operation>,
     socket: WebSocket<DeadlineStream>,
     seq: u64,
     failed: bool,
@@ -103,6 +104,17 @@ pub struct Obs {
 impl Obs {
     pub fn connect(cfg: &Config) -> io::Result<Self> {
         Self::connect_until(cfg, Instant::now() + TIMEOUT)
+    }
+    pub(crate) fn connect_operation(
+        cfg: &Config,
+        operation: Option<crate::request::Operation>,
+    ) -> io::Result<Self> {
+        let deadline = operation
+            .as_ref()
+            .map_or(Ok(Instant::now() + TIMEOUT), |op| op.deadline(TIMEOUT))?;
+        let mut obs = Self::connect_until(cfg, deadline)?;
+        obs.operation = operation;
+        Ok(obs)
     }
     fn connect_until(cfg: &Config, deadline: Instant) -> io::Result<Self> {
         let password = secret(&cfg.obs_password, 4096)?;
@@ -129,6 +141,7 @@ impl Obs {
             _ => err("OBS WebSocket handshake interrupted"),
         })?;
         let mut obs = Self {
+            operation: None,
             socket,
             seq: 0,
             failed: false,
@@ -175,7 +188,11 @@ impl Obs {
         }
     }
     pub fn call(&mut self, name: &str, body: &str) -> io::Result<String> {
-        self.call_until(name, body, Instant::now() + TIMEOUT)
+        let deadline = self
+            .operation
+            .as_ref()
+            .map_or(Ok(Instant::now() + TIMEOUT), |op| op.deadline(TIMEOUT))?;
+        self.call_until(name, body, deadline)
     }
     fn call_until(&mut self, name: &str, body: &str, deadline: Instant) -> io::Result<String> {
         if self.failed {
@@ -535,6 +552,61 @@ mod tests {
         (port, thread)
     }
 
+    #[test]
+    fn compound_configuration_uses_one_operation_budget() {
+        let fixture = Fixture::new();
+        let (port, thread) = server(|mut socket| {
+            while let Ok(message) = socket.read() {
+                let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                thread::sleep(Duration::from_millis(40));
+                let response = json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":true},"responseData":{"scenes":[{"sceneName":"SplitCast"}],"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}}});
+                if socket
+                    .send(Message::Text(response.to_string().into()))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let cfg = fixture.config(port);
+        let operation = crate::request::Operation::new(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            None,
+            Duration::from_millis(140),
+        );
+        let mut obs = Obs::connect_operation(&cfg, Some(operation)).unwrap();
+        assert_eq!(
+            obs.configure(&cfg).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(obs);
+        thread.join().unwrap();
+    }
+    #[test]
+    fn cancellation_between_configuration_calls_prevents_the_next_rpc() {
+        let fixture = Fixture::new();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown = std::sync::Arc::clone(&cancel);
+        let (port, thread) = server(move |mut socket| {
+            let request = read(&mut socket);
+            assert_eq!(request["d"]["requestType"], "GetVersion");
+            shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            answer(&mut socket, &request, json!({}));
+            assert!(
+                socket.read().is_err(),
+                "configuration sent another RPC after cancellation"
+            );
+        });
+        let cfg = fixture.config(port);
+        let operation = crate::request::Operation::new(cancel, None, Duration::from_secs(2));
+        let mut obs = Obs::connect_operation(&cfg, Some(operation)).unwrap();
+        assert_eq!(
+            obs.configure(&cfg).unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        drop(obs);
+        thread.join().unwrap();
+    }
     #[test]
     fn authenticates_and_decodes_preview_over_real_websocket() {
         let fixture = Fixture::new();

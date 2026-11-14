@@ -79,6 +79,12 @@ pub fn server(cfg: &Config) -> io::Result<Vec<String>> {
 }
 
 pub fn ready(cfg: &Config) -> io::Result<bool> {
+    ready_operation(cfg, None)
+}
+pub(crate) fn ready_operation(
+    cfg: &Config,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<bool> {
     let argv = client(
         cfg,
         vec![
@@ -89,8 +95,9 @@ pub fn ready(cfg: &Config) -> io::Result<bool> {
             "sinks".into(),
         ],
     );
-    let value: serde_json::Value = serde_json::from_str(&media::command_checked(&argv)?)
-        .map_err(|_| io::Error::other("invalid private audio observation"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&media::command_operation(&argv, operation)?)
+            .map_err(|_| io::Error::other("invalid private audio observation"))?;
     Ok(value.as_array().is_some_and(|sinks| {
         sinks.len() == 1 && sinks[0]["name"].as_str() == Some(&cfg.processed_sink)
     }))

@@ -8,16 +8,11 @@ use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc, Arc,
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
-
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-extern "C" fn shutdown(_: i32) {
-    SHUTDOWN.store(true, Ordering::Relaxed);
-}
 
 fn err(s: &str) -> io::Error {
     io::Error::other(s)
@@ -147,6 +142,7 @@ pub fn cleanup_after_exit(cfg: config::Config) -> io::Result<()> {
     Ok(())
 }
 struct Agent {
+    operation: Option<crate::request::Operation>,
     cfg: config::Config,
     session: Session,
     children: Workers,
@@ -195,6 +191,7 @@ impl Agent {
             cfg = selected;
         }
         Ok(Self {
+            operation: None,
             cfg,
             session: Session::new(role),
             children: Workers::default(),
@@ -230,7 +227,17 @@ impl Agent {
         format!("{{\"version\":1,\"engine\":\"rust-candidate\",\"role\":{},\"state\":{},\"output\":{out},\"error\":{},\"warnings\":[{notices}],\"mic_muted\":{},\"children\":[{list}]}}",config::json_string(&self.cfg.role),config::json_string(json_state(self.session.state())),config::json_string(&self.error),self.mic_muted)
     }
     fn spawn(&mut self, worker: Worker, argv: Vec<String>) -> io::Result<()> {
+        self.checkpoint()?;
         self.children.spawn(worker, &argv)
+    }
+    fn checkpoint(&self) -> io::Result<()> {
+        self.operation
+            .as_ref()
+            .map_or(Ok(()), |operation| operation.check())
+    }
+    fn obs(&self) -> io::Result<obs::Obs> {
+        self.checkpoint()?;
+        obs::Obs::connect_operation(&self.cfg, self.operation.clone())
     }
     fn wait_ready<F>(&self, mut check: F) -> io::Result<()>
     where
@@ -238,7 +245,9 @@ impl Agent {
     {
         let end = Instant::now() + Duration::from_secs(self.cfg.timeout as u64);
         while Instant::now() < end {
+            self.checkpoint()?;
             if check() {
+                self.checkpoint()?;
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(200));
@@ -246,14 +255,14 @@ impl Agent {
         Err(err("external service readiness timeout"))
     }
     fn rust_peer_ready(&self) -> bool {
-        control::request_peer(&self.cfg, "status", "{}")
+        self.request_peer("status", "{}")
             .and_then(|s| require_rust_production(&s))
             .is_ok()
     }
     fn validate_peer_transport(&self) -> io::Result<()> {
-        let response: Value =
-            serde_json::from_str(&control::request_peer(&self.cfg, "routes", "{}")?)
-                .map_err(|_| err("invalid peer route contract"))?;
+        self.checkpoint()?;
+        let response: Value = serde_json::from_str(&self.request_peer("routes", "{}")?)
+            .map_err(|_| err("invalid peer route contract"))?;
         let document: Value = serde_json::from_str(&self.cfg.document)
             .map_err(|_| err("invalid local route contract"))?;
         if response["transport"] != transport(&self.cfg)?
@@ -279,6 +288,7 @@ impl Agent {
         Duration::from_secs((self.cfg.timeout as u64 * 8).max(30))
     }
     fn prepare(&mut self, owner: Option<&OwnerId>) -> io::Result<()> {
+        self.checkpoint()?;
         self.guard_lease(owner)?;
         if matches!(self.session.state(), Lifecycle::Ready | Lifecycle::Running) {
             return Ok(());
@@ -307,15 +317,20 @@ impl Agent {
                 self.remote_request(&Command::Prepare)?;
             } else {
                 self.spawn(Worker::Receiver, media::receiver(&self.cfg)?)?;
-                self.wait_ready(|| media::receive_snapshot(&self.cfg).is_ok())?;
+                self.wait_ready(|| {
+                    media::receive_operation(&self.cfg, self.operation.as_ref()).is_ok()
+                })?;
                 self.spawn(Worker::AudioServer, crate::audio::server(&self.cfg)?)?;
-                self.wait_ready(|| crate::audio::ready(&self.cfg).unwrap_or(false))?;
+                self.wait_ready(|| {
+                    crate::audio::ready_operation(&self.cfg, self.operation.as_ref())
+                        .unwrap_or(false)
+                })?;
                 self.spawn(
                     Worker::Obs,
                     crate::audio::client(&self.cfg, obs::launch_args(&self.cfg)?),
                 )?;
-                self.wait_ready(|| obs::Obs::connect(&self.cfg).is_ok())?;
-                let mut o = obs::Obs::connect(&self.cfg)?;
+                self.wait_ready(|| self.obs().is_ok())?;
+                let mut o = self.obs()?;
                 o.configure(&self.cfg)?;
             }
             Ok(())
@@ -323,6 +338,7 @@ impl Agent {
         if let Err(e) = outcome {
             return Err(self.fail(e));
         }
+        self.checkpoint().map_err(|e| self.fail(e))?;
         self.session.prepared().map_err(|_| err("prepare failed"))?;
         if let Some(o) = owner {
             self.renew_lease(o)?;
@@ -331,6 +347,7 @@ impl Agent {
         Ok(())
     }
     fn start(&mut self, which: &str, owner: Option<&OwnerId>) -> io::Result<()> {
+        self.checkpoint()?;
         if which != "recording" && which != "twitch" {
             return Err(err("explicit recording/twitch output required"));
         }
@@ -370,19 +387,19 @@ impl Agent {
                 )?;
                 let mut monitor = media::ReceiveMonitor::new(self.cfg.camera_enabled);
                 self.wait_ready(|| {
-                    media::receive_snapshot(&self.cfg)
+                    media::receive_operation(&self.cfg, self.operation.as_ref())
                         .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
                 })?;
                 self.receive_monitor = Some(monitor);
-                let mut o = obs::Obs::connect(&self.cfg)?;
+                let mut o = self.obs()?;
                 o.configure(&self.cfg)?;
                 o.start(&self.cfg, which)?;
                 self.wait_ready(|| {
-                    obs::Obs::connect(&self.cfg)
+                    self.obs()
                         .and_then(|mut o| o.status(which))
                         .unwrap_or(false)
                 })?;
-                self.output_observation = Some(obs::Obs::connect(&self.cfg)?.observe(which)?);
+                self.output_observation = Some(self.obs()?.observe(which)?);
             }
             Ok(())
         })();
@@ -394,6 +411,7 @@ impl Agent {
         } else {
             Output::Twitch
         };
+        self.checkpoint().map_err(|e| self.fail(e))?;
         self.session
             .start(target)
             .map_err(|_| err("start lifecycle error"))?;
@@ -404,10 +422,20 @@ impl Agent {
         Ok(())
     }
     fn cleanup(&mut self) -> io::Result<()> {
+        let previous = self.operation.replace(crate::request::Operation::new(
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Duration::from_secs(15),
+        ));
+        let result = self.cleanup_owned();
+        self.operation = previous;
+        result
+    }
+    fn cleanup_owned(&mut self) -> io::Result<()> {
         self.receive_monitor = None;
         self.output_observation = None;
         if self.cfg.role == "production" && self.children.contains(Worker::Obs) {
-            if let Ok(mut o) = obs::Obs::connect(&self.cfg) {
+            if let Ok(mut o) = self.obs() {
                 let _ = o.stop();
             }
         }
@@ -494,7 +522,7 @@ impl Agent {
             {
                 self.last_health = Instant::now();
                 let health = (|| -> io::Result<bool> {
-                    let snapshot = media::receive_snapshot(&self.cfg)?;
+                    let snapshot = media::receive_operation(&self.cfg, self.operation.as_ref())?;
                     if !self
                         .receive_monitor
                         .as_mut()
@@ -507,7 +535,7 @@ impl Agent {
                         .session
                         .output()
                         .ok_or_else(|| err("output unavailable"))?;
-                    let current = obs::Obs::connect(&self.cfg)?.observe(output.as_str())?;
+                    let current = self.obs()?.observe(output.as_str())?;
                     let progressing = self.output_observation.as_ref().is_some_and(|previous| {
                         current.active
                             && current
@@ -544,6 +572,7 @@ impl Agent {
         }
         self.warnings.push(message.into());
     }
+    #[cfg(test)]
     fn command(&mut self, cmd: &str, args: &str) -> io::Result<String> {
         self.expire_lease();
         let args: Value = serde_json::from_str(args).map_err(|_| err("invalid command JSON"))?;
@@ -551,6 +580,7 @@ impl Agent {
         self.execute(invocation)
     }
     fn execute(&mut self, invocation: Invocation) -> io::Result<String> {
+        self.checkpoint()?;
         let owner = invocation.owner.as_ref();
         if owner.is_some() && self.cfg.role != "production" {
             return Err(err("only production accepts remote ownership"));
@@ -574,7 +604,7 @@ impl Agent {
                 if !self.children.contains(Worker::Obs){return Err(err("no owned OBS session"));}
                 match command {
                     Command::Mic(action)=>{
-                        let mut obs=obs::Obs::connect(&self.cfg)?;
+                         let mut obs=self.obs()?;
                         if action!=MicAction::Status {
                             let muted=action==MicAction::Mute;
                             obs.call("SetInputMute",&json!({"inputName":"MicProcessed","inputMuted":muted}).to_string())?;self.mic_muted=muted;
@@ -583,22 +613,69 @@ impl Agent {
                         let muted=ret["d"]["responseData"]["inputMuted"].as_bool().ok_or_else(||err("invalid OBS mute response"))?;
                         self.mic_muted=muted;Ok(json!({"muted":muted}).to_string())
                     },
-                    Command::Overlay{text}=>{obs::Obs::connect(&self.cfg)?.overlay(&text)?;Ok(json!({"updated":true}).to_string())},
-                    Command::Preview=>obs::Obs::connect(&self.cfg)?.preview(),
+                    Command::Overlay{text}=>{self.obs()?.overlay(&text)?;Ok(json!({"updated":true}).to_string())},
+                    Command::Preview=>self.obs()?.preview(),
                     Command::Tts(_)|Command::Say{..}|Command::TtsNext|Command::TtsAck{..}|Command::TtsFinished{..}=>Err(err("speech synthesis is locally tested, but delivery, playback and EventSub parity are incomplete")),
                     _=>Err(err("command is not a prepared-session control"))
                 }
             }
         }
     }
+    fn execute_work(
+        &mut self,
+        work: crate::server::Work,
+        shutdown: &Arc<AtomicBool>,
+        limits: crate::server::Limits,
+    ) {
+        if shutdown.load(Ordering::Relaxed) {
+            work.ticket.abandon();
+            return;
+        }
+        if !work.ticket.begin() {
+            return;
+        }
+        self.operation = Some(crate::request::Operation::new(
+            Arc::clone(shutdown),
+            Some(Arc::clone(&work.ticket)),
+            limits.operation,
+        ));
+        self.expire_lease();
+        let response = self
+            .execute(work.invocation)
+            .map(|body| (200, body))
+            .unwrap_or_else(|e| {
+                (
+                    409,
+                    json!({"error":e.to_string(),"code":"command_failed","outcome":"unknown"})
+                        .to_string(),
+                )
+            });
+        work.ticket.finish(response);
+    }
     fn remote_request(&self, command: &Command) -> io::Result<String> {
+        self.checkpoint()?;
         let owner = self
             .session
             .remote_owner()
             .ok_or_else(|| err("no owned remote preparation"))?;
         let (name, mut args) = command.request();
         args["_owner"] = json!(owner.as_str());
-        control::request_peer(&self.cfg, name, &args.to_string())
+        self.request_peer(name, &args.to_string())
+    }
+    fn request_peer(&self, name: &str, args: &str) -> io::Result<String> {
+        let cap = Duration::from_secs(self.cfg.timeout as u64);
+        let timeout = self.operation.as_ref().map_or(Ok(cap), |op| {
+            op.deadline(cap)
+                .map(|end| end.saturating_duration_since(Instant::now()))
+        })?;
+        control::request(
+            self.cfg.forward_control_port,
+            self.cfg.remote_control_port,
+            &self.cfg.token(true)?,
+            name,
+            args,
+            timeout,
+        )
     }
     fn peer_command(&mut self, command: &Command) -> io::Result<String> {
         let response = self.remote_request(command)?;
@@ -635,6 +712,7 @@ impl Agent {
                 json!({})
             };
             merge_settings(&mut previous, patch)?;
+            self.checkpoint()?;
             crate::state::atomic_file(&saved, previous.to_string())?;
             cfg.state_dir = self.cfg.state_dir.clone();
             self.cfg = cfg;
@@ -644,7 +722,9 @@ impl Agent {
         Ok(json!({"routes":doc["routes"],"transport":transport(&self.cfg)?,"selection":{"peer":{"ssh_host":self.cfg.ssh_host},"capture":{"target":self.cfg.target,"game_audio":self.cfg.game_audio},"audio":{"mic_source":self.cfg.mic_source,"tts_sink":self.cfg.tts_sink,"mic_offset_ms":self.cfg.mic_offset},"camera":doc["camera"],"tts":{"enabled":self.cfg.tts_enabled,"mix_remote":self.cfg.tts_mix_remote,"eventsub":self.cfg.eventsub_enabled}}}).to_string())
     }
     fn devices(&mut self, remote: bool) -> io::Result<String> {
-        let local = media::devices(&self.cfg.role)?;
+        self.checkpoint()?;
+        let local = media::devices_operation(&self.cfg.role, self.operation.as_ref())?;
+        self.checkpoint()?;
         let mut result = json!({"local":local});
         if remote && self.cfg.role == "capture" {
             let mut temporary = if !self.children.contains(Worker::Tunnel) {
@@ -654,7 +734,7 @@ impl Agent {
             };
             let response = (|| {
                 self.wait_ready(|| self.rust_peer_ready())?;
-                control::request_peer(&self.cfg, "devices", "{\"remote\":false}")
+                self.request_peer("devices", "{\"remote\":false}")
             })();
             if let Some(tunnel) = &mut temporary {
                 tunnel.stop(Duration::from_millis(100))?;
@@ -671,105 +751,72 @@ impl Drop for Agent {
         let _ = self.stop(None);
     }
 }
-pub fn serve(cfg: config::Config) -> io::Result<()> {
+pub fn serve(cfg: config::Config, shutdown: Arc<AtomicBool>) -> io::Result<()> {
     let token = cfg.token(false)?;
     let listener = control::listener(&cfg)?;
-    let mut agent = Agent::new(cfg.clone())?;
     let directory = std::env::var_os("SPLITCAST_WEB_ASSETS").map(std::path::PathBuf::from);
     let assets = Arc::new(crate::web::Assets::load(directory.as_deref())?);
-    for sig in [libc::SIGINT, libc::SIGTERM] {
-        if unsafe { libc::signal(sig, shutdown as *const () as libc::sighandler_t) }
-            == libc::SIG_ERR
-        {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    let (requests, pending) =
-        mpsc::sync_channel::<(control::Request, mpsc::SyncSender<(u16, String)>)>(8);
-    let connections = Arc::new(AtomicUsize::new(0));
     eprintln!(
         "SplitCast Rust candidate: loopback control on 127.0.0.1:{}; no automatic streaming",
         cfg.control_port
     );
-    while !SHUTDOWN.load(Ordering::Relaxed) {
-        agent.tick();
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                if connections.load(Ordering::Relaxed) >= 8 {
-                    drop(stream);
-                    continue;
-                }
-                connections.fetch_add(1, Ordering::Relaxed);
-                let connections = Arc::clone(&connections);
-                let requests = requests.clone();
-                let token = token.clone();
-                let port = cfg.control_port;
-                let assets = Arc::clone(&assets);
-                thread::spawn(move || {
-                    struct Slot(Arc<AtomicUsize>);
-                    impl Drop for Slot {
-                        fn drop(&mut self) {
-                            self.0.fetch_sub(1, Ordering::Relaxed);
-                        }
-                    }
-                    let _slot = Slot(connections);
-                    let request = match control::recv(&mut stream, port, &token) {
-                        Ok(r) => r,
-                        Err(_) => {
-                            let _ = control::reject(&mut stream);
-                            return;
-                        }
-                    };
-                    if request.method == "GET" {
-                        if let Some((mime, body)) = assets.get(&request.path) {
-                            let _ = control::reply_bytes(&mut stream, 200, mime, body);
-                            return;
-                        }
-                        if request.path == "/" {
-                            let _=control::reply(&mut stream,503,"{\"error\":\"Rust WASM assets unavailable; use the TUI or build the web package\"}");
-                            return;
-                        }
-                    }
-                    let (answer, receive) = mpsc::sync_channel(1);
-                    if requests.try_send((request, answer)).is_err() {
-                        let _ =
-                            control::reply(&mut stream, 503, "{\"error\":\"command queue full\"}");
-                        return;
-                    }
-                    let (code, body) = receive
-                        .recv_timeout(Duration::from_secs(180))
-                        .unwrap_or((503, "{\"error\":\"agent unavailable\"}".into()));
-                    let _ = control::reply(&mut stream, code, &body);
-                });
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e),
-        }
-        if let Ok((request, answer)) = pending.try_recv() {
-            let result = if request.method == "GET" && request.path == "/api/status" {
-                agent.command("status", "{}").map(|s| (200, s))
-            } else if request.method == "POST" && request.path == "/api/command" {
-                (|| {
-                    let invocation =
-                        Invocation::from_body(&request.body, agent.cfg.tts_max_text as usize)?;
-                    agent.expire_lease();
-                    agent.execute(invocation).map(|s| (200, s))
-                })()
-            } else {
-                Ok((404, "{\"error\":\"unknown endpoint\"}".into()))
-            };
-            let response = result.unwrap_or_else(|e| {
-                (
-                    409,
-                    format!("{{\"error\":{}}}", config::json_string(&e.to_string())),
-                )
-            });
-            let _ = answer.send(response);
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    agent.stop(None)
+    serve_bound(
+        cfg,
+        listener,
+        token,
+        assets,
+        shutdown,
+        crate::server::Limits::default(),
+    )
 }
+fn serve_bound(
+    cfg: config::Config,
+    listener: std::net::TcpListener,
+    token: String,
+    assets: Arc<crate::web::Assets>,
+    shutdown: Arc<AtomicBool>,
+    limits: crate::server::Limits,
+) -> io::Result<()> {
+    let mut agent = Agent::new(cfg)?;
+    let (listener, pending) = crate::server::ListenerOwner::start(
+        listener,
+        token,
+        agent.cfg.tts_max_text as usize,
+        assets,
+        Arc::clone(&shutdown),
+        limits,
+    )?;
+    while !shutdown.load(Ordering::Relaxed) {
+        agent.operation = Some(crate::request::Operation::new(
+            Arc::clone(&shutdown),
+            None,
+            limits.operation,
+        ));
+        agent.tick();
+        match pending.recv_timeout(Duration::from_millis(20)) {
+            Ok(work) => {
+                agent.execute_work(work, &shutdown, limits);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    shutdown.store(true, Ordering::Relaxed);
+    for work in pending.try_iter() {
+        work.ticket.abandon();
+    }
+    let joined = listener.join();
+    agent.operation = None;
+    let cleaned = agent.stop(None);
+    match (joined, cleaned) {
+        (Err(join), Err(cleanup)) => Err(err(&format!("{join}; cleanup incomplete: {cleanup}"))),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+#[cfg(test)]
+#[path = "agent_lifecycle_tests.rs"]
+mod lifecycle_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

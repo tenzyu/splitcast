@@ -12,6 +12,8 @@ Updated 2026-11-14, Japan Standard Time. Scope: SplitCast decisions, failures, a
 - Historical Rust publication was explicitly partial and disabled. Feature parity, real game capture, production OBS acceptance, and competitive non-regression were not established.
 - Historical results belong to the source implementation documented at `21a4f88`, including repair `0fbad46`. Extraction baseline `3c8857353581424e5cca517d7ccf0db8de7514d4` is a different identity, not a new test result.
 - Fresh standalone workspace checks, 110 ordinary tests, two isolated local components, Rust/WASM builds, module assertions, and consumer gate assertions now have separate evidence in E07–E10. They do not establish live deployment acceptance. Full consumer flake evaluation still fails in an unrelated Firefox derivation, also reproduced at the untouched extraction baseline.
+- The later S16/E12 virtual-software run starts at `aa86fe0` plus task changes. Its final extended verifier passes 124 ordinary tests and three separate local components. Two actual local agents exercise control and recovery with stand-in workers. Queue cancellation, unknown outcomes, connection ownership, and shutdown have new focused evidence. Ordinary Stop preemption, actual agent media integration, durable outcomes, browser ownership, and physical acceptance remain open. See [virtual system acceptance](docs/virtual-acceptance.md).
+- Next-session priority is GitHub Actions CI and a usable Nix binary cache, not deployment. No workflows or project-declared cache endpoint/key were found in the S17 inspection. Existing source changes are still uncommitted, so HEAD alone is not the 124-test artifact. Start with [current working state](docs/memory/session-state.md) and [the CI/cache handoff](docs/handoff/ci-nix-cache.md). [Production-readiness gates](docs/production-readiness.md) separate reproducible delivery, actual software integration, and authorized target-environment acceptance.
 - No build, historical approval, or memory update authorizes host activation, privileges, external listeners, public streaming, or game changes.
 
 ## Read by question
@@ -22,5 +24,6 @@ Updated 2026-11-14, Japan Standard Time. Scope: SplitCast decisions, failures, a
 | What actually ran, against which artifact? | [Evidence and source register](docs/memory/evidence.md) |
 | What remains unknown or unsafe to assume? | [Open risks](docs/memory/open-risks.md) |
 | How do new findings correct old knowledge? | [Update protocol](docs/memory/update-protocol.md) |
+| What should the next session do without repeating this work? | [Current working state](docs/memory/session-state.md) and [CI/cache handoff](docs/handoff/ci-nix-cache.md) |
 
 Read [the Rust entrypoint](RUST_AGENT_ROOT.md) and [engineering policy](RUST_ENGINEERING_AGENTS.md) before nontrivial Rust work. Historical documents under `docs/history/source/` are evidence, not current operating instructions.

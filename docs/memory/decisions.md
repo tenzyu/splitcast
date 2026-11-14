@@ -92,3 +92,25 @@ Fresh E07–E10 now replace the extraction-pass checkpoint's pending local verif
 - Adopted: MIT for original code, explicit upstream GPL notices/license text for the OBS patch and historical copy, conservative Rust 1.95 support, `publish = false` for crates, a normative agent entrypoint, and separate semantic/operational/evidence records.
 - Rejected: treating compiler or advisory success as a soundness proof, a stable reusable API promise, or approval to enable runtime capture. F02/F03 in S15 remain runtime blockers.
 - Evidence: `THIRD_PARTY.md`, `docs/publication.md`, S14, S15. The human owner still confirms documentation/policy publication rights and creates/pushes the GitHub repository. Until then the consumer uses a pinned local Git bootstrap.
+
+## D10: Prove virtual software behavior independently of hardware acceptance
+
+- Date: 2026-11-14. Current operator requirement and local implementation.
+- Goal: connect successful tests to observable control, transport, state-transition, and recovery guarantees without making physical performance a prerequisite for development.
+- Adopted: two actual local agent processes with isolated state and stand-in external workers; generated TCP transfer with delay, disconnect, full decode, and resource-release assertions; one absolute HTTP write deadline; atomic queue-expiry and execution transitions; explicit unknown outcomes after transmission or execution starts; owned listener and connection joins; per-instance cancellation with the binary owning signals.
+- Rejected: treating increasing fake media counters as decoded frames, using a new operation registry or durable retry protocol for this repair, and describing mandatory joins as a universal hard shutdown bound.
+- Observation that changed the implementation: the slow-reader regression renewed a 200 ms budget for 2.003574555 seconds. Independent review also found unrecognized HTTP statuses losing the unknown distinction and Cargo selecting zero tests while the verifier reported a passing opt-in check. The new tests and verifier gate preserve these lessons in executable checks.
+- Remaining software work: ordinary Stop still queues behind Prepare; lease maintenance is serial; actual agent RTMP and RTSP media integration, congestion recovery, durable outcomes, and broader crash recovery remain unverified. These are software gaps, not reasons to wait for physical hardware.
+- Independent physical gates: Direct Scanout, GPU contention, capture privileges and source provenance, PipeWire and physical audio, real capture and OBS decode, synchronization, gameplay impact, deployment network policy, and cgroup forced-death containment.
+- Evidence: S16 and [virtual system acceptance](../virtual-acceptance.md). No deployment gate or autostart target is enabled. Historical S14 results retain their original artifact identity.
+
+## D11: Establish reproducible delivery before expanding production claims
+
+- Date: 2026-11-14 JST. Operator request for memory maintenance, a Production Ready plan, and next-session GitHub Actions CI and Nix caching.
+- Adopted planning boundary: this turn maintains documentation and a cold-start handoff. The next session implements CI and the approved cache. No current workflow run, cache upload, credential configuration, commit, push, or deployment is inferred from the request to prepare a handoff.
+- Source observation: HEAD remains `aa86fe0` with the repaired source and new tests uncommitted. A fresh HEAD checkout would omit them. No workflow or project-declared cache endpoint/key was found in the inspected tree.
+- Recommended sequence: commit the reviewed source deliberately, run clean hosted validation and standalone Nix builds, publish only approved output closures from a successfully validated trusted revision, then prove substitution without fallback builds on a fresh consumer. An Actions acceleration cache alone does not satisfy distribution.
+- Service recommendation: use an approved Cachix account initially unless the operator prefers an existing Attic or other cache. The account, destination, public/private policy, public signing key, and write credential are not configured or authorized by this recommendation.
+- Rejected: secret-bearing PR execution, untrusted cache writes, caching all flake outputs by default, treating a warm store as consumption evidence, treating cached binaries as production acceptance, or waiting for physical performance before continuing unrelated software work.
+- Product boundary: a supported release needs declared features and environments. Recording-first scope is a proposal, not an operator decision. Unknown outcomes need honest recovery semantics; a general durable operation registry is not automatically required. P0 through P4 in the readiness document remain software work, while P5 requires separate target-environment authorization.
+- Evidence: S17, [the handoff](../handoff/ci-nix-cache.md), [readiness gates](../production-readiness.md), and [working-state capsule](session-state.md).

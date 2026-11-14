@@ -187,6 +187,19 @@ pub fn run_bounded(
     timeout: Duration,
     output_cap: usize,
 ) -> io::Result<Output> {
+    run_operation(program, args, input, timeout, output_cap, None)
+}
+pub(crate) fn run_operation(
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    timeout: Duration,
+    output_cap: usize,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<Output> {
+    if let Some(operation) = operation {
+        operation.check()?;
+    }
     let start = Instant::now();
     let mut command = Command::new(program);
     command
@@ -213,6 +226,9 @@ pub fn run_bounded(
         let (mut out_done, mut err_done) = (false, false);
         let mut remaining = output_cap;
         loop {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
             if start.elapsed() >= timeout {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "helper timed out"));
             }

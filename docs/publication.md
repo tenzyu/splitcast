@@ -1,6 +1,8 @@
 # Publish the standalone repository
 
-The agent has no authenticated GitHub CLI session and must not invent a public repository URL or claim publication. The local repository has its own `main` history. The system-configuration consumer uses a pinned local Git flake input until the repository owner completes this step.
+The initial status and creation recipe below belong to the extraction checkpoint. Local status now shows `origin/main`, but this planning pass did not query the live repository or authentication. Inspect the existing remote before executing any creation command. The current next-session procedure is [the CI/cache handoff](handoff/ci-nix-cache.md).
+
+At the extraction checkpoint, the agent reported no authenticated GitHub CLI session and the system-configuration consumer used a pinned local Git flake input. Neither authentication nor the live consumer input was rechecked in this planning pass. The local repository has its own `main` history. Do not invent a public repository URL, claim publication, or assume the extraction checkpoint still describes current access.
 
 Before publication, inspect `git status`, the semantic review, the verification record, and `THIRD_PARTY.md`. Confirm the right to publish the imported documentation and the two operator-supplied policies. Original SplitCast code is MIT; the OBS patch and historical copy have GPL-2.0-or-later sidecars and retained upstream license text. Generated recordings, private captures, credentials, build residue and raw local command logs remain ignored under `artifacts/`.
 

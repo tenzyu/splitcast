@@ -15,8 +15,21 @@ fn err(s: &str) -> io::Error {
     io::Error::other(s)
 }
 pub fn command_checked(argv: &[String]) -> io::Result<String> {
+    command_operation(argv, None)
+}
+pub(crate) fn command_operation(
+    argv: &[String],
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<String> {
     let (exe, rest) = argv.split_first().ok_or_else(|| err("empty command"))?;
-    let r = crate::process::run_bounded(exe, rest, None, Duration::from_secs(5), 8 * 1024 * 1024)?;
+    let r = crate::process::run_operation(
+        exe,
+        rest,
+        None,
+        Duration::from_secs(5),
+        8 * 1024 * 1024,
+        operation,
+    )?;
     if !r.status.success() {
         return Err(err("native helper exited nonzero; inspect its logs"));
     }
@@ -69,13 +82,19 @@ impl ReceiveMonitor {
 }
 
 pub fn receive_snapshot(cfg: &Config) -> io::Result<String> {
-    crate::http::get_json(
-        cfg.api,
-        "/v3/paths/list",
-        Duration::from_secs(2),
-        1024 * 1024,
-    )
-    .map(|v| v.to_string())
+    receive_operation(cfg, None)
+}
+pub(crate) fn receive_operation(
+    cfg: &Config,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<String> {
+    let timeout = match operation {
+        Some(operation) => operation
+            .deadline(Duration::from_secs(2))?
+            .saturating_duration_since(Instant::now()),
+        None => Duration::from_secs(2),
+    };
+    crate::http::get_json(cfg.api, "/v3/paths/list", timeout, 1024 * 1024).map(|v| v.to_string())
 }
 
 impl MediaObservation {
@@ -419,10 +438,24 @@ pub fn check_path(p: &Path) -> bool {
     p.is_file()
 }
 pub fn devices(role: &str) -> io::Result<serde_json::Value> {
+    devices_operation(role, None)
+}
+pub(crate) fn devices_operation(
+    role: &str,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<serde_json::Value> {
     use serde_json::{json, Value};
+    let run = |program: &str, args: &[&str]| {
+        let mut argv = vec![program.to_owned()];
+        argv.extend(args.iter().map(|s| (*s).to_owned()));
+        command_operation(&argv, operation)
+    };
     let mut result = json!({"role":role,"sources":[],"sinks":[],"cameras":[],"capture_targets":"","applications":"","errors":[]});
     let mut errors = Vec::new();
     for kind in ["sources", "sinks"] {
+        if let Some(operation) = operation {
+            operation.check()?;
+        }
         let devices = run("pactl", &["-f", "json", "list", kind]).and_then(|s| {
             serde_json::from_str::<Value>(&s).map_err(|_| err("invalid audio discovery"))
         });
@@ -441,6 +474,9 @@ pub fn devices(role: &str) -> io::Result<serde_json::Value> {
             .collect::<Vec<_>>();
         paths.sort();
         for path in paths.into_iter().take(32) {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
             let device = path.to_string_lossy().into_owned();
             match run("v4l2-ctl", &["--device", &device, "--list-formats-ext"]) {
                 Ok(formats) => cameras.push(json!({"device":device,"formats":formats})),
@@ -454,6 +490,9 @@ pub fn devices(role: &str) -> io::Result<serde_json::Value> {
             ("capture_targets", "--list-capture-options"),
             ("applications", "--list-application-audio"),
         ] {
+            if let Some(operation) = operation {
+                operation.check()?;
+            }
             match run("gpu-screen-recorder", &[option]) {
                 Ok(value) => result[key] = json!(value),
                 Err(_) => errors.push(format!("GSR {key} discovery unavailable")),

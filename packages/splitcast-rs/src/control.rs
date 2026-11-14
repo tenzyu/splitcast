@@ -32,6 +32,55 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "HTTP deadline exceeded"))
 }
 
+struct DeadlineWriter<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+}
+
+impl Write for DeadlineWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.stream
+            .set_write_timeout(Some(remaining(self.deadline)?))?;
+        self.stream.write(bytes).map_err(write_error)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream
+            .set_write_timeout(Some(remaining(self.deadline)?))?;
+        self.stream.flush().map_err(write_error)
+    }
+}
+
+fn write_error(error: io::Error) -> io::Error {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    ) {
+        io::Error::new(io::ErrorKind::TimedOut, "HTTP write deadline exceeded")
+    } else {
+        error
+    }
+}
+
+#[derive(Debug)]
+struct UnknownOutcome(io::Error);
+
+impl std::fmt::Display for UnknownOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "control outcome unknown after transmission began; inspect status and use explicit Stop before retrying; {}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownOutcome {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+fn unknown_outcome(error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), UnknownOutcome(error))
+}
+
 fn read_until_header(stream: &mut TcpStream, deadline: Instant) -> io::Result<(String, Vec<u8>)> {
     let mut packet = Vec::new();
     loop {
@@ -184,7 +233,17 @@ fn recv_until(
 }
 
 pub fn reply_bytes(stream: &mut TcpStream, status: u16, mime: &str, body: &[u8]) -> io::Result<()> {
-    stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
+    reply_bytes_until(stream, status, mime, body, Instant::now() + REQUEST_TIMEOUT)
+}
+
+fn reply_bytes_until(
+    stream: &mut TcpStream,
+    status: u16,
+    mime: &str,
+    body: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    let mut stream = DeadlineWriter { stream, deadline };
     let reason = match status {
         200 => "OK",
         403 => "Forbidden",
@@ -250,27 +309,51 @@ pub fn request(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
         remaining(deadline)?,
     )?;
-    stream.set_write_timeout(Some(remaining(deadline)?))?;
     let body = format!("{{\"command\":{},\"args\":{}}}", json_string(command), args);
     if body.len() > BODY_LIMIT {
         return Err(err("command exceeds 16KiB"));
     }
     let host = format!("127.0.0.1:{host_port}");
-    write!(stream, "POST /api/command HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())?;
-    stream.flush()?;
-    let (head, body) = read_until_header(&mut stream, deadline)?;
+    let mut writer = DeadlineWriter {
+        stream: &mut stream,
+        deadline,
+    };
+    write!(writer, "POST /api/command HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).map_err(unknown_outcome)?;
+    writer.flush().map_err(unknown_outcome)?;
+    let (head, body) = read_until_header(&mut stream, deadline).map_err(unknown_outcome)?;
     let mut lines = head.split("\r\n");
-    if lines.next() != Some("HTTP/1.1 200 OK") {
-        return Err(err("control command rejected; no redirects permitted"));
+    let status = lines.next();
+    if !matches!(
+        status,
+        Some("HTTP/1.1 200 OK" | "HTTP/1.1 409 Conflict" | "HTTP/1.1 503 Service Unavailable")
+    ) {
+        return Err(unknown_outcome(err(
+            "unrecognized control response; no redirects permitted",
+        )));
     }
-    let h = headers(lines)?;
+    let h = headers(lines).map_err(unknown_outcome)?;
     let size = h
         .get("content-length")
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n <= RESPONSE_LIMIT)
-        .ok_or_else(|| err("bounded control response required"))?;
-    String::from_utf8(read_body(&mut stream, body, size, deadline)?)
-        .map_err(|_| err("invalid control response"))
+        .ok_or_else(|| unknown_outcome(err("bounded control response required")))?;
+    let response =
+        String::from_utf8(read_body(&mut stream, body, size, deadline).map_err(unknown_outcome)?)
+            .map_err(|_| unknown_outcome(err("invalid control response")))?;
+    if status == Some("HTTP/1.1 200 OK") {
+        return Ok(response);
+    }
+    let document: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|_| unknown_outcome(err("invalid control error response")))?;
+    if document["outcome"] == "not_executed" {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "control command not executed; no redirects permitted",
+        ));
+    }
+    Err(unknown_outcome(err(
+        "control command failed; no redirects permitted",
+    )))
 }
 
 pub fn request_peer(cfg: &Config, command: &str, args: &str) -> io::Result<String> {
@@ -357,17 +440,23 @@ mod tests {
 
     #[test]
     fn rejects_redirect_and_status_code_substrings() {
-        for status in ["HTTP/1.1 302 200 Redirect", "HTTP/1.1 403 200 Forbidden"] {
+        for status in [
+            "HTTP/1.1 302 200 Redirect",
+            "HTTP/1.1 403 200 Forbidden",
+            "HTTP/1.1 500 Internal Server Error",
+        ] {
             let l = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = l.local_addr().unwrap().port();
             let response = status.to_owned();
             let server = thread::spawn(move || {
                 let (mut s, _) = l.accept().unwrap();
-                let mut request = [0; 4096];
-                assert!(s.read(&mut request).unwrap() > 0);
+                recv(&mut s, port, "secret").unwrap();
                 write!(s, "{response}\r\nContent-Length: 2\r\n\r\n{{}}").unwrap();
             });
-            assert!(request(port, port, "secret", "status", "{}", Duration::from_secs(1)).is_err());
+            let error =
+                request(port, port, "secret", "status", "{}", Duration::from_secs(1)).unwrap_err();
+            assert!(error.to_string().contains("outcome unknown"), "{error}");
+            assert!(error.to_string().contains("no redirects permitted"));
             server.join().unwrap();
         }
     }
@@ -376,5 +465,107 @@ mod tests {
     fn compares_full_tokens() {
         assert!(same("Bearer secret", "Bearer secret"));
         assert!(!same("Bearer secret", "Bearer secretx"));
+    }
+
+    #[test]
+    fn lost_response_is_unknown_not_a_cancelled_command() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = recv(&mut stream, port, "test-token").unwrap();
+            assert!(request.body.contains("start"));
+        });
+        let error = request(
+            port,
+            port,
+            "test-token",
+            "start",
+            "{}",
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("outcome unknown"), "{error}");
+        assert!(std::error::Error::source(error.get_ref().unwrap()).is_some());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn only_a_proven_prestart_refusal_is_reported_not_executed() {
+        for (outcome, not_executed) in [("not_executed", true), ("unknown", false), ("", false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                recv(&mut stream, port, "test-token").unwrap();
+                reply(
+                    &mut stream,
+                    503,
+                    &serde_json::json!({
+                        "outcome": outcome,
+                        "error": "untrusted-peer-message-never-echo"
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+            });
+            let error = request(
+                port,
+                port,
+                "test-token",
+                "start",
+                "{}",
+                Duration::from_secs(1),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind() == io::ErrorKind::Interrupted, not_executed);
+            assert_eq!(error.to_string().contains("outcome unknown"), !not_executed);
+            assert!(!error.to_string().contains("untrusted-peer-message"));
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn slow_response_consumer_cannot_renew_the_write_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = std::sync::Arc::clone(&finished);
+        let reader = thread::spawn(move || {
+            client
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let end = Instant::now() + Duration::from_secs(2);
+            let mut received = 0;
+            let mut bytes = [0; 8192];
+            while Instant::now() < end && !done.load(std::sync::atomic::Ordering::Relaxed) {
+                match client.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => received += n,
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            received
+        });
+        let body = vec![0; 16 * 1024 * 1024];
+        let start = Instant::now();
+        let result = reply_bytes_until(
+            &mut server,
+            200,
+            "application/octet-stream",
+            &body,
+            start + Duration::from_millis(200),
+        );
+        let elapsed = start.elapsed();
+        finished.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(server);
+        let received = reader.join().unwrap();
+        assert!(received > 0, "consumer must make intermittent progress");
+        assert!(
+            elapsed < Duration::from_millis(700),
+            "write budget renewed for {elapsed:?}"
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 }
