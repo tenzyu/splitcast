@@ -6,6 +6,10 @@ measurements do not establish final-tree acceptance or production readiness.
 Exact attribution of the historical timeout remains unresolved and is not a
 publication blocker. Current safety, liveness, security, and test failures are.
 
+The later [PR #2 review follow-up](urgent-control-review-20261114.md) supersedes
+this checkpoint's live-owner Stop requirement and pre-send remote bookkeeping.
+Its results retain their own source and verification identities.
+
 ## Source and environment
 
 The untouched baseline is `2f65bcbe0d7daeee83e4a5cfa1309b9051941d76`.

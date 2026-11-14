@@ -1,9 +1,9 @@
 # Virtual control and recovery
 
-The urgent-control implementation is a candidate under corrective validation.
-The historical Stop-behind-Prepare restriction is not declared closed until
-the same final tree passes recovery, maintenance-delay, and full verification
-gates. See the [evidence and outstanding causal question](evidence/urgent-control-20261114.md).
+The urgent-control implementation is an experimental candidate in
+[PR #2](https://github.com/tenzyu/splitcast/pull/2), not deployed runtime.
+The [review follow-up](evidence/urgent-control-review-20261114.md) distinguishes
+fixed defects from tested limitations. The PR records final-head verification.
 
 ## Intent, acknowledgment, and completion
 
@@ -62,8 +62,11 @@ effect owner, so prolonged stalls can fail closed through production expiry.
 
 ## Remote completion and uncertainty
 
-Capture records its remote owner before sending Prepare. Lost Prepare or Start
-responses do not erase the obligation or permit blind replay.
+Capture records its remote owner with the first positive Prepare socket write,
+under the same mutex as generation revocation. Cancellation before dispatch
+does not invent a remote obligation. Even a transmitted HTTP prefix retains
+uncertainty. Lost Prepare or Start responses do not erase that obligation or
+permit blind replay.
 
 Remote Stop may acknowledge intent before completing cleanup. Capture observes
 that accepted intent with read-only, owner-scoped status requests inside its
@@ -81,18 +84,56 @@ lacking the completion fields cannot confirm release through legacy HTTP 200.
 ## Bearer principal and owner constraint
 
 The bearer token authenticates the operator principal. `_owner` is an optional
-peer-session constraint, not a separate credential. When present, Stop requires
-the matching live production owner. An authenticated Stop without `_owner`
-retains local emergency authority over a peer-owned session.
+peer-session constraint, not a separate credential. Stop requires the matching
+held production owner, including after lease expiry. Expiry still revokes
+activation and heartbeat renewal. It does not remove authority to release
+already-held effects or retry incomplete cleanup. A past owner cannot revoke a
+newer owner's generation. An authenticated Stop without `_owner` retains local
+emergency authority over a peer-owned session.
 
 Capture possesses the production bearer for peer RPCs and can intentionally
 omit `_owner` to exercise that same emergency authority. This is an existing
 trust-boundary decision, not isolation between local and remote token holders.
-Clients or browser tabs sharing a bearer are not mutually isolated. Host,
-Origin, framing, and body limits remain enforced before any control mutation.
+Clients or browser tabs sharing a bearer are not mutually isolated. This trust
+model requires trusted operator clients and controlled access to the loopback
+service. Host, Origin, framing, and body limits remain enforced before any
+control mutation.
+
+## Ephemeral observation and replay limits
+
+Stop has no per-intent correlation ID or durable result registry. Status shows
+the current pending intent or the latest completion while Idle. A new Prepare
+clears that completion. Another session's later completion can replace its
+owner proof. An unowned status result cannot identify an earlier caller's Stop.
+
+For owner-scoped cleanup, a lost reply can be reconciled through read-only
+status only while matching owner, completed Stop, and Idle remain observable.
+A wrong owner, a refusal, or overwritten metadata is unknown, not proof of
+release. Matching owner Stop remains retryable while that owner holds unresolved
+effects, even after expiry. No retry may cancel a different owner's session.
+
+Operator clients must coordinate so another client does not Prepare before the
+first client observes Stop completion. If that window was missed, pause further
+commands and reconcile the currently held session under explicit operator
+authority. Do not infer the old result or blindly stop a newer session.
+
+The local generation fence covers admitted and queued work, not an arbitrary
+cross-host message still in transit. A duplicate Prepare for the current owner
+can be idempotent; a later Prepare admitted from Idle can create fresh effects,
+even with a previously used owner ID. Completed Stop proves release of the held
+session at reconciliation, not rejection of all future Prepare messages.
+Supported clients issue one Prepare attempt, never automatically replay it after
+uncertainty, and use fresh owner IDs for fresh authorizations. Concurrent or
+reordered external replay is outside this in-memory protocol's safety envelope.
+An unresolved transmitted Prepare remains Stopping until release is proved.
+If no owner-bound proof is available, quiesce the peer request sources and
+inspect and release held effects under coordinated operator control before a
+fresh session. Plain Idle or an agent restart alone cannot prove that absence.
 
 ## Bounds and shutdown
 
+Once a complete authenticated request can be parsed, Stop admission is
+independent of the ordinary work queue and effect-owner progress.
 The existing total cap remains eight connection workers. Six ordinary response
 waiters and five queued requests leave ingress capacity under ordinary queue
 pressure. Slow headers, asset readers, or hostile authenticated control can
@@ -104,6 +145,13 @@ the shutdown handles and joins all threads, but its later reap pass does not
 gate response EOF. Shutdown closes admission, rejects queued work, requests
 cancellation, reconciles effects under an independent cleanup budget, and joins
 owned connection work before returning.
+
+Shutdown cleanup reports an error if release was not confirmed. Agent Drop is
+best effort and can repeat an incomplete owner-scoped release attempt, including
+restoring its owned tunnel for reconciliation. It never replays Start or Prepare.
+That later attempt does not turn an earlier error or lost reply into externally
+observed completion. Listeners may already be closed, so inspect resources and
+ownership rather than assuming Drop supplied a terminal acknowledgment.
 
 Cleanup retains its 15-second cooperative effect budget plus worker/group
 teardown and mandatory reaping. Filesystem or kernel stalls and escaped

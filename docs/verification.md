@@ -93,3 +93,18 @@ Releases supplies the cache transport. No external cache account is assumed.
 Earlier statements about no remote, dirty source, or no new package build apply
 only to their original checkpoints. No delivery result accepts physical capture,
 software media-path integration, browser behavior, host activation, or gameplay.
+
+## PR #2 control-plane follow-up, 2026-11-14 JST
+
+The S16 Stop-behind-Prepare statement above describes S16, not the
+`review/urgent-control` candidate. Implementation `5125799` preserves one effect
+owner while admitting Stop and inbound lease maintenance independently.
+[The review record](evidence/urgent-control-review-20261114.md) records expired
+owner cleanup and pre-dispatch remote-obligation regressions, focused outcomes,
+and observation/replay/admission limits. It preserves the failed fixture runs.
+
+[PR #2](https://github.com/tenzyu/splitcast/pull/2) records fresh final-head
+`verify`, `verify-virtual`, ten admission cases, their run identities, and hosted
+CI. Earlier matrices in this file are not promoted to results for that head.
+Physical acceptance, actual agent media integration, browser lifecycle, durable
+history, aggregate shutdown bounds, and deployment remain unverified here.

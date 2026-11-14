@@ -37,7 +37,10 @@ Inspect [the current verification record](verification.md) for executed results.
 The candidate separates ordinary Stop intent from active preparation. The
 [control contract](virtual-control-design.md) distinguishes requested,
 completed, incomplete, and unknown outcomes. Final-tree acceptance remains
-subject to the corrective evidence gates. Physical cleanup can still wait
+recorded per revision in [PR #2](https://github.com/tenzyu/splitcast/pull/2).
+The [review follow-up](evidence/urgent-control-review-20261114.md) covers expired
+owner release, pre-dispatch cancellation, ephemeral observation, and replay
+limits. Physical cleanup can still wait
 for a cooperative boundary or current external deadline. Virtual integration
 of the actual agent RTMP and RTSP media path, decoded-frame freshness, and
 broader congestion recovery remains open. The separate generated TCP test does

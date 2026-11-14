@@ -22,3 +22,8 @@ and the independently scoped publication/consumption results.
 P0 is complete for the [named delivery receipt](../evidence/ci-nix-cache-20261114-receipt.json).
 Use [the download procedure](../binary-cache.md) for the real cache values. Next
 is P1's actual agent media path, not another publication run or deployment.
+
+The separate [S19/E15 control-plane follow-up](evidence.md) tracks unmerged PR #2
+and supersedes S16's ordinary Stop limitation only on that candidate. Start with
+[its review record](../evidence/urgent-control-review-20261114.md) before resuming
+control-plane work; do not infer that main or deployed services contain it.

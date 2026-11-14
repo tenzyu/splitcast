@@ -52,3 +52,16 @@ Ordinary Stop still queues behind Prepare. Lease maintenance remains serial. Act
 Direct Scanout, GPU contention, capture permissions, real device provenance, physical audio, real OBS acceptance, and deployment containment remain separately authorized acceptance work. Keep `rustCandidate=false` and autostart targets empty.
 
 `artifacts/` contains ignored local evidence, including original and corrected review instruments. It is not a publication payload. The portable source manifest and summary are under `docs/evidence/`. The canonical decision trail is `.audit/virtual-system.tsv`. Do not require the temporary review worktrees to run ordinary verification.
+
+## 2026-11-14 control-plane branch follow-up
+
+PR #2 remains a separate, unmerged control-plane candidate. Its
+`review/urgent-control` implementation `5125799` supersedes the historical
+Stop-behind-Prepare statement above. [S19/E15](evidence.md) records the fixes,
+red/green checks, and final-head verification location. Resume from the actual
+PR head, not an older private branch. Keep raw private history unpublished.
+
+Matching expired owners can finalize held release, and remote Prepare ownership
+starts at a positive socket write. Ephemeral completion, late Prepare replay,
+and parser-slot exhaustion remain explicit limits. This work does not take over
+README or actual-media-path tasks and does not authorize merge or deployment.

@@ -124,3 +124,11 @@ Fresh E07–E10 now replace the extraction-pass checkpoint's pending local verif
 - Contrary observations: file-cache bookkeeping names differ across Nix versions, so normalization removes only empty directories structurally, never contents. Drafts are not visible through the public by-tag endpoint, so the publisher retains the ID from creation. Both failures and their original attempts remain recorded.
 - Authorization: the owner approved the actual native/web/patched-OBS scope with corresponding sources after GPL/FDK-AAC disclosure, key setup, normal merge and the verification prerelease. This is not a legal/patent audit or deployment authorization.
 - Evidence: S18/E14, successful run `43561723796` at `d2205d0`, [receipt](../evidence/ci-nix-cache-20261114-receipt.json), and [download procedure](../binary-cache.md). Next work is P1, not repeating publication or implicitly rotating the configured key.
+
+## D13: Separate Stop release authority and remote dispatch from activation
+
+- Date: 2026-11-14 JST. PR #2 candidate `review/urgent-control`, implementation `5125799`, not main or deployment acceptance.
+- Adopted: one effect owner, independent authenticated Stop admission, generation fences, owner-bound release after lease expiry, and remote Prepare bookkeeping at the first positive socket write.
+- Rejected: applying renewal expiry to cleanup retries, recording unsent remote effects, treating 202 or plain Idle as release, and silently replaying uncertain Start or Prepare.
+- Accepted limits: observation is ephemeral without per-intent IDs, later authenticated Prepare is not cross-host replay-fenced, and finite parser slots can exclude HTTP control. Clients must coordinate observation and fresh authorization. No durable registry or executor rewrite was added.
+- Evidence: [S19/E15](evidence.md) and [the review follow-up](../evidence/urgent-control-review-20261114.md). The original D10/S16 statements retain their dated source scope; this candidate supersedes their ordinary Stop and inbound lease-progress limitations only. Outbound health work, media-path integration, browser ownership, kernel stalls, and deployment containment remain separate.

@@ -111,4 +111,24 @@ The production bearer also grants unowned emergency Stop. A peer holding that
 bearer is not a separately isolated principal merely because it usually sends
 `_owner`.
 
+On the PR #2 candidate, an expired matching owner can still retry Stop for held
+effects. It cannot renew the expired lease or activate output. A wrong or older
+owner cannot stop a newer session. After removing a cleanup fault, retry with
+the same `_owner` and require its matching completed/Idle proof.
+
+Coordinate clients before the next Prepare. Stop observation is ephemeral and
+has no per-intent ID. If a new session overwrites completion before you observe
+it, treat the earlier result as unknown. Do not use another owner's completion
+or an unowned status snapshot as proof. Pause competing commands and reconcile
+the current ownership explicitly rather than blindly stopping a newer session.
+Never replay an uncertain Prepare. A later Prepare admitted from Idle can create
+new effects; completed Stop is not a cross-host replay fence. Quiesce request
+sources and verify held resources before authorizing another session.
+
+The admission measurements cover ordinary queue pressure after a request can be
+parsed. Eight slow parser/connection clients can still exclude emergency HTTP
+control. Keep access restricted to trusted clients and retain a separately
+authorized enclosing-service recovery path. No universal HTTP deadline or
+deployment containment is established by the local fixture measurements.
+
 For a code rollback, check out a known commit in a separate checkout and build it without overwriting local work. For consumer integration rollback, restore the previously reviewed flake input and settings in a separate reviewable change. Do not activate an older operating-system generation or retained Python implementation without separate approval. A Git rollback is not a deployment rollback.
