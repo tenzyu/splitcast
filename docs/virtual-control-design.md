@@ -1,62 +1,126 @@
 # Virtual control and recovery
 
-## Problem
+The urgent-control implementation is a candidate under corrective validation.
+The historical Stop-behind-Prepare restriction is not declared closed until
+the same final tree passes recovery, maintenance-delay, and full verification
+gates. See the [evidence and outstanding causal question](evidence/urgent-control-20261114.md).
 
-The local test matrix must establish control, transport, state transitions, and recovery without claiming physical capture acceptance. The current server serializes acceptance with effects, loses connection join handles, and leaves commands executable after their answer wait expires.
+## Intent, acknowledgment, and completion
 
-## Usage and contract
+Stop admission is independent of the ordinary work queue. After authorization,
+Stop advances the admission generation and retains one coalesced intent ticket.
+Previously queued activation cannot borrow the newer generation after cleanup.
 
-The CLI continues to accept the existing commands. A successful response describes a completed command, not an exactly-once transaction. A client-side transport failure after sending command bytes means the outcome is unknown. Clients must inspect current status and use explicit Stop rather than automatically retry Start.
+The HTTP connection waits at most 50 ms for an already available completion.
+Otherwise it returns `202` with `stop: "requested"`, `outcome: "accepted"`, and
+`cleanup: "pending"`. This wait does not depend on a normal-command busy flag.
+Preparation, `tick`, lease/health maintenance, and failure compensation can all
+block the effect owner without making the acknowledgment wait for that work.
+Acceptance survives caller disconnect and does not prove resource release.
 
-Queue expiry and cancellation race atomically with execution. Only cancellation before execution guarantees no effects. After execution starts, cancellation is cooperative and does not prove rollback. Remote ownership and failed cleanup obligations remain intact.
+`200` with `stop: "completed"` describes verified cleanup. An incomplete attempt
+retains Stopping and unresolved obligations. Its outcome is available as a
+`409` response if completion arrives during the acknowledgment window, or as
+`stop: "incomplete"`, `outcome: "unknown"` through subsequent status observation.
+Status HTTP 200 means a successful observation, not successful cleanup.
 
-The library server accepts per-instance cancellation. The binary owns its signal adapter. Server completion requires closure of accepted sockets and joining every connection thread. Cooperative deadlines bound ordinary socket and readiness waits. Kernel-stuck processes, filesystem operations, and escaped process groups prevent a universal hard shutdown bound.
+## Visibility while the owner is blocked
 
-## Shape
+While Stop is pending, both authenticated `GET /api/status` and POST `status`
+bypass ordinary execution and read canonical control metadata. They report
+Stopping and requested intent. `children: null` and
+`resource_observation: "unknown"` explicitly avoid fabricating an empty worker
+list or fresh physical-resource observation.
 
-One thread owns the mutable Agent and its Session, Workers, and role lock. A listener owner tracks a bounded set of connection sockets and join handles independently of command execution. A request ticket contains a mutex-protected queued, executing, cancelled-before-start, or finished state. Its short critical section decides whether execution may begin. No ticket lock spans effects or I/O.
+After 15 seconds without confirmed resolution, the pending observation reports
+`cleanup: "unknown"`, `outcome: "unknown"`. The intent and obligations remain
+owned. This is an observation budget, not proof of cancellation or a kernel I/O
+deadline. Normal detailed status resumes after reconciliation; completion
+requires Idle with no unresolved ownership. No durable operation registry is
+introduced.
 
-Absolute HTTP write deadlines cover the header, body, and flush. Every partial write uses the remaining budget. Nested command effects check cancellation between calls. Cleanup has its own budget and does not inherit caller cancellation.
+## One effects owner and one authority source
 
-## Synthesis decision
+Agent alone owns configuration, Workers, RPC sequencing, the role lock, and
+lifecycle transitions. SessionControl shares only canonical phase/authority
+metadata, a generation, the active preparation owner, and the current/latest
+Stop result. It does not own a second Agent or cloned processes.
 
-Three independent sketches were compared against queue cancellation, unknown outcomes, shutdown ownership, implementation size, and observable local tests. The cross-judge preferred the listener-owner design for its explicit unfinished-shutdown ownership. The implementation retains that separation and Sol's atomic ticket transitions. It does not introduce Luna's operation registry, query API, retry keys, or retention policy.
+Authorization, lease checks, Stop revocation, and Ready/Running commits use the
+same short mutex. No copied authorization snapshot needs synchronization.
+Operation checkpoints observe revocation, abandonment, deadlines, and expiry.
+OBS and peer writes check the generation while performing one nonblocking
+socket syscall under that mutex. Capacity waits and acknowledgment reads hold
+no metadata lock. An earlier partial transmission or entered process launch
+remains a possible external effect requiring compensation.
 
-The cross-judge's proposed Pending server API is deferred. This change preserves mandatory joins and reports the absence of a universal hard return bound instead of returning while work remains owned by a hidden background thread. The maintainer must not describe a measured local shutdown test as proof against uninterruptible kernel I/O.
+The listener checks expiry independently of Agent progress. Owner-driven
+expiry uses the same revocation before entering Stopping. Inbound heartbeat
+renews only a live matching Ready, Running, or Degraded lease. Preparing keeps
+its initial lease. Outbound capture heartbeat and health work remain with the
+effect owner, so prolonged stalls can fail closed through production expiry.
 
-Settings durability after rename is outside this unit. The existing review finding remains open rather than adding an unrelated storage migration.
+## Remote completion and uncertainty
 
-## Alternatives
+Capture records its remote owner before sending Prepare. Lost Prepare or Start
+responses do not erase the obligation or permit blind replay.
 
-A resumable nonblocking Agent state machine would interleave Stop with every effect, but would rewrite preparation and OBS configuration. An operation registry would support querying historical outcomes, but would add protocol and retention obligations. Neither is required to prevent expired queued execution or represent transport ambiguity honestly.
+Remote Stop may acknowledge intent before completing cleanup. Capture observes
+that accepted intent with read-only, owner-scoped status requests inside its
+existing cleanup budget. It does not retransmit Start/Prepare or automatically
+restart incomplete cleanup. Only matching `owner`, `stop: "completed"`, and
+`state: "idle"` confirm release. Bare Idle, another owner's proof, malformed
+responses, or lost replies retain uncertainty.
 
-## Verification and remaining limits
+Peer Start cannot implicitly prepare Idle. A stale transmitted Start therefore
+cannot recreate a stopped session. An unknown Prepare still in transmission
+cannot be declared absent merely by observing Idle. The latest owner completion
+is in memory, not a durable cross-host fencing or exactly-once protocol. Peers
+lacking the completion fields cannot confirm release through legacy HTTP 200.
 
-Run slow-consumer deadlines, queue cancellation races, shutdown during readiness, connection closure, repeated same-process server use, and two real agents with external-service stand-ins. Run generated-media transfer separately with delay and disconnect. These checks do not establish actual SSH encryption, real OBS decoding, GPU contention, Direct Scanout, capture permissions, physical audio provenance, synchronization, or gameplay performance.
+## Bearer principal and owner constraint
 
-The Nix runtime gate remains false and autostart targets remain empty. No deployment or physical-device operation is authorized.
+The bearer token authenticates the operator principal. `_owner` is an optional
+peer-session constraint, not a separate credential. When present, Stop requires
+the matching live production owner. An authenticated Stop without `_owner`
+retains local emergency authority over a peer-owned session.
 
-## Implementation reconciliation
+Capture possesses the production bearer for peer RPCs and can intentionally
+omit `_owner` to exercise that same emergency authority. This is an existing
+trust-boundary decision, not isolation between local and remote token holders.
+Clients or browser tabs sharing a bearer are not mutually isolated. Host,
+Origin, framing, and body limits remain enforced before any control mutation.
 
-The integrated library signature is `agent::serve(Config, Arc<AtomicBool>) -> io::Result<()>`. The caller requests shutdown by setting the per-instance flag. The binary owns signal installation, restoration, and a joined signal bridge. `server::ListenerOwner` owns all accepted socket shutdown handles and connection joins. `request::RequestTicket` owns the queue-to-execution transition. These implementation choices were accepted by the coordinating session after reading the actual diff.
+## Bounds and shutdown
 
-The defaults are five seconds of queue residence and 120 seconds per executing operation. They are finite safety policy, not measured startup suitability. Helpers, peer calls, receive observations, and OBS RPCs use operation cancellation or remaining deadlines. Nested Prepare within Start inherits the same operation. Cleanup replaces caller cancellation with a separate 15-second effect budget. Process teardown retains per-worker TERM grace and mandatory leader reaping, so the cleanup budget does not impose one aggregate hard wall-clock bound.
+The existing total cap remains eight connection workers. Six ordinary response
+waiters and five queued requests leave ingress capacity under ordinary queue
+pressure. Slow headers, asset readers, or hostile authenticated control can
+still exhaust finite transport capacity. The local 500 ms acknowledgment target
+is not socket-level DoS immunity or a real-time scheduling guarantee.
 
-Ordinary Stop still queues behind active Prepare. The test explicitly observes that restriction before requesting per-instance server shutdown. This change establishes cooperative whole-server shutdown, not immediate emergency-command preemption. Lease maintenance remains serial and is not a real-time deadline guarantee.
+Connection workers explicitly shut down completed sockets. ListenerOwner keeps
+the shutdown handles and joins all threads, but its later reap pass does not
+gate response EOF. Shutdown closes admission, rejects queued work, requests
+cancellation, reconciles effects under an independent cleanup budget, and joins
+owned connection work before returning.
 
-Client error handling now labels transmission failures, lost replies, incomplete responses, and unrecognized HTTP statuses as unknown. A complete explicit `not_executed` response preserves the proven pre-start distinction. No redirect is followed and untrusted peer error text is not echoed.
+Cleanup retains its 15-second cooperative effect budget plus worker/group
+teardown and mandatory reaping. Filesystem or kernel stalls and escaped
+descendants prevent an absolute wall-clock guarantee. No result authorizes
+physical capture, real hosts, privileges, public streaming, or deployment.
 
-The reusable verifier adds `verify-virtual` and refuses a required opt-in check that selected no tests. Its evidence JSON exemption preserves recorded Nix identities without exempting runnable shell files. The original evidence remains unchanged.
+## Design choice and historical evidence
 
-The first primary two-agent run passed before server integration. The final integrated matrix now passes all 14 steps with 124 ordinary tests and three separately executed local components. Independent lifecycle reviews returned no verified product defects in their scoped snapshots. Three review-only settings-path assertions were corrected and rerun with positive and negative controls. See [the verification record](evidence/virtual-system-20261114.md) for the preserved original instrument, correction, and limits.
+An independent authorization latch was chosen over an owner-drained urgent
+mailbox requiring every blocking transport boundary to become resumable. A
+second queue alone would not admit authorized intent while the owner blocks.
+The implementation keeps synchronous effect ownership and adds no executor or
+dependency. It also rejects a flag-only cancellation patch, which would not
+fence queued work or final activation writes.
 
-## Principles that changed implementation choices
-
-- Model the Domain and Type System Discipline put queue and execution authority in a private phase enum and a typed operation context instead of disconnected flags in each caller.
-- Foundational Thinking captured the baseline and built observable checks before changing server ownership.
-- Build the Lever added `verify-virtual` to the existing command recorder rather than leaving the evidence as one-off shell steps.
-- Prove It Works and Test Behavior, Not Implementation selected actual agent status, settings-file effects, worker PID disappearance, released ports, and full media decoding as assertions.
-- Sequence Work into Verifiable Units kept the HTTP, verifier, server, and independent test work separately checkable before integration.
-- Separate Before Serializing Shared State assigned independent worktrees to writers and separate fixture directories to concurrent test instances. The Agent remains a single mutable owner.
-- Fix Root Causes replaced timeout renewal at each write and rejected empty test selection in the verifier itself. It did not rewrite stored evidence to hide a failed check.
-- Laziness Protocol rejected an operation registry, a new executor framework, and unrelated settings-durability changes.
+The earlier S16 implementation established queue expiry, cooperative server
+shutdown, tracked sockets/joins, absolute HTTP budgets, and unknown outcomes.
+Its 124-test checkpoint and three local components remain historical evidence,
+not results for this candidate. Settings durability, actual agent media-path
+integration, browser ownership, and physical acceptance remain separate gates.

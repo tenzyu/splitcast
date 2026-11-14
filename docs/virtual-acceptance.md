@@ -27,13 +27,21 @@ An unavailable tool, failed step, or missing test is a failure, not a skipped pa
 | Two-agent control | Actual capture and production agent processes exchange authenticated requests, preserve ownership, stop, and recover through explicit commands. | External services may be stand-ins. This does not prove their implementation. |
 | HTTP writes | A slow reader cannot renew one absolute response budget by making intermittent progress. | The bound covers socket writes, not arbitrary filesystem or kernel stalls. |
 | RPC cancellation | An expired or cancelled queued command cannot begin effects. A request that already started cannot be described as certainly unexecuted. | A disconnected client may not be detected immediately. Lost responses remain ambiguous. |
+| Urgent Stop | Authorized intent is admitted independently of blocked Prepare/Start and ordinary queue capacity. Old queued activation and cancelled Running commits are refused. | HTTP 202 is intent only. An already-entered syscall or transmitted RPC still requires reconciliation. Finite parser slots are not DoS immunity. |
 | Server lifecycle | Cancellation stops admission, closes accepted sockets, stops owned workers, and joins connection threads before returning. | No universal hard return bound for uninterruptible kernel I/O or escaped descendants. |
 | Generated transport | Generated H.264 and AAC traverse a bounded delayed TCP proxy. Disconnect releases owned resources. A fresh run records and fully decodes both streams. | This is a local software-codec transport trial, not the agent's RTMP and RTSP media path or a real two-host network. |
 | Recovery | Failed effects do not silently restart output. Explicit Stop retains unconfirmed cleanup obligations until release. | In-memory recovery is not durable replay or exactly-once remote execution. |
 
 Inspect [the current verification record](verification.md) for executed results. The contracts above are requirements, not implied passes.
 
-Ordinary Stop remains serialized behind active preparation. Per-instance server shutdown requests cooperative cancellation, but an already-blocked call may wait for its current deadline. Virtual integration of the actual agent RTMP and RTSP media path, decoded-frame freshness, and broader congestion recovery remains open. The separate generated TCP test does not close that software gap, and hardware testing is not needed to address it.
+The candidate separates ordinary Stop intent from active preparation. The
+[control contract](virtual-control-design.md) distinguishes requested,
+completed, incomplete, and unknown outcomes. Final-tree acceptance remains
+subject to the corrective evidence gates. Physical cleanup can still wait
+for a cooperative boundary or current external deadline. Virtual integration
+of the actual agent RTMP and RTSP media path, decoded-frame freshness, and
+broader congestion recovery remains open. The separate generated TCP test does
+not close that software gap, and hardware testing is not needed to address it.
 
 ## Independent physical acceptance
 

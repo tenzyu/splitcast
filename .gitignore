@@ -10,3 +10,5 @@
 *.pem
 *.key
 __pycache__/
+# Raw investigation records are retained locally; publish the reviewed summary.
+/docs/evidence/urgent-control-20261114/

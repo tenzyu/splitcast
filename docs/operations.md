@@ -95,4 +95,20 @@ Speech delivery, EventSub, persistent replay, shared selection transactions, ful
 
 Use the candidate's explicit Stop, inspect status and diagnostics, then stop only its enclosing user unit if needed. Do not kill by process name, stop existing OBS, change the default sink, restart the game, or remove unrelated files. If remote release cannot be confirmed, retain the failed/stopping result and inspect the remote ownership lease and service cgroup.
 
+During in-flight work, `202` with `stop: "requested"` confirms intent admission,
+not resource release. Wait for `200` with `stop: "completed"`, or inspect status
+and repeat Stop to retry incomplete cleanup. Status exposes
+`remote_release_pending`; do not treat an empty local child list as remote
+completion. A timeout or lost response remains unknown. Never blindly retry
+Start or Prepare across that uncertainty. A remote Stop completion is bound
+to the held owner. Bare Idle or another owner's completion is not release proof.
+
+During pending cleanup, authenticated GET status remains available from control
+metadata, with `children: null` and unknown resource observation. After the
+observation budget, cleanup can be explicitly unknown while intent remains
+retained. A status HTTP 200 acknowledges an observation, not completed Stop.
+The production bearer also grants unowned emergency Stop. A peer holding that
+bearer is not a separately isolated principal merely because it usually sends
+`_owner`.
+
 For a code rollback, check out a known commit in a separate checkout and build it without overwriting local work. For consumer integration rollback, restore the previously reviewed flake input and settings in a separate reviewable change. Do not activate an older operating-system generation or retained Python implementation without separate approval. A Git rollback is not a deployment rollback.
