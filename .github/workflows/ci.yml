@@ -18,6 +18,29 @@ defaults:
     shell: bash
 
 jobs:
+  delivery-scripts:
+    name: Delivery scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+          extra_nix_config: accept-flake-config = false
+      - run: bash tools/ci/identity.sh
+      - run: nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh 2>&1 | tee artifacts/ci/delivery-scripts.log
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: delivery-scripts-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.log
+
   verify:
     name: ${{ matrix.command }}
     runs-on: ubuntu-24.04
