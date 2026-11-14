@@ -134,6 +134,16 @@ struct ControlState {
     last_stop_owner: Option<OwnerId>,
     stop_completed: bool,
 }
+impl ControlState {
+    fn revoked(&self, generation: u64) -> bool {
+        self.generation != generation
+            || self.stop.is_some()
+            || self
+                .phase
+                .authority()
+                .is_some_and(|a| a.expired(Instant::now()))
+    }
+}
 #[derive(Debug)]
 struct StopIntent {
     ticket: Arc<crate::request::RequestTicket>,
@@ -175,13 +185,7 @@ impl SessionControl {
         state.active_owner = None;
     }
     pub(crate) fn cancelled(&self, generation: u64) -> bool {
-        let state = self.lock();
-        state.generation != generation
-            || state.stop.is_some()
-            || state
-                .phase
-                .authority()
-                .is_some_and(|a| a.expired(Instant::now()))
+        self.lock().revoked(generation)
     }
     pub(crate) fn dispatch<T>(
         &self,
@@ -189,13 +193,7 @@ impl SessionControl {
         write: impl FnOnce() -> std::io::Result<T>,
     ) -> std::io::Result<T> {
         let state = self.lock();
-        if state.generation != generation
-            || state.stop.is_some()
-            || state
-                .phase
-                .authority()
-                .is_some_and(|a| a.expired(Instant::now()))
-        {
+        if state.revoked(generation) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "Stop revoked effect dispatch; outcome may be unknown",
@@ -204,6 +202,37 @@ impl SessionControl {
         // Callers perform one nonblocking socket syscall, never a capacity or
         // acknowledgment wait, while the admission lock is held.
         write()
+    }
+    pub(crate) fn dispatch_prepare(
+        &self,
+        generation: u64,
+        owner: &OwnerId,
+        write: impl FnOnce() -> std::io::Result<usize>,
+    ) -> std::io::Result<usize> {
+        let mut state = self.lock();
+        let preparing = match &state.phase {
+            Phase::Preparing(Authority::Capture(CaptureAuthority::LocalOnly)) => true,
+            Phase::Preparing(Authority::Capture(CaptureAuthority::RemoteAttempt(held))) => {
+                held == owner
+            }
+            _ => false,
+        };
+        if state.revoked(generation) || !preparing {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "remote Prepare dispatch revoked",
+            ));
+        }
+        // The socket is nonblocking. A positive write and its obligation become
+        // visible under the same lock as Stop. Err/zero prove no bytes from this
+        // write; even an HTTP prefix is conservatively a remote attempt.
+        let written = write()?;
+        if written > 0 {
+            state.phase = Phase::Preparing(Authority::Capture(CaptureAuthority::RemoteAttempt(
+                owner.clone(),
+            )));
+        }
+        Ok(written)
     }
     fn request_locked(
         state: &mut ControlState,
@@ -235,15 +264,18 @@ impl SessionControl {
     ) -> std::io::Result<Arc<crate::request::RequestTicket>> {
         let mut state = self.lock();
         if let Some(owner) = owner {
+            // Expiry revokes creation/renewal, not the matching owner's duty
+            // to release held effects. Phase ownership still rejects old peers
+            // after a different owner acquires the session.
             if self.role != Role::Production
                 || state
                     .phase
                     .authority()
-                    .is_some_and(|a| !a.matches(Some(owner)) || a.expired(Instant::now()))
+                    .is_some_and(|a| !a.matches(Some(owner)))
             {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    "no matching live production owner",
+                    "no matching production owner for release",
                 ));
             }
             // Idle has no effect to cancel. A stale remote Stop must not fence
@@ -476,8 +508,12 @@ impl Session {
         state.phase = Phase::Ready(authority.clone());
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn record_remote_attempt(&mut self, owner: OwnerId) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
+        if state.stop.is_some() {
+            return Err(Self::error(&state.phase, "cancelled remote preparation"));
+        }
         let Phase::Preparing(Authority::Capture(authority @ CaptureAuthority::LocalOnly)) =
             &mut state.phase
         else {
@@ -724,7 +760,7 @@ mod tests {
             )
             .unwrap();
         let control = session.control();
-        assert!(control.request_stop(Some(&owner)).is_err());
+        assert!(control.request_stop(Some(&owner)).is_ok());
         assert!(control
             .heartbeat(Some(&owner), Duration::from_secs(30))
             .is_err());

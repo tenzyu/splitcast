@@ -331,10 +331,7 @@ impl Agent {
                 self.spawn(Worker::Tunnel, media::tunnel(&self.cfg))?;
                 self.wait_ready(|| self.rust_peer_ready())?;
                 self.validate_peer_transport()?;
-                self.session
-                    .record_remote_attempt(OwnerId::parse(&rand_hex()?)?)
-                    .map_err(|_| err("invalid remote preparation transition"))?;
-                self.remote_request(&Command::Prepare)?;
+                self.prepare_remote(OwnerId::parse(&rand_hex()?)?)?;
             } else {
                 self.spawn(Worker::Receiver, media::receiver(&self.cfg)?)?;
                 self.wait_ready(|| {
@@ -729,6 +726,28 @@ impl Agent {
             });
         control.end();
         work.ticket.finish(response);
+    }
+    fn prepare_remote(&mut self, owner: OwnerId) -> io::Result<String> {
+        let cap = Duration::from_secs(self.cfg.timeout as u64);
+        let operation = self
+            .operation
+            .clone()
+            .unwrap_or_else(|| {
+                crate::request::Operation::new(Arc::new(AtomicBool::new(false)), None, cap)
+            })
+            .with_remote_prepare(self.session.control(), owner.clone());
+        let timeout = operation
+            .deadline(cap)?
+            .saturating_duration_since(Instant::now());
+        control::request_operation(
+            self.cfg.forward_control_port,
+            self.cfg.remote_control_port,
+            &self.cfg.token(true)?,
+            "prepare",
+            &json!({"_owner":owner.as_str()}).to_string(),
+            timeout,
+            Some(&operation),
+        )
     }
     fn remote_request(&self, command: &Command) -> io::Result<String> {
         self.checkpoint()?;

@@ -239,6 +239,232 @@ fn readiness_shutdown_stops_before_the_next_worker_spawn() {
 }
 
 #[test]
+fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
+    use std::os::unix::net::UnixListener;
+    fn receiver(agent: &mut Agent, marker: &str) -> String {
+        let path = agent.cfg.state_dir.join(marker);
+        agent
+            .spawn(
+                Worker::Receiver,
+                vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "printf %s $$ > \"$1\"; exec sleep 30".into(),
+                    "stand-in".into(),
+                    path.to_string_lossy().into_owned(),
+                ],
+            )
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(2);
+        while fs::read_to_string(&path).unwrap_or_default().is_empty() {
+            assert!(Instant::now() < end, "owned receiver did not start");
+            thread::sleep(Duration::from_millis(1));
+        }
+        fs::read_to_string(path).unwrap()
+    }
+    let mut fixture = Fixture::new();
+    // Unix socket names include the full path and have a small platform cap.
+    let short = fixture
+        .0
+        .state_dir
+        .parent()
+        .unwrap()
+        .join(format!("sc-{}", &rand_hex().unwrap()[..8]));
+    fs::rename(&fixture.0.state_dir, &short).unwrap();
+    fixture.0.state_dir = short;
+    fixture.0.token_file = fixture.0.state_dir.join("token");
+    let mut agent = Agent::new(fixture.0.clone()).unwrap();
+    let owner = OwnerId::parse("retained-owner").unwrap();
+    agent
+        .session
+        .prepare(Some(owner.clone()), Instant::now(), Duration::from_secs(30))
+        .unwrap();
+    agent.session.prepared().unwrap();
+    let old_pid = receiver(&mut agent, "old-receiver.pid");
+    let audio_dir = agent.cfg.state_dir.join("production-audio");
+    fs::create_dir(&audio_dir).unwrap();
+    let audio_path = audio_dir.join("native.sock");
+    let audio = UnixListener::bind(&audio_path).unwrap();
+    // Advance the canonical lease without a wall-clock sleep. Creation/renewal
+    // is expired, but this exact peer still owns the release obligation.
+    agent
+        .session
+        .renew(
+            &owner,
+            Instant::now() - Duration::from_secs(2),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    let control = agent.session.control();
+    control.request_stop(None).unwrap();
+    assert!(
+        agent.stop(None).is_err(),
+        "live private audio must prevent completion"
+    );
+    control.finish_stop((
+        409,
+        json!({"stop":"incomplete","outcome":"unknown"}).to_string(),
+    ));
+    assert_eq!(agent.session.state(), Lifecycle::Stopping);
+    assert!(agent.children.names().is_empty());
+    assert!(!std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+    assert!(std::os::unix::net::UnixStream::connect(&audio_path).is_ok());
+    assert!(agent.session.authorize(Some(&owner)).is_ok());
+    control.expire();
+    assert!(
+        !control.stop_pending(),
+        "expiry must not silently retry cleanup"
+    );
+    assert!(control
+        .heartbeat(Some(&owner), Duration::from_secs(30))
+        .is_err());
+    assert!(agent.session.start(Output::Recording).is_err());
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let socket = listener();
+    let port = socket.local_addr().unwrap().port();
+    let (server, queue) = ListenerOwner::start(
+        socket,
+        TOKEN.into(),
+        1000,
+        assets(),
+        Arc::clone(&shutdown),
+        Limits::default(),
+        control.clone(),
+    )
+    .unwrap();
+    let generation = control.generation();
+    assert_eq!(
+        response(send(port, "stop", json!({"_owner":"intruder"})))["outcome"],
+        "not_executed"
+    );
+    assert_eq!(
+        response(send_as(
+            port,
+            "stop",
+            json!({"_owner":owner.as_str()}),
+            "invalid-token"
+        ))["error"],
+        "unauthorized or malformed request"
+    );
+    assert_eq!(control.generation(), generation);
+    assert!(std::os::unix::net::UnixStream::connect(&audio_path).is_ok());
+    // Remove the actual fault, not the ownership record. The next peer Stop
+    // must retry cleanup with the same owner, without emergency owner omission.
+    drop(audio);
+    let done = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::clone(&done);
+    let owner_thread = thread::spawn(move || {
+        let end = Instant::now() + Duration::from_secs(3);
+        while !control.stop_pending() && !cancel.load(Ordering::Relaxed) && Instant::now() < end {
+            thread::sleep(Duration::from_millis(1));
+        }
+        if control.stop_pending() {
+            agent.stop(None).unwrap();
+            let mut body: Value = serde_json::from_str(&agent.status()).unwrap();
+            body["stop"] = json!("completed");
+            body["outcome"] = json!("completed");
+            control.finish_stop((200, body.to_string()));
+        }
+        agent
+    });
+    // This is the actual owner-scoped transport used by capture cleanup.
+    let retry = crate::control::request(
+        port,
+        port,
+        TOKEN,
+        "stop",
+        &json!({"_owner":owner.as_str()}).to_string(),
+        Duration::from_secs(2),
+    );
+    done.store(true, Ordering::Relaxed);
+    let mut agent = owner_thread.join().unwrap();
+    server.join().unwrap();
+    drop(queue);
+    let state = agent.session.state();
+    let retained = audio_path.exists();
+    // Also leave the failing-before fixture clean, without an unowned HTTP
+    // escape hatch being mistaken for a successful regression result.
+    agent.stop(Some(&owner)).unwrap();
+    assert!(
+        retry.is_ok(),
+        "expired matching peer could not retry retained cleanup: {retry:?}"
+    );
+    assert_eq!(state, Lifecycle::Idle);
+    assert!(!retained, "retry did not release the actual audio socket");
+    assert!(agent.children.names().is_empty());
+    let proof: Value = serde_json::from_str(&retry.unwrap()).unwrap();
+    assert_eq!(proof["stop"], "completed");
+    assert_eq!(proof["owner"], owner.as_str());
+    let old_generation = generation;
+    let newer = OwnerId::parse("newer-owner").unwrap();
+    agent
+        .session
+        .prepare(Some(newer.clone()), Instant::now(), Duration::from_secs(30))
+        .unwrap();
+    let new_pid = receiver(&mut agent, "new-receiver.pid");
+    let control = agent.session.control();
+    let current = control.generation();
+    assert!(control.request_stop(Some(&owner)).is_err());
+    assert_eq!(control.generation(), current);
+    assert!(
+        std::path::Path::new(&format!("/proc/{new_pid}")).exists(),
+        "stale owner killed the newer receiver"
+    );
+    assert!(!control.begin(old_generation, Some(owner)));
+    agent.session.prepared().unwrap();
+    agent.session.start(Output::Recording).unwrap();
+    assert_eq!(agent.session.output(), Some(Output::Recording));
+}
+
+#[test]
+fn cancellation_before_remote_prepare_dispatch_does_not_invent_an_obligation() {
+    let mut fixture = Fixture::new();
+    fixture.0.role = "capture".into();
+    fixture.0.remote_token_file = fixture.0.token_file.clone();
+    let peer = listener();
+    fixture.0.forward_control_port = peer.local_addr().unwrap().port();
+    fixture.0.remote_control_port = fixture.0.forward_control_port;
+    let mut agent = Agent::new(fixture.0.clone()).unwrap();
+    agent
+        .session
+        .prepare(None, Instant::now(), Duration::from_secs(30))
+        .unwrap();
+    agent
+        .spawn(Worker::Tunnel, vec!["sleep".into(), "30".into()])
+        .unwrap();
+    let control = agent.session.control();
+    agent.operation = Some(
+        crate::request::Operation::new(
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Duration::from_secs(3),
+        )
+        .with_control(control.clone(), control.generation()),
+    );
+    control.request_stop(None).unwrap();
+    let result = agent.prepare_remote(OwnerId::parse("never-dispatched").unwrap());
+    assert!(result.is_err());
+    assert!(
+        matches!(peer.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock),
+        "cancelled Prepare established a peer connection"
+    );
+    let obligation = agent.session.remote_owner();
+    // Before the fix this record is invented despite the proved absence of
+    // dispatch. Remove only that fixture record so failure cannot start SSH.
+    if obligation.is_some() {
+        agent.session.remote_released().unwrap();
+    }
+    agent.stop(None).unwrap();
+    assert_eq!(agent.session.state(), Lifecycle::Idle);
+    assert!(agent.children.names().is_empty());
+    assert!(
+        obligation.is_none(),
+        "cancelled pre-dispatch Prepare invented remote obligation: {obligation:?}"
+    );
+}
+
+#[test]
 fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
     let fixture = Fixture::new();
     let mut agent = Agent::new(fixture.0.clone()).unwrap();
@@ -297,7 +523,7 @@ fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
     );
     assert_eq!(
         response(send(port, "stop", json!({"_owner":"live-owner"})))["outcome"],
-        "not_executed"
+        "accepted"
     );
     let work = queue.recv_timeout(Duration::from_secs(1)).unwrap();
     agent.execute_work(work, &cancel, Limits::default());

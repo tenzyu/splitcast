@@ -417,6 +417,103 @@ fn two_actual_agents_control_failure_and_explicit_recovery() {
 }
 
 #[test]
+fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
+    let mut f = Fixture::new();
+    let first = "first-observer-owner";
+    let second = "second-observer-owner";
+    f.production.ok("prepare", json!({"_owner":first}));
+    f.production
+        .ok("start", json!({"_owner":first,"output":"recording"}));
+    let pids = f.pids();
+    assert!(!pids.is_empty());
+    // Observe only the 202 status line, then lose the JSON reply. This proves
+    // Stop admission before polling, without observing completion or resending.
+    let body = json!({"command":"stop","args":{"_owner":first}}).to_string();
+    let mut lost = TcpStream::connect(("127.0.0.1", f.production.port)).unwrap();
+    write!(lost, "POST /api/command HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", f.production.port, f.production.port, f.production.token, body.len()).unwrap();
+    lost.set_read_timeout(Some(LIMIT)).unwrap();
+    let mut status_line = Vec::new();
+    while !status_line.ends_with(b"\r\n") {
+        let mut byte = [0];
+        lost.read_exact(&mut byte).unwrap();
+        status_line.push(byte[0]);
+        assert!(status_line.len() < 80);
+    }
+    assert_eq!(status_line, b"HTTP/1.1 202 Accepted\r\n");
+    drop(lost);
+    let end = Instant::now() + LIMIT;
+    loop {
+        let (code, observation) = f.production.command("status", json!({"_owner":first}));
+        assert_eq!(code, 200, "{observation}");
+        if observation["stop"] == "completed" {
+            assert_eq!(observation["owner"], first);
+            assert_eq!(observation["state"], "idle");
+            assert_eq!(observation["children"], json!([]));
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "lost-reply Stop did not resolve: {observation}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    f.released(&pids);
+    f.production.ok("prepare", json!({"_owner":second}));
+    let current = f.production.ok("status", json!({}));
+    assert_eq!(current["state"], "ready");
+    assert!(
+        current["stop"].is_null(),
+        "new session fabricated old completion"
+    );
+    assert!(current["owner"].is_null());
+    assert!(!current["children"].as_array().unwrap().is_empty());
+    for command in ["status", "stop", "prepare", "heartbeat"] {
+        assert_eq!(
+            f.production.command(command, json!({"_owner":first})).0,
+            409,
+            "old {command} interfered with the newer owner"
+        );
+    }
+    f.production
+        .ok("start", json!({"_owner":second,"output":"recording"}));
+    f.production.state("running");
+    f.production.ok("stop", json!({"_owner":second}));
+    let overwritten = f.production.ok("status", json!({"_owner":first}));
+    assert_eq!(overwritten["stop"], "completed");
+    assert_eq!(overwritten["owner"], second);
+    assert_ne!(
+        overwritten["owner"], first,
+        "another session became the first owner's release proof"
+    );
+    assert_eq!(f.production.command("stop", json!({"_owner":first})).0, 409);
+    f.released(&f.pids());
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn completed_stop_is_not_a_cross_host_prepare_replay_fence() {
+    let mut f = Fixture::new();
+    let owner = "replayed-prepare-owner";
+    f.production.ok("prepare", json!({"_owner":owner}));
+    f.production.ok("stop", json!({"_owner":owner}));
+    f.released(&f.pids());
+    // The bearer still authorizes Prepare. Owner IDs are constraints, not a
+    // durable request registry. A later admitted Prepare creates fresh effects.
+    // Supported clients must not replay an uncertain Prepare automatically.
+    f.production.ok("prepare", json!({"_owner":owner}));
+    let fresh = f.production.state("ready");
+    assert!(fresh["stop"].is_null());
+    assert!(fresh["output"].is_null(), "Prepare alone started output");
+    assert!(!fresh["children"].as_array().unwrap().is_empty());
+    let pids = f.pids();
+    f.production.ok("stop", json!({"_owner":owner}));
+    f.released(&pids);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
 fn late_owned_start_cannot_recreate_a_completed_remote_session() {
     let mut f = Fixture::new();
     f.capture.ok("prepare", json!({}));
