@@ -132,6 +132,67 @@ initial export directory. The source checks and explicit owner confirmation
 address Terra's source-review prerequisite; they are not presented as a legal
 opinion.
 
+## Corrected full local export
+
+| Exact command | Result |
+| --- | --- |
+| `bash -o pipefail -c 'bash tools/ci/release-sources.sh artifacts/release-sources-d37c387 2>&1 \| tee artifacts/ci/local-sources-d37c387.log'` | Exit 0 on clean `d37c387`. |
+| `bash -o pipefail -c 'python3 tools/ci/release_cache.py prepare artifacts/release-bundle-d37c387 artifacts/release-sources-d37c387 2>&1 \| tee artifacts/ci/local-cache-d37c387.log'` | Exit 0; source contents checked, all 439 forwarded entries passed Nix signature verification, and all three custom NARs passed content verification. 452 flat assets including manifest. Manifest SHA-256 `d1346e212b0e127255844f441edfdba592e66ebc668426cbaaa67a173d7bf407`. Custom signatures are added later by the isolated publisher, not claimed here. |
+| `bash -o pipefail -c 'nix develop -c cargo run -p splitcast-xtask -- verify-virtual 2>&1 \| tee artifacts/ci/local-virtual-d37c387.log'` | Exit 0; 14 PASS rows in `1794630585676086902`, on clean `d37c387`. |
+| `bash -o pipefail -c 'nix develop -c cargo run -p splitcast-xtask -- verify 2>&1 \| tee artifacts/ci/local-ordinary-d37c387.log'` | Exit 0; 11 PASS rows in `1794630808754911017`, on clean `d37c387`. |
+| `git diff --exit-code 7585308 HEAD -- packages Cargo.toml Cargo.lock flake.nix flake.lock nix/modules nix/obs.nix nix/source.nix` | Exit 0; application source, product packages, locks, flake, runtime modules and selected OBS configuration are unchanged by the delivery implementation. |
+
+The exact archived-source evaluation below exited 0. It establishes identical
+derivation output identities from the distributed project source, not another
+full compilation or a consumer substitution pass:
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import tarfile
+import tempfile
+manifest = json.loads(Path('artifacts/release-bundle-d37c387/manifest.json').read_text())
+with tempfile.TemporaryDirectory(prefix='splitcast-source-proof-', dir='/tmp/opencode') as directory:
+    with tarfile.open('artifacts/release-sources-d37c387/project-source.tar.xz') as archive:
+        archive.extractall(directory, filter='data')
+    actual = {name: subprocess.check_output(['nix', 'eval', '--raw', f'path:{directory}#{attribute}.outPath'], text=True).strip() for name, attribute in [('native', 'default'), ('web', 'splitcast-web')]}
+    assert actual == manifest['roots'], (actual, manifest['roots'])
+    print(json.dumps({'archived_source_evaluates_to_exact_roots': actual}, indent=2))
+PY
+```
+
+Terra's follow-up accepts that the earlier source/redistribution prerequisite is
+addressed for the explicitly approved three-output configuration. It reports no
+new concrete blocker in its limited review. It did not independently recover the
+operator transcript or run the full exporter/hosted consumer. Its follow-up is
+retained in `/tmp/opencode/splitcast-ci-review/terra.md`; the actual full exporter
+and verifier results above are primary-session observations.
+
+## Hosted Nix-version correction
+
+[Run 43556826868](https://github.com/tenzyu/splitcast/actions/runs/43556826868)
+on PR head `d37c387db7db60d7cd8ab93ef48d088174881c24` failed only
+`Delivery scripts`. Ordinary, virtual and package jobs succeeded. The failed
+protocol assertion was `['build-trace-v2'] != []`. Its retained `nix.txt` reports
+Nix 2.35.6, while the local tool is 2.34.9. The premise that file-cache bookkeeping
+directory names were stable across versions was false. The fix therefore does
+not append another name to the list. A flat export removes empty directory
+entries regardless of name and still refuses/preserves every nonempty directory
+and symlink. No files or directory contents are recursively deleted.
+
+| Exact command | Result |
+| --- | --- |
+| `gh run watch 43556826868 --interval 60 --exit-status > artifacts/ci/watch-43556826868.log 2>&1` | Exit 1. The hosted failure is retained rather than called an infrastructure-only pass. |
+| `gh run view 43556826868 --log-failed` | Exit 0; revealed the actual assertion above. |
+| `gh run download 43556826868 --name delivery-scripts-43556826868-1 --dir artifacts/ci/hosted-failed-delivery-43556826868` | Exit 0; exact failing script log and Nix identity retained locally. |
+| `python3 tools/ci/test_release_cache.py MetadataTests.test_empty_bookkeeping_directory_names_are_not_a_nix_version_contract` | Before the structural fix, exit 1 with `['build-trace-v2', 'future-empty-directory'] != []`. |
+| `env TMPDIR=/tmp/opencode nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh` | After the fix, exit 0; all nine tests, actionlint, ShellCheck and Pyflakes pass. |
+
+This supersedes the earlier fixed-name cleanup design, not its failure history.
+The pending source/memory documentation was preserved throughout the correction.
+
 ## Design and safety
 
 Validation runs ordinary `verify`, extended `verify-virtual`, and packaging on

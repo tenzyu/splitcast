@@ -2,6 +2,12 @@
 
 Prepared 2026-11-14 JST. This handoff is a plan for the next session. No workflow, hosted run, cache account, secret, cache upload, commit, or push was created by this documentation turn.
 
+Implementation follow-up: S18 preserves the source at `7585308`, implements
+hosted CI and a signed GitHub Releases cache, and records actual results in
+[the CI/cache evidence](../evidence/ci-nix-cache-20261114.md). The operator chose
+and approved Releases instead of the external Cachix account proposed below.
+The original plan remains here for its validation and trust requirements.
+
 ## Goal and stopping boundary
 
 Implement repeatable GitHub Actions validation and a usable SplitCast Nix binary cache. Keep CI acceleration separate from distributing package closures to users. Finish with actual hosted-run and clean-consumer evidence, or explicitly report the unavailable credential/account boundary. A workflow file or successful upload alone is not completion.

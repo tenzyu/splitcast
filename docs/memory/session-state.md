@@ -1,24 +1,24 @@
 # Current SplitCast working state
 
-Recorded 2026-11-14 JST. This page is a cold-start capsule, not a new application test result.
+Updated 2026-11-14 JST. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
 
 ## Goal and next task
 
-The operator wants software development and virtual acceptance to proceed independently of physical performance acceptance. The next session implements GitHub Actions CI and a usable SplitCast Nix binary cache. Read [the handoff](../handoff/ci-nix-cache.md) before changing workflows or cache configuration. [Production-readiness gates](../production-readiness.md) define the work beyond CI.
+The operator wants software development and virtual acceptance to proceed independently of physical performance acceptance. S18 implements [the CI/cache handoff](../handoff/ci-nix-cache.md) using signed GitHub Releases, not a Cachix account. Read [its actual results](../evidence/ci-nix-cache-20261114.md) before rerunning publication. [Production-readiness gates](../production-readiness.md) define the work beyond delivery.
 
 ## Source state
 
-- Branch is `main`, with `origin/main` configured according to local Git status. Remote authentication, branch protection, and live remote contents were not checked for this handoff.
-- HEAD is `aa86fe0d443d55a1a66c61198811a5b906ebef57`.
-- The virtual-control implementation, new tests, and evidence documents are still uncommitted. A checkout or new worktree at HEAD alone does not contain them.
-- New Rust files include `request.rs`, `server.rs`, `agent_lifecycle_tests.rs`, `tests/two_agents.rs`, and `tests/local_transport.rs` under `packages/splitcast-rs/`.
-- No `.github/` workflow or project-declared binary-cache configuration was found in this handoff inspection. Do not infer the state of an external cache account or host-wide Nix settings.
+- `7585308` commits the prior virtual-control implementation and handoff. Its 49 source identities match S16's manifest. The initial S17 capsule at that commit describes the formerly dirty tree; it is historical, not current Git status.
+- CI/cache implementation is on `ci/nix-cache`, PR #1, with reviewed code checkpoint `d37c387`. The operator approved an ordinary merge after validation and a verification prerelease, not deployment.
+- The existing public repository is `tenzyu/splitcast`, default `main`. Read-only inspection found Actions enabled and main unprotected. No repository visibility or branch-protection change was made.
+- `NIX_CACHE_SIGNING_KEY` is configured as a GitHub repository secret. The matching public key is in `nix/cache-public-key`. Do not regenerate or rotate it implicitly. No private key belongs in Git, Nix derivations or evidence uploads.
+- `.github/workflows/ci.yml` owns read-only hosted validation. `release-cache.yml` is manual, main-only, requires separate publication and redistribution confirmation, promotes only its own successful trusted build bundle, and tests consumption on a fresh runner.
 
 Preserve the working tree. Review its tracked and untracked changes before committing or moving work. Never reset to HEAD to obtain a supposedly tested baseline.
 
 ## Last verified software artifact
 
-[S16/E12](evidence.md) identifies the source as HEAD plus the virtual-control changes, not HEAD alone. The final [source manifest](../evidence/virtual-system-20261114-source-sha256.tsv) contains 49 source and configuration identities. The [command summary](../evidence/virtual-system-20261114-summary.tsv) records 14 passing steps, 124 ordinary tests, and three separately executed local components. These results belong to that run, not a new CI run or a new Nix package build.
+[S16/E12](evidence.md) identifies its original dirty source, now preserved by `7585308`. Its final [source manifest](../evidence/virtual-system-20261114-source-sha256.tsv) contains 49 identities. Its [command summary](../evidence/virtual-system-20261114-summary.tsv) records 14 passing steps, 124 ordinary tests, and three separate local components. [S18/E14](evidence.md) adds actual clean hosted CI, new package builds and cache-specific evidence without relabeling S16's results. Full local cache preparation passes at `d37c387`; only S18's explicit hosted consumer result can establish public substitution.
 
 The two-agent tests use actual capture and production agent processes but stand-in external workers. Generated TCP transfer and full decode are a separate test. Actual agent RTMP and RTSP media integration is not accepted.
 

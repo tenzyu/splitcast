@@ -80,6 +80,14 @@ class MetadataTests(unittest.TestCase):
                 cache.prune_empty_cache_directories(directory)
             self.assertEqual(preserved.read_text(), "source evidence")
 
+    def test_empty_bookkeeping_directory_names_are_not_a_nix_version_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "build-trace-v2").mkdir()
+            (directory / "future-empty-directory").mkdir()
+            cache.prune_empty_cache_directories(directory)
+            self.assertEqual(sorted(path.name for path in directory.iterdir()), [])
+
     def test_rejects_foreign_paths_and_incomplete_closures(self):
         path = "/nix/store/" + "a" * 32 + "-splitcast-web-0.1.0"
         source = {"sha": "fixture"}

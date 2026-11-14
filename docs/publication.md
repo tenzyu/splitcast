@@ -2,6 +2,13 @@
 
 The initial status and creation recipe below belong to the extraction checkpoint. Local status now shows `origin/main`, but this planning pass did not query the live repository or authentication. Inspect the existing remote before executing any creation command. The current next-session procedure is [the CI/cache handoff](handoff/ci-nix-cache.md).
 
+S18 subsequently confirmed the existing public `tenzyu/splitcast` repository and
+authenticated access. Do not run the repository-creation recipe against it.
+The operator approved signed GitHub Releases delivery with corresponding sources
+and an ordinary merge after validation. [The CI/cache record](evidence/ci-nix-cache-20261114.md)
+retains the exact approval scope and actual publication/consumption results.
+This does not authorize rewriting existing history or enabling a host service.
+
 At the extraction checkpoint, the agent reported no authenticated GitHub CLI session and the system-configuration consumer used a pinned local Git flake input. Neither authentication nor the live consumer input was rechecked in this planning pass. The local repository has its own `main` history. Do not invent a public repository URL, claim publication, or assume the extraction checkpoint still describes current access.
 
 Before publication, inspect `git status`, the semantic review, the verification record, and `THIRD_PARTY.md`. Confirm the right to publish the imported documentation and the two operator-supplied policies. Original SplitCast code is MIT; the OBS patch and historical copy have GPL-2.0-or-later sidecars and retained upstream license text. Generated recordings, private captures, credentials, build residue and raw local command logs remain ignored under `artifacts/`.

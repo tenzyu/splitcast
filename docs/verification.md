@@ -82,3 +82,14 @@ The current run starts at `aa86fe0d443d55a1a66c61198811a5b906ebef57` plus the un
 The software checks now cover actual local capture and production agents with stand-in workers, owner isolation, repeated recording Start, selected worker failures, explicit recovery, SIGTERM while Running, expired queued requests, running-outcome ambiguity, connection closure and joins, OBS compound cancellation, and generated delayed TCP transfer with disconnect, cleanup, and full decode. Independent integrated runtime reviewers returned no verified scoped defects.
 
 This does not complete SplitCast. Ordinary Stop remains behind active Prepare. Actual agent RTMP and RTSP media integration, congestion recovery, durable outcomes, settings fault injection, browser lifecycle, and physical capture and performance acceptance remain separate work. No new Nix package build, consumer evaluation, deployment, real remote SSH, physical device, real OBS acceptance, or game-performance claim is made. Runtime and autostart gates remain unchanged.
+
+## CI and binary-delivery follow-up, 2026-11-14 JST
+
+S18 preserves the formerly uncommitted source in `7585308` and independently
+builds/tests it through hosted CI. Its [CI/cache record](evidence/ci-nix-cache-20261114.md)
+separates actual hosted jobs, local reruns, package outputs, cache export failures
+and corrections, source/rights review, and public-consumer evidence. GitHub
+Releases supplies the cache transport. No external cache account is assumed.
+Earlier statements about no remote, dirty source, or no new package build apply
+only to their original checkpoints. No delivery result accepts physical capture,
+software media-path integration, browser behavior, host activation, or gameplay.

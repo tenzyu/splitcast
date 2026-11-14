@@ -186,9 +186,9 @@ def verify_sources(directory):
 
 
 def prune_empty_cache_directories(directory):
-    for name in ("nar", "log", "realisations"):
-        if (directory / name).exists():
-            (directory / name).rmdir()
+    for path in directory.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            path.rmdir()
 
 
 def flat_cache_command(directory, *args):

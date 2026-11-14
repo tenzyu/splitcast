@@ -13,3 +13,8 @@ Current operating instructions live in [the operations runbook](../operations.md
 The current virtual-software contract is [virtual system acceptance](../virtual-acceptance.md). Its current-run commands, failures, and review results are recorded separately as S16 in [the evidence register](evidence.md).
 
 For the next task, read [the GitHub Actions and Nix cache handoff](../handoff/ci-nix-cache.md). [Production-readiness gates](../production-readiness.md) define the release work beyond CI. S17 records this documentation-only planning pass, not a new hosted or application result.
+
+S18 implements that handoff using signed GitHub Releases rather than an external
+cache account. Its [CI/cache record](../evidence/ci-nix-cache-20261114.md) retains
+hosted identities, actual export failures, source review, operator permissions,
+and the independently scoped publication/consumption results.
