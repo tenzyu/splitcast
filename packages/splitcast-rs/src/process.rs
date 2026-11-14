@@ -44,7 +44,7 @@ impl OwnedProcess {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::inherit());
         Self::spawn_command(&mut command)
     }
 

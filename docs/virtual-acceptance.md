@@ -20,6 +20,8 @@ The extended command uses generated inputs and loopback listeners only. It does 
 
 An unavailable tool, failed step, or missing test is a failure, not a skipped pass. Historical results are not added to the current run.
 
+The additional [real production-media profile](media-acceptance.md) runs separately with `nix develop --no-write-lock-file .#media-test -c cargo run -p splitcast-xtask -- verify-media`. It requires real MediaMTX, patched OBS, private audio, and independent recording inspection. It does not replace either regression matrix or establish capture-Agent, SSH, hardware, or deployment acceptance.
+
 ## Software contracts
 
 | Area | Required observation | Limit |

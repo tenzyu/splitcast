@@ -67,9 +67,14 @@ fn valid_schema(value: &Value, schema: &Value) -> bool {
     let valid = match schema["type"].as_str() {
         Some("object") => match (value.as_object(), schema["properties"].as_object()) {
             (Some(v), Some(p)) => {
-                v.len() == p.len()
-                    && p.iter()
-                        .all(|(k, s)| v.get(k).is_some_and(|v| valid_schema(v, s)))
+                schema["required"].as_array().is_none_or(|required| {
+                    required
+                        .iter()
+                        .all(|k| k.as_str().is_some_and(|k| v.contains_key(k)))
+                }) && v.iter().all(|(k, value)| {
+                    p.get(k)
+                        .is_some_and(|property| valid_schema(value, property))
+                })
             }
             _ => false,
         },
@@ -277,6 +282,12 @@ pub fn secret(path: &Path, max_bytes: usize) -> io::Result<String> {
     Ok(value.to_owned())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObsVideoMode {
+    Hardware,
+    Software,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub document: String,
@@ -318,6 +329,7 @@ pub struct Config {
     pub camera_height: u16,
     pub camera_fps: u16,
     pub obs_binary: PathBuf,
+    pub obs_video_mode: ObsVideoMode,
     pub obs_port: u16,
     pub obs_password: PathBuf,
     pub twitch_key: PathBuf,
@@ -463,6 +475,11 @@ impl Config {
             camera_height: number(filename, ".camera.height", 120, 2160)?,
             camera_fps: number(filename, ".camera.fps", 1, 60)?,
             obs_binary: path(get(filename, ".obs.binary")?),
+            obs_video_mode: match filename["obs"].get("video_mode").and_then(Value::as_str) {
+                None | Some("hardware") => ObsVideoMode::Hardware,
+                Some("software") => ObsVideoMode::Software,
+                Some(_) => return Err(error("invalid OBS video mode")),
+            },
             obs_port: number(filename, ".obs.websocket_port", 1024, 65535)?,
             obs_password: path(get(filename, ".obs.password_file")?),
             twitch_key: path(get(filename, ".obs.twitch_key_file")?),
@@ -495,6 +512,69 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_software_video_mode_is_accepted() {
+        let mut input: Value = serde_json::from_str(include_str!("../tests/example.json")).unwrap();
+        let legacy = Config::parse(input.to_string().as_bytes()).unwrap();
+        assert_eq!(legacy.obs_video_mode, ObsVideoMode::Hardware);
+        assert_eq!(
+            serde_json::from_str::<Value>(&legacy.document).unwrap(),
+            input
+        );
+        input["obs"]["video_mode"] = Value::String("hardware".into());
+        assert_eq!(
+            Config::parse(input.to_string().as_bytes())
+                .unwrap()
+                .obs_video_mode,
+            ObsVideoMode::Hardware
+        );
+        input["obs"]["video_mode"] = Value::String("software".into());
+        assert_eq!(
+            Config::parse(input.to_string().as_bytes())
+                .unwrap()
+                .obs_video_mode,
+            ObsVideoMode::Software
+        );
+        for invalid in [
+            serde_json::json!(null),
+            serde_json::json!("automatic"),
+            serde_json::json!(false),
+        ] {
+            input["obs"]["video_mode"] = invalid;
+            assert!(Config::parse(input.to_string().as_bytes()).is_err());
+        }
+        input["obs"]["video_mode"] = serde_json::json!("software");
+        input["obs"]["unexpected"] = serde_json::json!(true);
+        assert!(Config::parse(input.to_string().as_bytes()).is_err());
+    }
+
+    #[test]
+    fn every_declared_required_field_remains_mandatory() {
+        fn check(value: &Value, schema: &Value) {
+            if let Some(properties) = schema["properties"].as_object() {
+                for key in schema["required"].as_array().unwrap() {
+                    let key = key.as_str().unwrap();
+                    let mut missing = value.clone();
+                    missing.as_object_mut().unwrap().remove(key);
+                    assert!(!valid_schema(&missing, schema), "required field {key}");
+                }
+                for (key, property) in properties {
+                    if let Some(child) = value.get(key) {
+                        check(child, property);
+                    }
+                }
+            }
+            if let Some(items) = value.as_array() {
+                for item in items {
+                    check(item, &schema["items"]);
+                }
+            }
+        }
+        let input: Value = serde_json::from_str(include_str!("../tests/example.json")).unwrap();
+        let schema: Value = serde_json::from_str(include_str!("config-schema.json")).unwrap();
+        check(&input, &schema);
+    }
 
     #[test]
     fn toml_example_loads() {

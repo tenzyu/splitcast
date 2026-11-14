@@ -786,6 +786,8 @@ fn virtual_obs(dir: &Path) {
             let data = match method {
                 "GetVersion" => json!({"obsVersion":"virtual"}),
                 "GetSceneList" => json!({"scenes":[{"sceneName":"SplitCast"}]}),
+                "GetSceneItemId" => json!({"sceneItemId":1}),
+                "GetSceneItemTransform" => json!({"sceneItemTransform":{"sourceWidth":1280,"sourceHeight":720}}),
                 "GetInputList" => json!({"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}),
                 "StartRecord" => { assert!(!*active); *active = true; json!({}) },
                 "StopRecord" => { *active = false; json!({}) },

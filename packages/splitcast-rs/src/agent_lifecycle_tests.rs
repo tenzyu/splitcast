@@ -206,6 +206,26 @@ fn repeated_server_instances_close_partial_requests_and_release_role_lock() {
 }
 
 #[test]
+fn unconfirmed_obs_finalization_does_not_complete_stop() {
+    let fixture = Fixture::new();
+    let mut agent = Agent::new(fixture.0.clone()).unwrap();
+    agent
+        .session
+        .prepare(None, Instant::now(), Duration::from_secs(30))
+        .unwrap();
+    agent.session.prepared().unwrap();
+    agent.session.start(Output::Recording).unwrap();
+    agent
+        .spawn(Worker::Obs, vec!["sleep".into(), "30".into()])
+        .unwrap();
+    assert!(agent.stop(None).is_err());
+    assert_eq!(agent.session.state(), Lifecycle::Stopping);
+    assert!(agent.children.names().is_empty());
+    agent.stop(None).unwrap();
+    assert_eq!(agent.session.state(), Lifecycle::Idle);
+}
+
+#[test]
 fn readiness_shutdown_stops_before_the_next_worker_spawn() {
     let fixture = Fixture::new();
     let mut agent = Agent::new(fixture.0.clone()).unwrap();

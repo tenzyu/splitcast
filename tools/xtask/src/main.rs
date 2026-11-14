@@ -20,7 +20,7 @@ fn check_portability(directory: &Path, base: &Path, failures: &mut Vec<String>) 
         let entry = entry?;
         let path = entry.path();
         let relative = path.strip_prefix(base).unwrap();
-        if [".git", "target", "artifacts", "dist"]
+        if [".git", ".direnv", "target", "artifacts", "dist"]
             .contains(&entry.file_name().to_string_lossy().as_ref())
             || entry.file_name() == "result"
             || entry.file_name().to_string_lossy().starts_with("result-")
@@ -278,6 +278,11 @@ fn run() -> io::Result<bool> {
     match args.as_slice() {
         [command] if command == "verify" => verify(&base, false),
         [command] if command == "verify-virtual" => verify(&base, true),
+        [command] if command == "verify-media" => Ok(Command::new("bash")
+            .arg(base.join("tools/verify-media.sh"))
+            .current_dir(&base)
+            .status()?
+            .success()),
         [command] if command == "portability" => {
             let mut failures = Vec::new();
             check_portability(&base, &base, &mut failures)?;
@@ -288,7 +293,7 @@ fn run() -> io::Result<bool> {
         }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: splitcast-xtask verify | verify-virtual | portability",
+            "usage: splitcast-xtask verify | verify-virtual | verify-media | portability",
         )),
     }
 }
@@ -350,5 +355,24 @@ mod tests {
         assert!(tests_executed(
             b"running 1 test\ntest result: ok. 1 passed; 0 failed"
         ));
+    }
+
+    #[test]
+    fn direnv_cache_is_not_runnable_repository_source() {
+        use std::os::unix::fs::symlink;
+        let directory = std::env::temp_dir().join(format!(
+            "splitcast-portability-direnv-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(directory.join(".direnv")).unwrap();
+        symlink(
+            "/nonexistent/cache",
+            directory.join(".direnv/flake-profile"),
+        )
+        .unwrap();
+        let mut failures = Vec::new();
+        check_portability(&directory, &directory, &mut failures).unwrap();
+        fs::remove_dir_all(&directory).unwrap();
+        assert!(failures.is_empty(), "cache counted as source: {failures:?}");
     }
 }
