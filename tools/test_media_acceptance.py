@@ -1,6 +1,6 @@
 import unittest
 
-from media_acceptance import assess_marks, barcode, frame, tone_power
+from media_acceptance import assess_marks, audio_clock, av_alignment, barcode, frame, tone_power
 import math
 
 
@@ -40,6 +40,52 @@ class MediaOracleTests(unittest.TestCase):
     def test_audio_classifier_identifies_frequency_in_pcm(self):
         samples = [int(5000 * math.sin(2 * math.pi * 440 * n / 48000)) for n in range(4800)]
         self.assertGreater(tone_power(samples, 440), 100 * tone_power(samples, 880))
+
+    def test_av_transition_bound_rejects_delayed_audio(self):
+        valid = [(index / 10, index) for index in range(100)]
+        for delay in (0, 0.1, -0.1):
+            windows = [(index / 10, max(0, math.floor(index / 10 + 0.05 - delay)), {})
+                       for index in range(2, 98)]
+            alignment = av_alignment(valid, windows)
+            self.assertLessEqual(alignment["absolute_upper_seconds"], 0.5)
+        for delay in (0.5, 0.8, -0.8, 2.0, 4.0):
+            windows = [(index / 10, max(0, math.floor(index / 10 + 0.05 - delay)), {})
+                       for index in range(100)]
+            with self.assertRaisesRegex(AssertionError, "A/V"):
+                av_alignment(valid, windows)
+
+    def test_av_uses_shared_presentation_clock_and_unique_source_identity(self):
+        valid = [(1.25 + index / 10, index) for index in range(100)]
+        windows = [(1.25 + index / 10, index // 10, {}) for index in range(100)]
+        self.assertLessEqual(av_alignment(valid, windows)["absolute_upper_seconds"], 0.5)
+        with self.assertRaisesRegex(AssertionError, "A/V"):
+            av_alignment(valid, [(at + 0.8, bit, powers) for at, bit, powers in windows])
+
+    def test_audio_timestamp_gaps_and_accumulated_drift_cannot_be_concatenated(self):
+        frames = [{"best_effort_timestamp_time": round(index * 1024 / 48000, 3), "nb_samples": 1024}
+                  for index in range(100)]
+        self.assertEqual(audio_clock(frames)["samples"], 102400)
+        for step, drift in ((0.8, 0), (0, 0.001)):
+            bad = [dict(frame, best_effort_timestamp_time=frame["best_effort_timestamp_time"]
+                        + (step if index > 20 else 0) + index * drift)
+                   for index, frame in enumerate(frames)]
+            with self.assertRaisesRegex(AssertionError, "A/V audio PTS discontinuity"):
+                audio_clock(bad)
+
+    def test_av_uncertainty_includes_missing_video_samples(self):
+        valid = [(index / 10, index) for index in range(100) if index not in (8, 9, 10, 11)]
+        windows = [(index / 10, index // 10, {}) for index in range(100)]
+        self.assertGreater(av_alignment(valid, windows)["absolute_upper_seconds"], 0.44)
+
+    def test_av_boundaries_cannot_hide_wrong_source_content(self):
+        valid = [(index / 10, index + 30) for index in range(100)]
+        correct = [(index / 10, (index + 30) // 10, {}) for index in range(100)]
+        av_alignment(valid, correct)
+        for start, end in ((0, 4), (96, 100)):
+            bad = [(at, 30 if start <= index < end else second, powers)
+                   for index, (at, second, powers) in enumerate(correct)]
+            with self.assertRaisesRegex(AssertionError, "A/V audio source identity"):
+                av_alignment(valid, bad)
 
 
 if __name__ == "__main__":

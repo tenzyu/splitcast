@@ -17,6 +17,7 @@ import select
 import shutil
 import signal
 import socket
+import statistics
 import struct
 import subprocess
 import threading
@@ -25,7 +26,9 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 WIDTH, HEIGHT, FPS = 1280, 720, 30
-GAME_AUDIO = "aevalsrc='0.18*sin(2*PI*(440+440*mod(floor(t),2))*t)':s=48000"
+AUDIO_SECONDS = 45
+AUDIO_FREQUENCIES = tuple(440 + 40 * second for second in range(AUDIO_SECONDS))
+GAME_AUDIO = "aevalsrc='0.18*sin(2*PI*(440+40*floor(t))*t)':s=48000"
 MIC_AUDIO = "aevalsrc=0.15*(sin(2*PI*180*t)+0.5*sin(2*PI*360*t)+0.3*sin(2*PI*540*t)):s=48000"
 CASES = ("normal", "frozen", "delay", "disconnect", "stall", "worker-death")
 LIMITS = {
@@ -36,8 +39,11 @@ LIMITS = {
     "content_span_seconds": 7,
     "max_scene_age_seconds": 3,
     "max_av_offset_seconds": 0.5,
+    "av_measurement_uncertainty_seconds": 0.2,
+    "av_negative_delay_seconds": 0.8,
+    "max_audio_pts_error_seconds": 0.005,
     "fault_seconds": 20,
-    "source_seconds": 45,
+    "source_seconds": AUDIO_SECONDS,
     "backlog_delay_seconds": 4,
     "startup_pipe_seconds": 40,
     "scene_startup_samples": 2,
@@ -174,6 +180,54 @@ def assess_marks(marks, epoch):
     span = (valid[-1][1] - valid[0][1]) / 10
     require(span >= LIMITS["content_span_seconds"], f"frozen or insufficient content progression: {span}")
     return valid, span
+
+
+def av_alignment(valid, windows):
+    for at, source_second, _ in windows:
+        require(any(tick // 10 == source_second and abs(video_at - (at + 0.05)) <= LIMITS["max_av_offset_seconds"]
+                    for video_at, tick in valid), "A/V audio source identity has no nearby video observation")
+    video_edges = [((previous[0] + current[0]) / 2, current[1] // 10, (current[0] - previous[0]) / 2)
+                   for previous, current in zip(valid, valid[1:])
+                   if previous[1] // 10 != current[1] // 10]
+    audio_edges = [(current[0], current[1]) for previous, current in zip(windows, windows[1:])
+                   if previous[1] != current[1]]
+    require(len(video_edges) >= 3, "insufficient A/V transition markers")
+    offsets = []
+    upper_bounds = []
+    used = set()
+    for at, source_second, half_width in video_edges:
+        matches = [(index, audio_at) for index, (audio_at, audio_second) in enumerate(audio_edges)
+                   if audio_second == source_second and abs(audio_at - at) < 0.75]
+        require(len(matches) == 1, "missing or ambiguous A/V transition")
+        index, audio_at = matches[0]
+        require(index not in used, "reused A/V transition")
+        used.add(index)
+        offsets.append(audio_at - at)
+        upper_bounds.append(abs(audio_at - at) + LIMITS["av_measurement_uncertainty_seconds"]
+                            + max(0, half_width - 0.05))
+    require(all(index in used for index, (at, _) in enumerate(audio_edges)
+                if valid[0][0] + 0.5 < at < valid[-1][0] - 0.5), "unexpected A/V transition")
+    uncertainty = LIMITS["av_measurement_uncertainty_seconds"]
+    upper = max(upper_bounds)
+    require(upper <= LIMITS["max_av_offset_seconds"], f"A/V offset upper bound exceeded: {upper}")
+    return {"estimate_seconds": statistics.median(offsets), "edge_offsets_seconds": offsets,
+            "uncertainty_seconds": uncertainty, "absolute_upper_seconds": upper,
+            "video_edges": video_edges, "audio_edges": audio_edges}
+
+
+def audio_clock(frames):
+    require(frames, "missing decoded audio frames")
+    origin = float(frames[0]["best_effort_timestamp_time"])
+    samples = 0
+    errors = []
+    for frame in frames:
+        count = int(frame["nb_samples"])
+        require(count > 0, "invalid decoded audio sample count")
+        error = abs(float(frame["best_effort_timestamp_time"]) - origin - samples / 48000)
+        require(error <= LIMITS["max_audio_pts_error_seconds"], f"A/V audio PTS discontinuity: {error}")
+        errors.append(error)
+        samples += count
+    return {"origin_seconds": origin, "samples": samples, "max_pts_error_seconds": max(errors)}
 
 
 class Run:
@@ -470,10 +524,11 @@ class Source:
                    "backlog_frames": self.backlog_frames})
 
 
-def inspect_recording(run, path, epoch, fault_tail=False):
+def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
+    tag = evidence_tag or str(epoch)
     probe = json.loads(run.tool(["ffprobe", "-v", "error", "-count_frames", "-count_packets",
                                 "-show_streams", "-show_format", "-of", "json", str(path)]))
-    write_json(run.directory / f"probe-{epoch}.json", probe)
+    write_json(run.directory / f"probe-{tag}.json", probe)
     streams = probe["streams"]
     video = [v for v in streams if v["codec_type"] == "video"]
     audio = [v for v in streams if v["codec_type"] == "audio"]
@@ -497,7 +552,16 @@ def inspect_recording(run, path, epoch, fault_tail=False):
                       if p["stream_index"] == stream["index"] and "dts_time" in p]
         require(timestamps and all(b >= a for a, b in zip(timestamps, timestamps[1:])),
                 "missing or backward decode timestamps")
-    write_json(run.directory / f"packets-{epoch}.json", packets)
+    write_json(run.directory / f"packets-{tag}.json", packets)
+    decoded_frames = json.loads(run.tool(["ffprobe", "-v", "error", "-show_frames", "-show_entries",
+                                         "frame=media_type,best_effort_timestamp_time,nb_samples", "-of", "json", str(path)]))["frames"]
+    timelines = {kind: [float(f["best_effort_timestamp_time"]) for f in decoded_frames
+                        if f["media_type"] == kind] for kind in ("video", "audio")}
+    for timestamps in timelines.values():
+        require(timestamps and all(b >= a for a, b in zip(timestamps, timestamps[1:])),
+                "missing or backward decoded presentation timestamps")
+    write_json(run.directory / f"frame-timestamps-{tag}.json", timelines)
+    clock = audio_clock([f for f in decoded_frames if f["media_type"] == "audio"])
     prefix = ["-t", str(LIMITS["record_seconds"])] if fault_tail else []
     raw = run.tool(["ffmpeg", "-v", "error", "-i", str(path)] + prefix + ["-vf", "fps=10", "-pix_fmt", "gray",
                     "-f", "rawvideo", "pipe:1"], timeout=60)
@@ -505,37 +569,33 @@ def inspect_recording(run, path, epoch, fault_tail=False):
     require(len(raw) % size == 0, "partial raw decoded frame")
     marks = [barcode(raw[offset:offset + size]) for offset in range(0, len(raw), size)]
     valid, span = assess_marks(marks, epoch)
+    valid = [(at + timelines["video"][0], tick) for at, tick in valid]
     pcm = array.array("h", run.tool(["ffmpeg", "-v", "error", "-i", str(path)] + prefix + ["-vn", "-ac", "1", "-ar", "48000",
                                      "-f", "s16le", "pipe:1"], timeout=60))
+    if not fault_tail:
+        require(len(pcm) == clock["samples"], "decoded PCM sample count differs from presentation clock")
     windows = []
     for offset in range(0, len(pcm) - 4800, 4800):
         samples = pcm[offset:offset + 4800]
-        powers = {f: tone_power(samples, f) for f in (180, 440, 880, 1230)}
-        windows.append((offset / 48000, int(powers[880] > powers[440]), powers))
-    require(sum(w[2][180] > max(100, w[2][1230] * 10) for w in windows) >= len(windows) * 0.7,
+        powers = [tone_power(samples, frequency) for frequency in AUDIO_FREQUENCIES]
+        source_second = max(range(AUDIO_SECONDS), key=lambda second: powers[second])
+        identity = {"game": powers[source_second], "mic": tone_power(samples, 180),
+                    "noise": tone_power(samples, 1230), "frequency": AUDIO_FREQUENCIES[source_second]}
+        windows.append((timelines["audio"][0] + offset / 48000, source_second, identity))
+    require(sum(w[2]["mic"] > max(100, w[2]["noise"] * 10) for w in windows) >= len(windows) * 0.7,
             "processed microphone identity absent")
-    require(sum(max(w[2][440], w[2][880]) > max(100, w[2][1230] * 10) for w in windows) >= len(windows) * 0.8,
+    require(sum(w[2]["game"] > max(100, w[2]["noise"] * 10) for w in windows) >= len(windows) * 0.8,
             "game audio identity absent")
-    offsets = []
-    for shift in range(-10, 11):
-        matched = total = 0
-        for at, tick in valid:
-            index = round(at * 10) + shift
-            if 0 <= index < len(windows) and tick % 10 in (3, 4, 5, 6):
-                matched += windows[index][1] == (tick // 10) % 2
-                total += 1
-        if total:
-            offsets.append((matched / total, abs(shift), shift))
-    quality, _, shift = max(offsets, key=lambda item: (item[0], -item[1]))
-    av_offset = shift / 10
-    require(quality >= 0.9 and abs(av_offset) <= LIMITS["max_av_offset_seconds"],
-            f"A/V marker mismatch: quality={quality} offset={av_offset}")
+    alignment = av_alignment(valid, windows)
+    alignment["first_video_pts_seconds"] = timelines["video"][0]
+    alignment["first_audio_pts_seconds"] = timelines["audio"][0]
     result = {"sha256": digest(path), "duration": duration, "frames": int(video[0]["nb_read_frames"]),
               "content_span_seconds": span, "markers": valid, "audio_windows": windows,
-              "av_offset_seconds": av_offset, "av_match_fraction": quality,
+              "av_alignment": alignment,
+              "audio_clock": clock,
               "av_resolution_seconds": 0.1, "full_decode_to_eof": True}
     result["content_analysis"] = "pre-fault ten-second prefix" if fault_tail else "whole recording"
-    write_json(run.directory / f"decoded-{epoch}.json", result)
+    write_json(run.directory / f"decoded-{tag}.json", result)
     return result
 
 
@@ -616,6 +676,43 @@ def scenario(directory, binary, case, epoch):
                     "live scene exceeded freshness envelope")
             result["decoded"] = inspect_recording(run, recordings[0], epoch,
                                                    fault_tail=case in ("disconnect", "stall", "worker-death"))
+        if case == "normal":
+            delayed = directory / "bad-av-offset.mkv"
+            run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-itsoffset",
+                      str(LIMITS["av_negative_delay_seconds"]), "-i", str(recordings[0]),
+                      "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", str(delayed)])
+            try:
+                inspect_recording(run, delayed, epoch, evidence_tag="audio-offset")
+            except AssertionError as error:
+                require("A/V" in str(error), f"wrong delayed-audio rejection: {error}")
+                result["av_negative_control"] = {"delay_seconds": LIMITS["av_negative_delay_seconds"],
+                                                 "sha256": digest(delayed), "rejection": str(error)}
+            else:
+                raise AssertionError("oracle accepted delayed audio")
+            discontinuous = directory / "bad-audio-gap.mkv"
+            run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
+                      "-c:v", "copy", "-af", f"asetpts='PTS+{LIMITS['av_negative_delay_seconds']}/TB*gte(T,0.5)'",
+                      "-c:a", "aac", "-b:a", "160k", str(discontinuous)])
+            try:
+                inspect_recording(run, discontinuous, epoch, evidence_tag="audio-gap")
+            except AssertionError as error:
+                require("A/V audio PTS discontinuity" in str(error), f"wrong audio-gap rejection: {error}")
+                result["audio_gap_negative_control"] = {"sha256": digest(discontinuous), "rejection": str(error)}
+            else:
+                raise AssertionError("oracle accepted audio timestamp gap")
+            wrong_boundary = directory / "bad-audio-boundary.mkv"
+            replacement = "0.18*sin(2*PI*1640*t)+0.15*sin(2*PI*180*t)"
+            expressions = "|".join(f"if(lt(t,0.4),{replacement},val({channel}))" for channel in (0, 1))
+            run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
+                      "-c:v", "copy", "-af", f"aeval=exprs='{expressions}':c=stereo,aformat=channel_layouts=stereo",
+                      "-c:a", "aac", "-b:a", "160k", str(wrong_boundary)])
+            try:
+                inspect_recording(run, wrong_boundary, epoch, evidence_tag="audio-boundary")
+            except AssertionError as error:
+                require("A/V audio source identity" in str(error), f"wrong audio-boundary rejection: {error}")
+                result["audio_boundary_negative_control"] = {"sha256": digest(wrong_boundary), "rejection": str(error)}
+            else:
+                raise AssertionError("oracle accepted wrong boundary audio")
         if case == "worker-death":
             source.close()
             for child in (source.child, source.mic):
