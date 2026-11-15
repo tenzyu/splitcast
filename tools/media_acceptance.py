@@ -183,12 +183,19 @@ def assess_marks(marks, epoch):
 
 
 def av_alignment(valid, windows):
+    require(abs(valid[0][0] - windows[0][0]) <= LIMITS["max_av_offset_seconds"]
+            and abs(valid[-1][0] - (windows[-1][0] + 0.1)) <= LIMITS["max_av_offset_seconds"],
+            "A/V analysis coverage endpoints exceed envelope")
     for at, source_second, _ in windows:
         require(any(tick // 10 == source_second and abs(video_at - (at + 0.05)) <= LIMITS["max_av_offset_seconds"]
                     for video_at, tick in valid), "A/V audio source identity has no nearby video observation")
     video_edges = [((previous[0] + current[0]) / 2, current[1] // 10, (current[0] - previous[0]) / 2)
                    for previous, current in zip(valid, valid[1:])
                    if previous[1] // 10 != current[1] // 10]
+    boundary_edges = [edge for edge in video_edges
+                      if not windows[0][0] + 0.1 <= edge[0] <= windows[-1][0]]
+    video_edges = [edge for edge in video_edges
+                   if windows[0][0] + 0.1 <= edge[0] <= windows[-1][0]]
     audio_edges = [(current[0], current[1]) for previous, current in zip(windows, windows[1:])
                    if previous[1] != current[1]]
     require(len(video_edges) >= 3, "insufficient A/V transition markers")
@@ -212,7 +219,8 @@ def av_alignment(valid, windows):
     require(upper <= LIMITS["max_av_offset_seconds"], f"A/V offset upper bound exceeded: {upper}")
     return {"estimate_seconds": statistics.median(offsets), "edge_offsets_seconds": offsets,
             "uncertainty_seconds": uncertainty, "absolute_upper_seconds": upper,
-            "video_edges": video_edges, "audio_edges": audio_edges}
+            "video_edges": video_edges, "audio_edges": audio_edges,
+            "unpaired_boundary_video_edges": boundary_edges}
 
 
 def audio_clock(frames):
@@ -562,6 +570,11 @@ def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
                 "missing or backward decoded presentation timestamps")
     write_json(run.directory / f"frame-timestamps-{tag}.json", timelines)
     clock = audio_clock([f for f in decoded_frames if f["media_type"] == "audio"])
+    endpoints = {"start_offset_seconds": timelines["audio"][0] - timelines["video"][0],
+                 "end_offset_seconds": clock["origin_seconds"] + clock["samples"] / 48000
+                 - timelines["video"][-1] - 1 / FPS}
+    require(all(abs(offset) <= LIMITS["max_av_offset_seconds"] for offset in endpoints.values()),
+            f"A/V stream endpoints exceed envelope: {endpoints}")
     prefix = ["-t", str(LIMITS["record_seconds"])] if fault_tail else []
     raw = run.tool(["ffmpeg", "-v", "error", "-i", str(path)] + prefix + ["-vf", "fps=10", "-pix_fmt", "gray",
                     "-f", "rawvideo", "pipe:1"], timeout=60)
@@ -593,6 +606,7 @@ def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
               "content_span_seconds": span, "markers": valid, "audio_windows": windows,
               "av_alignment": alignment,
               "audio_clock": clock,
+              "stream_endpoints": endpoints,
               "av_resolution_seconds": 0.1, "full_decode_to_eof": True}
     result["content_analysis"] = "pre-fault ten-second prefix" if fault_tail else "whole recording"
     write_json(run.directory / f"decoded-{tag}.json", result)

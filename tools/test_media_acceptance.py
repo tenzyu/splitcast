@@ -87,6 +87,15 @@ class MediaOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "A/V audio source identity"):
                 av_alignment(valid, bad)
 
+    def test_partial_eof_marker_is_reported_with_bounded_stream_coverage(self):
+        valid = [(index / 10, index + 32) for index in range(120)]
+        windows = [(0.021 + index / 10, (index + 32) // 10, {}) for index in range(117)]
+        result = av_alignment(valid, windows)
+        self.assertEqual(len(result["unpaired_boundary_video_edges"]), 1)
+        self.assertGreaterEqual(len(result["video_edges"]), 3)
+        with self.assertRaisesRegex(AssertionError, "A/V analysis coverage endpoints"):
+            av_alignment(valid, windows[:-10])
+
 
 if __name__ == "__main__":
     unittest.main()
