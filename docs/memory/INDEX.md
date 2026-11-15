@@ -2,6 +2,12 @@
 
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
 
+S20/E16 is the current production-only software-media checkpoint at `42a64e4`.
+Read [the reproducible profile](../media-acceptance.md) and
+[the actual receipt](../evidence/media-plane-20261115.md). Capture-Agent/SSH,
+network congestion, live freshness enforcement, and physical acceptance remain
+open. Earlier S16 and S19 statements retain their dated source scope.
+
 - [Decisions](decisions.md) records the goal, adopted and rejected shapes, contrary observations, and unresolved limits.
 - [Evidence](evidence.md) separates the source repository, historical repaired artifacts, and fresh standalone verification.
 - [Open risks](open-risks.md) lists the evidence required before a claim can be closed.

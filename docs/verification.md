@@ -108,3 +108,17 @@ and observation/replay/admission limits. It preserves the failed fixture runs.
 CI. Earlier matrices in this file are not promoted to results for that head.
 Physical acceptance, actual agent media integration, browser lifecycle, durable
 history, aggregate shutdown bounds, and deployment remain unverified here.
+
+## Production-only media follow-up, 2026-11-15 JST
+
+S20/E16 tests corrected implementation `42a64e41990eb3a411dcd68e3412ccceac574112`, based on actual main `2a774d9`, which already includes PR #2. This supersedes the older missing-integration statement only for the generated production-only path. [The receipt](evidence/media-plane-20261115.md) records source and binary hashes, exact commands, failed attempts, observations, and remaining gates. AV01 supersedes the initial `0accf63` phase-fit timing claim.
+
+- `nix develop --no-write-lock-file .#media-test -c cargo run -p splitcast-xtask -- verify-media` passes eleven pure oracle tests, all six actual-media cases and three recording-mutation A/V controls at `42a64e4`, run `20261115T022547Z-vrJRNZQD`. Real controller-owned services create independently decoded OBS recordings. Stale-content rejection, disconnect, stall, worker death, release and same-controller recovery pass.
+- `nix develop --no-write-lock-file -c cargo run -p splitcast-xtask -- verify-virtual` initially exits 1 at `42a64e4`, run `1794709924594226389`: thirteen stages pass, but no-default-features fails at initial Prepare in `late_owned_start_cannot_recreate_a_completed_remote_session` with a connection reset. Its cause is unknown. The single retry and final ordinary results are recorded in the receipt.
+- The same `verify-virtual` command's single retry passes all 14 stages at unchanged `42a64e4`, run `1794710203786488803`: 155 ordinary tests in each feature selection and three separate one-test local components. The original reset is retained as unexplained, not declared fixed.
+- `nix develop --no-write-lock-file -c cargo run -p splitcast-xtask -- verify` passes all 11 stages at unchanged `42a64e4`, run `1794710355626646567`, including both feature selections.
+- Earlier `0accf63` `verify` run `1794692996286907638` passes 11 checks; `verify-virtual` run `1794692450019307764` passes 14 with 155 ordinary tests and three local opt-ins. These are preserved historical results, not substitutes for the final-source commands. Doctests contain zero examples.
+
+The first baseline was red on ignored direnv symlinks, the first unsandboxed media attempt failed device isolation, and the first full real-media matrix was red. They remain recorded rather than rewritten as passes. Later documentation commits preserve proof for the tested implementation; they are not additional runtime executions.
+
+No capture-Agent/SSH, actual network delay, live freshness enforcement, microphone alignment, default-VAD speech quality, physical capture, game-performance, deployment, fresh Nix package/consumer build, advisory scan, Miri, fuzzing, or alternate-architecture result is claimed. P1 is narrowed, not closed. Runtime and autostart gates remain disabled.

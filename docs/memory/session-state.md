@@ -1,12 +1,20 @@
 # Current SplitCast working state
 
-Updated 2026-11-14 JST. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
+Updated 2026-11-15 JST. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
 
 ## Goal and next task
 
-The operator wants software development and virtual acceptance to proceed independently of physical performance acceptance. S18 completes [the CI/cache handoff](../handoff/ci-nix-cache.md) for the named `d2205d0` release using signed GitHub Releases, not a Cachix account. Next is P1: generated media through the actual agent RTMP and RTSP path. Do not substitute the separate TCP component or stand-in worker tests for that requirement. Read [the delivery results](../evidence/ci-nix-cache-20261114.md) before rerunning publication, and [the readiness gates](../production-readiness.md) before expanding scope.
+AV01 is corrected and tested at `42a64e4`: unique source-second audio, decoded PTS continuity, sampled transition uncertainty, boundary identity and stream endpoints replace the falsified `0accf63` phase-fit claim. Eleven pure tests, six real-media cases, and all three generated recording mutations pass. Partial EOF markers outside joint observation are explicitly unmeasured, not fitted away. Human review remains pending after the last reviewer returned no verdict due to provider quota.
+
+The operator wants software acceptance independent of physical performance acceptance. S20/E16 verifies the production-only generated media path at `42a64e41990eb3a411dcd68e3412ccceac574112`. Real production Agent, MediaMTX, RNNoise/private Pulse, and patched OBS produce a locally confined MKV that an independent decoder inspects. Read [the exact receipt](../evidence/media-plane-20261115.md) for final regression outcomes and preserved failures, and [the profile](../media-acceptance.md), not an old stand-in test or cache result.
+
+Next evidence-generating work is capture-Agent generated publication through a local SSH topology, actual media-network impairment without delaying the RTMP handshake, and an independently timestamped microphone marker at the intended VAD setting. Require both Agent statuses, freshly decoded output, known clock correspondence, and confirmed cleanup. The current four-second backlog is before RTMP ingress, not a network-delay result. Runtime liveness still does not enforce fresh content. P1 remains narrowed rather than closed.
+
+S18's delivery receipt remains specific to `d2205d0`. It does not automatically deliver this candidate. No binary-cache publication rerun, deployment, hardware, privileged helper, or autostart is authorized. The finish directive authorizes one unmerged source PR to main, not merge or deployment. Current main at task start was `2a774d9`, which already includes PR #2 merge `6349fd6`. The older unmerged and Stop-behind-Prepare statements below are preserved historical checkpoints, not current main behavior.
 
 ## Source state
+
+- S20's implementation commits are `0accf63`, `67720ca`, and `42a64e4`, based on clean `2a774d9`. The corrected media source manifest is `60987062daaf94d2a9fb57308edfe8756a4e54303f813eac53e2c22f2571e54b`. Later evidence/memory edits do not become new runtime executions. README, existing lockfiles, runtime gates, and other branches were not changed.
 
 - `7585308` commits the prior virtual-control implementation and handoff. Its 49 source identities match S16's manifest. The initial S17 capsule at that commit describes the formerly dirty tree; it is historical, not current Git status.
 - CI/cache implementation was merged through PR #1 into `main` at `869c965` after all four hosted jobs passed for head `65f8fb9`. The operator approved this ordinary merge and the separately gated verification prerelease, not deployment. The source-review checkpoint is `d37c387`; the later structural Nix-version correction has its own passing nine-test hosted result.
@@ -18,6 +26,12 @@ The operator wants software development and virtual acceptance to proceed indepe
 Preserve the working tree. Review its tracked and untracked changes before committing or moving work. Never reset to HEAD to obtain a supposedly tested baseline.
 
 ## Last verified software artifact
+
+S20's corrected `verify-media` run `20261115T022547Z-vrJRNZQD` passes eleven pure tests and six actual-media cases, including epoch 15 on the same controller after RNNoise death. The normal file is 11.900 seconds with 354 decoded frames; the maximum accepted sampled game A/V upper bound is 0.271 seconds including uncertainty. Frozen and backlogged content demonstrate progressing bytes without freshness. All final cleanup-error lists are empty; no cleanup retry was needed. Earlier `0accf63` regression passes retain their identities in [the receipt](../evidence/media-plane-20261115.md), but its timing claim is superseded by AV01.
+
+Final-source `verify-virtual` run `1794709924594226389` failed no-default-features: initial capture Prepare reset its connection in `late_owned_start_cannot_recreate_a_completed_remote_session` before the replay assertion. The other thirteen stages passed. The single retry `1794710203786488803` passes all 14 stages at unchanged source: 155 ordinary tests per feature selection plus three separate local components. Final `verify` run `1794710355626646567` passes all 11 stages, including both feature selections. Cause of the reset remains unknown; no code was changed on speculation. All three required gates now have passing final-source runs; the earlier failure is not erased.
+
+The initial unsandboxed OBS attempt opened a GPU render node and was rejected. Software mode alone is not device isolation. All accepted runs require the namespace launcher, which hides physical media devices, confines networking to its private loopback, and exposes only a fresh writable evidence directory. Never run the Python orchestrator directly or treat a selected-case exit as complete acceptance.
 
 [S16/E12](evidence.md) identifies its original dirty source, now preserved by `7585308`. Its final [source manifest](../evidence/virtual-system-20261114-source-sha256.tsv) contains 49 identities. Its [command summary](../evidence/virtual-system-20261114-summary.tsv) records 14 passing steps, 124 ordinary tests, and three separate local components. [S18/E14](evidence.md) adds actual clean hosted CI and package delivery without relabeling S16's results. Run `43561723796` passes build, publish and fresh no-build consume at `d2205d0`. See [the durable receipt](../evidence/ci-nix-cache-20261114-receipt.json) and [actual download commands](../binary-cache.md).
 

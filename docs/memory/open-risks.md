@@ -47,3 +47,40 @@ R09 remains open for parser-slot exhaustion, ephemeral completion observation,
 cross-host Prepare replay, durable outcomes, and aggregate kernel/cleanup bounds.
 R01, R02, R05, R07, actual media-path integration, and F04–F07 retain their
 separate gates. Shared bearer clients share operator authority, not isolation.
+
+## 2026-11-15 production-media follow-up
+
+S20/E16 and D14 narrow R01 and R04 with actual production Agent, MediaMTX,
+RNNoise/private Pulse, and OBS output at `42a64e4`. The [receipt](../evidence/media-plane-20261115.md)
+binds decoded artifacts and negative/recovery observations to that source.
+This corrects S16's missing production-only integration claim without closing
+the broader risks.
+
+- R04 remains open. Frozen and backlogged frames retain increasing bytes and
+  Running status. Independent checks reject them, but no live freshness policy
+  is enforced. Next, drive a decode-aware live-health policy with the same bad
+  sources and require observable fail-closed behavior. Do not infer freshness
+  from the new startup geometry check.
+- Capture-Agent and SSH publication, network congestion and clock correspondence
+  across hosts remain unverified. Next, use generated capture ingress with both
+  actual controllers and a local SSH topology, then impair actual media traffic
+  without delaying RTMP control handshakes. Require freshly decoded output and
+  both controller statuses. The current queue precedes RTMP ingress.
+- Microphone alignment, intended-VAD speech quality, and long-run drift remain
+  unknown. Next, inject an independently timestamped microphone marker at the
+  intended VAD setting and compare decoded PCM with video markers. The current
+  harmonic source uses VAD threshold zero and establishes routing only.
+- R02 and R05 remain open for deployment containment and ingress. R09 is narrowed
+  by a regression retaining Stopping after unconfirmed OBS finalization, not
+  closed for durable recovery, parser capacity, or kernel bounds. No physical,
+  GPU-performance, game, device-provenance, camera, or browser gate is closed.
+
+The initial software-mode attempt opened a GPU render node and failed. All
+accepted runs hide devices structurally. Retain that contrary observation;
+never promote a software setting into a device-isolation guarantee.
+
+AV01 supersedes the initial phase-fit timing claim; the corrected oracle proves
+sampled game transitions only. The final-source virtual run also observed an
+initial two-agent Prepare connection reset. Its cause is unknown; retain the
+failure even if the single permitted retry passes. Do not call it a fixed bug
+or a proven load-related flake. See E16 for final regression outcomes.

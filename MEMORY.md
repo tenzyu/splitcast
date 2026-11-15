@@ -1,6 +1,6 @@
 # SplitCast memory
 
-Updated 2026-11-14, Japan Standard Time. Scope: SplitCast decisions, failures, and evidence across the source monorepo and this standalone repository. This is a knowledge index, not deployment authorization.
+Updated 2026-11-15, Japan Standard Time. Scope: SplitCast decisions, failures, and evidence across the source monorepo and this standalone repository. This is a knowledge index, not deployment authorization.
 
 ## User instruction
 
@@ -15,7 +15,8 @@ Updated 2026-11-14, Japan Standard Time. Scope: SplitCast decisions, failures, a
 - The later S16/E12 virtual-software run starts at `aa86fe0` plus task changes. Its final extended verifier passes 124 ordinary tests and three separate local components. Two actual local agents exercise control and recovery with stand-in workers. Queue cancellation, unknown outcomes, connection ownership, and shutdown have new focused evidence. Ordinary Stop preemption, actual agent media integration, durable outcomes, browser ownership, and physical acceptance remain open. See [virtual system acceptance](docs/virtual-acceptance.md).
 - S18 preserved prior source at `7585308` and closes P0 for `d2205d0` on pinned `x86_64-linux`: hosted CI, signed GitHub Releases publication and a fresh signature-enforced no-build consumer all pass in run `43561723796`. The operator approved the three custom outputs and corresponding sources after GPL/FDK-AAC disclosure, plus merge and a verification prerelease, not deployment. Failures remain recorded, including unpublished draft `445034829`. Start with [current state](docs/memory/session-state.md), [download instructions](docs/binary-cache.md), and [the CI/cache evidence](docs/evidence/ci-nix-cache-20261114.md). Next is P1's actual agent media path; P2–P5 remain open.
 - No build, historical approval, or memory update authorizes host activation, privileges, external listeners, public streaming, or game changes.
-- S19/E15 tracks the unmerged PR #2 control-plane candidate on `review/urgent-control`, implementation `5125799`. It supersedes S16's ordinary Stop restriction only there, with expired-owner release and first-write remote-obligation fixes. [The review record](docs/evidence/urgent-control-review-20261114.md) distinguishes focused proof and final-head verification from ephemeral-observation, replay, parser-capacity, physical, and deployment limits.
+- S19/E15 records the then-unmerged PR #2 control-plane candidate on `review/urgent-control`, implementation `5125799`. S20 observes its merge in current main at `6349fd6`. [The review record](docs/evidence/urgent-control-review-20261114.md) retains its original scope and limitations.
+- S20/E16 verifies production-only generated media at `42a64e4`. Real Agent, MediaMTX, RNNoise/private Pulse, and OBS produce independently decoded local recordings. Eleven oracle tests, six cases, three real-recording A/V rejection controls, cleanup, and same-controller recovery pass. AV01 supersedes the invalid earlier phase-fit timing claim. [The media receipt](docs/evidence/media-plane-20261115.md) preserves failures and final regression outcomes. Live freshness enforcement, capture-Agent/SSH, network congestion, microphone alignment, and physical/deployment acceptance remain open. P1 is narrowed, not closed.
 
 ## Read by question
 
