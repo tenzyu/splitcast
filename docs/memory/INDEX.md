@@ -1,5 +1,7 @@
 # Memory index
 
+**Current main:** [S26/E21 reconciliation](../evidence/dreaming-main-20261117.md) (HEAD `ed7fe60`, CI run `44097472963` all four jobs passed). PRs #4–#9 are merged; PR #9's paused handoff is historical at this point. The PoC is still incomplete, and `poc-play` is local fixture playback only. The first actionable input remains an existing OAuth configuration path and selected Twitch channel or supported existing receiver output. Read the new reconciliation before the dated snapshots below.
+
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
 For cross-session consolidation and progressive retrieval, use the [Dreaming protocol](dreaming.md).
 This index is not a full-context preload.
