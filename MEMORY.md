@@ -15,16 +15,17 @@ Lightweight are goals, not measured results or adopted numeric targets.
 The current Agent refuses incomplete speech/EventSub. See D15, not an old
 recording-first recommendation, for the renewed product goal.
 
-PR #3 is published and under review. S20/E16's generated production-only pass at
+PR #3 was merged into main (merge `a5e7a22`, 2026-11-17). S20/E16's generated production-only pass at
 `42a64e4` retains its scope and AV01 correction; S22 separately records the new
 review fixes and gates. P1 is narrowed, not closed. Neither source publication,
-test success nor historical permission authorizes merge, deployment, capture,
+test success nor historical permission authorizes further merge, deployment, capture,
 private-host access, privilege changes, external listeners or public output.
 
 ## Read by question
 
 | Question | Page |
 | --- | --- |
+| How should agents consolidate and correct knowledge? | [Dreaming protocol](docs/memory/dreaming.md) |
 | Where does the next environment-gap session start? | **[Environment-gap entry](docs/memory/environment-gap.md)** |
 | Why SplitCast; what moves, what cannot move? | [PoC mission and boundaries](docs/memory/poc-mission.md) |
 | What was adopted or rejected, and why? | [Decisions](docs/memory/decisions.md) |
@@ -32,5 +33,7 @@ private-host access, privilege changes, external listeners or public output.
 | What remains unknown or unsafe to assume? | [Open risks](docs/memory/open-risks.md) |
 | How do new findings correct old knowledge? | [Update protocol](docs/memory/update-protocol.md) |
 | What changed on PR #3; what remains? | [Current state](docs/memory/session-state.md) and [review follow-up](docs/evidence/pr3-review-20261117.md) |
+
+At the 2026-11-17 snapshot, [README PR #5](https://github.com/tenzyu/splitcast/pull/5) and [Stop-ack test PR #6](https://github.com/tenzyu/splitcast/pull/6) are open. [CI run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405) failed a `no-default-features` Stop-ack test; recheck PR #6's latest CI before claiming a fix.
 
 Read [the Rust entrypoint](RUST_AGENT_ROOT.md) and [engineering policy](RUST_ENGINEERING_AGENTS.md) before nontrivial Rust work. Historical documents under `docs/history/source/` are evidence, not current operating instructions.
