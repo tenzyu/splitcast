@@ -1,11 +1,11 @@
 # Publish the standalone repository
 
-The initial status and creation recipe below belong to the extraction checkpoint. Local status now shows `origin/main`, but this planning pass did not query the live repository or authentication. Inspect the existing remote before executing any creation command. The current next-session procedure is [the CI/cache handoff](handoff/ci-nix-cache.md).
+The initial status and creation recipe below belong to the extraction checkpoint. Local status now shows `origin/main`, but this planning pass did not query the live repository or authentication. Inspect the existing remote before executing any creation command. The current next-session procedure is [the CI/cache handoff](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/handoff/ci-nix-cache.md).
 
 S18 subsequently confirmed the existing public `tenzyu/splitcast` repository and
 authenticated access. Do not run the repository-creation recipe against it.
 The operator approved signed GitHub Releases delivery with corresponding sources
-and an ordinary merge after validation. [The CI/cache record](evidence/ci-nix-cache-20261114.md)
+and an ordinary merge after validation. [The CI/cache record](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/evidence/ci-nix-cache-20261114.md)
 retains the exact approval scope and actual publication/consumption results.
 This does not authorize rewriting existing history or enabling a host service.
 

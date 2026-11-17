@@ -68,5 +68,5 @@ from a consumer does not roll back or activate a deployment.
 
 This is delivery evidence, not Production Ready status. The actual agent media
 path and the remaining [readiness gates](production-readiness.md) still need
-their own acceptance. [The complete record](evidence/ci-nix-cache-20261114.md)
+their own acceptance. [The complete record](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/evidence/ci-nix-cache-20261114.md)
 retains the failed attempts and exact tested identities.

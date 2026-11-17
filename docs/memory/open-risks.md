@@ -1,3 +1,11 @@
+---
+type: Risk Register
+title: open-risks
+description: Unclosed physical, media, control, distribution and deployment gates.
+status: draft
+sources:
+  - { id: primary, resource: ../evidence/poc-convergence-20261117.md }
+---
 # Open risks
 
 Recorded 2026-11-13. These are unresolved historical gates and extraction questions, not newly reproduced standalone defects. Evidence IDs resolve in [the register](evidence.md).
@@ -27,7 +35,7 @@ R01, R02, R05, and R07 retain their physical, deployment-containment, network-po
 
 ## 2026-11-14 delivery planning follow-up
 
-S17 does not close a runtime risk. [Production-readiness gates](../production-readiness.md) map the outstanding work to release evidence. [The next-session handoff](../handoff/ci-nix-cache.md) owns the immediate CI/cache task.
+S17 does not close a runtime risk. [Production-readiness gates](../production-readiness.md) map the outstanding work to release evidence. [The next-session handoff](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/handoff/ci-nix-cache.md) owns the immediate CI/cache task.
 
 - R11. The repaired source is uncommitted while HEAD remains `aa86fe0`. A hosted checkout or new worktree at HEAD alone would test an older artifact. Close with a deliberately reviewed commit and a hosted run for that exact source identity.
 - R12. Hosted CI, cold-runner Cargo/WASM preparation, current native/WASM Nix packages, cache publication authorization, and fresh-consumer substitution remain unverified. Close with hosted run and output identities, scoped credentials restricted to trusted revisions, and a no-fallback-build consumer result from the intended cache. Cache availability alone does not close R01 through R10.
@@ -177,3 +185,7 @@ removes the test's cancellation race and validates owner-specific completion
 separately. Until the exact amended head passes hosted CI, this remains an
 **unverified correction**, not proof that runtime cleanup is fully reliable.
 It does not close durable Stop observation, parser exhaustion or R02.
+
+## S26: merged-main disposition (later 2026-11-17)
+
+[PR #6](https://github.com/tenzyu/splitcast/pull/6) and [PR #9](https://github.com/tenzyu/splitcast/pull/9) are now merged at main `ed7fe60`. The earlier #6 proposal and PR #9 conflict entries above retain their dated scope. [Hosted CI run 44097472963](https://github.com/tenzyu/splitcast/actions/runs/44097472963) passes four jobs for this HEAD; the historical failing run `44089362405` remains failed, and this evidence **does not** close Stop completion/crash containment (R02/R09), real EventSub/return audio (R03), end-to-end media/freshness (R01/R04), host policy (R05), or gameplay non-regression. The current [S26 receipt](../evidence/dreaming-main-20261117.md) records what was actually inspected. No newly discovered runtime defect or physical remediation is claimed.

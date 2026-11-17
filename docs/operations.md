@@ -33,7 +33,7 @@ The verifier runs fmt, workspace/all-target check and Clippy, unit and integrati
 
 Hosted CI runs those checks on ephemeral runners. Signed GitHub Releases can
 provide the same pinned package outputs without builds. Follow the exact source,
-cache URL, keys and consumer result in [the CI/cache record](evidence/ci-nix-cache-20261114.md),
+cache URL, keys and consumer result in [the CI/cache record](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/evidence/ci-nix-cache-20261114.md),
 not a moving release tag. Publishing a cache never enables runtime or autostart.
 
 `nix develop -c cargo run -p splitcast-xtask -- verify-virtual` also runs the isolated private-audio, generated-recording, and loopback generated-transport tests. See [virtual system acceptance](virtual-acceptance.md) for the software contracts and separate physical gates. This command does not authorize real SSH, hardware capture, an existing OBS instance, or public streaming.

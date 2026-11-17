@@ -2,7 +2,7 @@
 
 Read `RUST_AGENT_ROOT.md`, then the relevant sections of `RUST_ENGINEERING_AGENTS.md` before implementation or review. These operator-supplied policies are normative.
 
-Read `MEMORY.md` and `docs/memory/INDEX.md` before resuming work. Read `docs/design-review.md` for the current semantic review and `docs/operations.md` before operational tests.
+Read the compact `MEMORY.md`, then `docs/memory/index.md` to select **only the relevant concept** before resuming work. Older material pruned from HEAD is recoverable via `archive/pre-dreaming-20261117`; never preload the archive or use it as current runtime instructions. Read `docs/design-review.md` for the current semantic review and `docs/operations.md` before operational tests.
 
 Use role names such as capture host and production host. Do not embed personal hostnames, home directories, credentials, or immutable local tool paths in runnable code or examples.
 
