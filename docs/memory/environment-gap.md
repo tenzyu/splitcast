@@ -1,7 +1,10 @@
 # Next session: environment-gap entry
 
-Updated 2026-11-17. **This is the single entry for the next PoC environment-gap
-session.** Read [the mission](poc-mission.md), then pull only the sources needed
+Updated 2026-11-17. **This is the entry for the completed S23 environment-gap
+session.** Continue from [S25's convergence checkpoint](../evidence/poc-convergence-20261117.md).
+The following discovery instructions retain their earlier scope, not a new
+prohibition against the operator's separately authorized S24 trials.
+Read [the mission](poc-mission.md), then pull only the sources needed
 for the question. Do not start from the old CI/cache or media-expansion task list.
 
 ## First establish the gap, without starting a new PoC here

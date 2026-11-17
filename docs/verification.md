@@ -1,5 +1,17 @@
 # Standalone verification
 
+The [convergence checkpoint](evidence/poc-convergence-20261117.md) records the
+latest ordinary pass at clean `3c2f913` and the earlier failed convergence run.
+Its scope is software verification. The first run's three reset failures remain
+unexplained and are not erased by a later pass at a changed source identity.
+
+The [2026-11-17 initial PoC checkpoint](evidence/poc-20261117.md) records the
+post-merge finite-playback changes and their actual local checks. Its ordinary
+verifier passes all eleven stages with 165 ordinary tests. That result does not
+establish real Twitch ingestion, capture-host playback, physical media offload,
+gameplay non-regression or deployment. Earlier entries below retain their dated
+source identity and scope.
+
 This record belongs to the extraction workspace, not to the historical source report. Source baseline is `3c8857353581424e5cca517d7ccf0db8de7514d4`. The standalone repository is initialized on `main`, without a remote. No GitHub operation, physical capture, privileged helper installation, service activation, or public publication has been performed.
 
 ## Executed local checks

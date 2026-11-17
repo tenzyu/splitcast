@@ -13,7 +13,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AUDIO_LIMIT: usize = 4 * 1024 * 1024;
+pub(crate) const AUDIO_LIMIT: usize = 4 * 1024 * 1024;
 const QUERY_LIMIT: usize = 256 * 1024;
 
 fn invalid(message: &str) -> io::Error {
@@ -50,59 +50,101 @@ fn origin(url: &str) -> io::Result<String> {
     }
     Ok(format!("http://127.0.0.1:{port}"))
 }
-fn wav(data: &[u8]) -> io::Result<()> {
-    if data.len() > AUDIO_LIMIT
-        || data.len() < 12
-        || &data[..4] != b"RIFF"
-        || &data[8..12] != b"WAVE"
-    {
-        return Err(invalid("invalid WAV"));
-    }
-    let u32at = |i: usize| u32::from_le_bytes(data[i..i + 4].try_into().unwrap()) as usize;
-    if u32at(4).checked_add(8) != Some(data.len()) {
-        return Err(invalid("invalid WAV length"));
-    }
-    let mut pos = 12;
-    let mut fmt = None;
-    let mut frames = None;
-    while pos + 8 <= data.len() {
-        let len = u32at(pos + 4);
-        let start = pos + 8;
-        let end = start
-            .checked_add(len)
-            .filter(|end| *end <= data.len())
-            .ok_or_else(|| invalid("truncated WAV"))?;
-        if &data[pos..pos + 4] == b"fmt " && len >= 16 {
-            let u16at = |i: usize| u16::from_le_bytes(data[i..i + 2].try_into().unwrap());
-            fmt = Some((
-                u16at(start),
-                u16at(start + 2),
-                u32at(start + 4),
-                u16at(start + 14),
-            ));
-        } else if &data[pos..pos + 4] == b"data" {
-            frames = Some(len);
+#[derive(Debug)]
+pub(crate) struct PcmWav<'a> {
+    pcm: &'a [u8],
+    channels: u16,
+    sample_rate: u32,
+    duration: Duration,
+}
+
+impl<'a> PcmWav<'a> {
+    pub(crate) fn parse(data: &'a [u8]) -> io::Result<Self> {
+        if data.len() > AUDIO_LIMIT
+            || data.len() < 12
+            || &data[..4] != b"RIFF"
+            || &data[8..12] != b"WAVE"
+        {
+            return Err(invalid("invalid WAV"));
         }
-        pos = end
-            .checked_add(len % 2)
-            .ok_or_else(|| invalid("invalid WAV"))?;
+        let u32at = |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        if (u32at(4) as usize).checked_add(8) != Some(data.len()) {
+            return Err(invalid("invalid WAV length"));
+        }
+        let mut pos = 12;
+        let mut fmt = None;
+        let mut pcm = None;
+        while pos + 8 <= data.len() {
+            let len = u32at(pos + 4) as usize;
+            let start = pos + 8;
+            let end = start
+                .checked_add(len)
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| invalid("truncated WAV"))?;
+            if &data[pos..pos + 4] == b"fmt " {
+                if fmt.is_some() || len < 16 {
+                    return Err(invalid("duplicate or truncated WAV format"));
+                }
+                let u16at = |i: usize| u16::from_le_bytes([data[i], data[i + 1]]);
+                fmt = Some((
+                    u16at(start),
+                    u16at(start + 2),
+                    u32at(start + 4),
+                    u32at(start + 8),
+                    u16at(start + 12),
+                    u16at(start + 14),
+                ));
+            } else if &data[pos..pos + 4] == b"data" {
+                if pcm.is_some() {
+                    return Err(invalid("duplicate WAV data"));
+                }
+                pcm = Some(&data[start..end]);
+            }
+            pos = end
+                .checked_add(len % 2)
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| invalid("invalid WAV"))?;
+        }
+        if pos != data.len() {
+            return Err(invalid("invalid WAV chunks"));
+        }
+        let (format, channels, rate, byte_rate, block_align, bits) =
+            fmt.ok_or_else(|| invalid("missing WAV format"))?;
+        let pcm = pcm.ok_or_else(|| invalid("missing WAV data"))?;
+        let len = pcm.len();
+        if format != 1
+            || !(1..=2).contains(&channels)
+            || !(8000..=48000).contains(&rate)
+            || bits != 16
+            || block_align != channels * 2
+            || byte_rate != rate * u32::from(block_align)
+            || len == 0
+            || len % (channels as usize * 2) != 0
+            || len / (channels as usize * 2) > rate as usize * 30
+        {
+            return Err(invalid("WAV must be bounded PCM16"));
+        }
+        let frames = len as u64 / u64::from(block_align);
+        Ok(Self {
+            pcm,
+            channels,
+            sample_rate: rate,
+            duration: Duration::from_nanos((frames * 1_000_000_000).div_ceil(u64::from(rate))),
+        })
     }
-    if pos != data.len() {
-        return Err(invalid("invalid WAV chunks"));
+
+    pub(crate) fn pcm(&self) -> &'a [u8] {
+        self.pcm
     }
-    let (format, channels, rate, bits) = fmt.ok_or_else(|| invalid("missing WAV format"))?;
-    let len = frames.ok_or_else(|| invalid("missing WAV data"))?;
-    if format != 1
-        || !(1..=2).contains(&channels)
-        || !(8000..=48000).contains(&rate)
-        || bits != 16
-        || len == 0
-        || len % (channels as usize * 2) != 0
-        || len / (channels as usize * 2) > rate * 30
-    {
-        return Err(invalid("WAV must be bounded PCM16"));
+    pub(crate) fn channels(&self) -> u16 {
+        self.channels
     }
-    Ok(())
+    pub(crate) fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    pub(crate) fn duration(&self) -> Duration {
+        self.duration
+    }
 }
 fn post(
     root: &str,
@@ -246,7 +288,7 @@ fn synthesize(
         cancel,
         deadline,
     )?;
-    wav(&audio)?;
+    PcmWav::parse(&audio)?;
     check_cancel(cancel, deadline)?;
     Ok(audio)
 }
@@ -672,6 +714,104 @@ mod tests {
         v
     }
     #[test]
+    fn strict_wav_rejects_duplicate_chunks_and_inconsistent_rates() {
+        let original = sample_wav();
+        let mut cases = Vec::new();
+        for (name, chunk) in [
+            ("duplicate fmt", &original[12..36]),
+            ("duplicate data", &original[36..]),
+        ] {
+            let mut bytes = original.clone();
+            bytes.extend_from_slice(chunk);
+            let length = (bytes.len() - 8) as u32;
+            bytes[4..8].copy_from_slice(&length.to_le_bytes());
+            cases.push((name, bytes));
+        }
+        let mut bytes = original.clone();
+        bytes[28..32].copy_from_slice(&1u32.to_le_bytes());
+        cases.push(("inconsistent byte rate", bytes));
+        let mut bytes = original;
+        bytes[32..34].copy_from_slice(&1u16.to_le_bytes());
+        cases.push(("inconsistent block alignment", bytes));
+        let accepted: Vec<_> = cases
+            .iter()
+            .filter_map(|(name, bytes)| PcmWav::parse(bytes).is_ok().then_some(*name))
+            .collect();
+        assert!(accepted.is_empty(), "invalid WAVs accepted: {accepted:?}");
+    }
+    #[test]
+    fn strict_wav_bounds_frames_format_and_chunk_padding() {
+        let original = sample_wav();
+        let mut cases = Vec::new();
+        for end in 0..original.len() {
+            cases.push(original[..end].to_vec());
+        }
+        for (offset, value) in [(20, 3u16), (22, 0), (22, 3), (34, 8), (32, 0)] {
+            let mut bytes = original.clone();
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+            cases.push(bytes);
+        }
+        for rate in [0u32, 7999, 48001, u32::MAX] {
+            let mut bytes = original.clone();
+            bytes[24..28].copy_from_slice(&rate.to_le_bytes());
+            cases.push(bytes);
+        }
+        for length in [0u32, 1, 16000 * 30 + 2] {
+            let mut bytes = original[..44].to_vec();
+            bytes[40..44].copy_from_slice(&length.to_le_bytes());
+            bytes.resize(44 + length as usize, 0);
+            let total = (bytes.len() - 8) as u32;
+            bytes[4..8].copy_from_slice(&total.to_le_bytes());
+            cases.push(bytes);
+        }
+        let mut truncated_chunk = original.clone();
+        truncated_chunk[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
+        cases.push(truncated_chunk);
+        let mut missing_padding = original.clone();
+        missing_padding.extend_from_slice(b"JUNK\x01\x00\x00\x00x");
+        let length = (missing_padding.len() - 8) as u32;
+        missing_padding[4..8].copy_from_slice(&length.to_le_bytes());
+        cases.push(missing_padding);
+        let mut leftover = original.clone();
+        leftover.push(0);
+        let length = (leftover.len() - 8) as u32;
+        leftover[4..8].copy_from_slice(&length.to_le_bytes());
+        cases.push(leftover);
+        cases.push(vec![0; AUDIO_LIMIT + 1]);
+        for (index, bytes) in cases.iter().enumerate() {
+            assert!(
+                PcmWav::parse(bytes).is_err(),
+                "accepted invalid WAV case {index}"
+            );
+        }
+
+        for channels in [1u16, 2] {
+            for rate in [8000u32, 48000] {
+                let mut bytes = original[..44].to_vec();
+                let alignment = channels * 2;
+                let byte_rate = rate * u32::from(alignment);
+                // Both bounds apply: 30s at 48k stereo exceeds the 4 MiB cap.
+                let seconds = 30.min((AUDIO_LIMIT as u32 - 54) / byte_rate);
+                let length = byte_rate * seconds;
+                bytes[22..24].copy_from_slice(&channels.to_le_bytes());
+                bytes[24..28].copy_from_slice(&rate.to_le_bytes());
+                bytes[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+                bytes[32..34].copy_from_slice(&alignment.to_le_bytes());
+                bytes[40..44].copy_from_slice(&length.to_le_bytes());
+                bytes.resize(44 + length as usize, 0);
+                // Unknown chunks, including odd-length padded chunks, stay valid.
+                bytes.extend_from_slice(b"JUNK\x01\x00\x00\x00x\x00");
+                let total = (bytes.len() - 8) as u32;
+                bytes[4..8].copy_from_slice(&total.to_le_bytes());
+                let wav = PcmWav::parse(&bytes).unwrap();
+                assert_eq!(wav.pcm().len(), length as usize);
+                assert_eq!(wav.channels(), channels);
+                assert_eq!(wav.sample_rate(), rate);
+                assert_eq!(wav.duration(), Duration::from_secs(u64::from(seconds)));
+            }
+        }
+    }
+    #[test]
     fn cancellation_rejects_delayed_synthesis_without_creating_audio() {
         for action in ["clear", "skip"] {
             cancel_delayed_synthesis(action);
@@ -914,7 +1054,7 @@ mod tests {
             assert!(origin(url).is_err(), "{url}");
         }
         assert!(origin("http://127.0.0.1:50021/").is_ok());
-        assert!(wav(&sample_wav()).is_ok());
-        assert!(wav(b"RIFFxxxxWAVE").is_err());
+        assert!(PcmWav::parse(&sample_wav()).is_ok());
+        assert!(PcmWav::parse(b"RIFFxxxxWAVE").is_err());
     }
 }

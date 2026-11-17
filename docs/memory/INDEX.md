@@ -4,7 +4,23 @@ Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidenc
 For cross-session consolidation and progressive retrieval, use the [Dreaming protocol](dreaming.md).
 This index is not a full-context preload.
 
-**Next environment-gap session: [one entry](environment-gap.md).**
+**Paused session entry: [PoC handoff](../handoff/poc-20261117.md).**
+The operator authorized checkpoint publication and PR #9 on
+`handoff/poc-20261117`, then requested conflict resolution against current main.
+PR merge and deployment remain separate. Private evidence stays Git-ignored.
+
+Current checkpoint: [PoC convergence](../evidence/poc-convergence-20261117.md).
+S25 records the local fixture commit, receipt reconciliation, approved Twitch
+operations, missing account inputs and concrete capture dependencies. No real
+Twitch event or physical offload is accepted. Start with the channel and existing
+OAuth path, not another request for already-approved WSS/subscription permission.
+
+Previous implementation checkpoint: [initial PoC](../evidence/poc-20261117.md).
+S23 completed private readiness discovery and confirmed PR #3 merge. S24 records
+the operator's implementation instruction, finite trial limits and partial
+evidence. It does not establish PoC completion or authorize deployment.
+
+The preceding environment-gap session starts at [this entry](environment-gap.md).
 Read [the PoC mission](poc-mission.md) for game-first offload, required independent
 audio return and the thin-integration boundary. S21 renews the user goal; S22's
 [PR #3 follow-up](../evidence/pr3-review-20261117.md) records review corrections.

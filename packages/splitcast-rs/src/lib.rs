@@ -6,6 +6,7 @@ pub mod http;
 pub mod lifecycle;
 pub mod media;
 pub mod obs;
+pub mod poc_speech;
 pub mod process;
 pub mod state;
 pub mod tts;
