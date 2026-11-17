@@ -129,7 +129,7 @@ Fresh E07–E10 now replace the extraction-pass checkpoint's pending local verif
 - Service recommendation: use an approved Cachix account initially unless the operator prefers an existing Attic or other cache. The account, destination, public/private policy, public signing key, and write credential are not configured or authorized by this recommendation.
 - Rejected: secret-bearing PR execution, untrusted cache writes, caching all flake outputs by default, treating a warm store as consumption evidence, treating cached binaries as production acceptance, or waiting for physical performance before continuing unrelated software work.
 - Product boundary: a supported release needs declared features and environments. Recording-first scope is a proposal, not an operator decision. Unknown outcomes need honest recovery semantics; a general durable operation registry is not automatically required. P0 through P4 in the readiness document remain software work, while P5 requires separate target-environment authorization.
-- Evidence: S17, [the handoff](../handoff/ci-nix-cache.md), [readiness gates](../production-readiness.md), and [working-state capsule](session-state.md).
+- Evidence: S17, [the handoff](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/handoff/ci-nix-cache.md), [readiness gates](../production-readiness.md), and [working-state capsule](session-state.md).
 
 ## D12: Deliver complete Nix identities through signed GitHub Releases
 

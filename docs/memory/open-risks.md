@@ -35,7 +35,7 @@ R01, R02, R05, and R07 retain their physical, deployment-containment, network-po
 
 ## 2026-11-14 delivery planning follow-up
 
-S17 does not close a runtime risk. [Production-readiness gates](../production-readiness.md) map the outstanding work to release evidence. [The next-session handoff](../handoff/ci-nix-cache.md) owns the immediate CI/cache task.
+S17 does not close a runtime risk. [Production-readiness gates](../production-readiness.md) map the outstanding work to release evidence. [The next-session handoff](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/handoff/ci-nix-cache.md) owns the immediate CI/cache task.
 
 - R11. The repaired source is uncommitted while HEAD remains `aa86fe0`. A hosted checkout or new worktree at HEAD alone would test an older artifact. Close with a deliberately reviewed commit and a hosted run for that exact source identity.
 - R12. Hosted CI, cold-runner Cargo/WASM preparation, current native/WASM Nix packages, cache publication authorization, and fresh-consumer substitution remain unverified. Close with hosted run and output identities, scoped credentials restricted to trusted revisions, and a no-fallback-build consumer result from the intended cache. Cache availability alone does not close R01 through R10.
