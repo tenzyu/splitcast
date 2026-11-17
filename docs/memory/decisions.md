@@ -14,6 +14,10 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 
 ## D02: One Rust command and validation contract serves every view
 
+Scope clarification: [D15](#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return)
+retains this historical consistency rule, not an obligation to expand clients or
+control infrastructure before the PoC's resource and return-path gaps are known.
+
 - Date: 2026-11-13. Adopted historical implementation and operator requirement. Confidence: high.
 - Goal: prevent the CLI, TUI, browser, and configuration formats from granting different capabilities.
 - Adopted: TOML-first configuration, transitional JSON through the same native validator, portable typed Rust commands, Rust/WASM browser logic, and generated JavaScript loader glue only. A future desktop client uses GPUI.
@@ -53,6 +57,10 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 - Sources: S05, S06 rollback and completion gates, S07 fail-closed decision, S10 migration and review rows. Related risk: R01.
 
 ## D06: Media, security, and performance require separate evidence
+
+See [D15](#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return)
+for the renewed three-budget mission; no prior synthetic envelope becomes a
+gameplay or returned-audio latency target.
 
 - Date: 2026-11-05 through 2026-11-13. Adopted acceptance policy. Confidence: high.
 - Goal: avoid calling a working process, socket, or synthetic file an accepted stream.
@@ -152,3 +160,55 @@ S20 inspected actual main `2a774d9`, whose history contains PR #2 merge `6349fd6
 ### AV01 correction, 2026-11-15 JST
 
 D14/S20's initial `0accf63` phase-fit timing acceptance was falsified: an 800 ms delay could fit inside its claimed 500 ms budget. Intermediate repeated codes, hidden PCM timestamp gaps and incorrect opening identity were also disproved. `42a64e4` adopts unique source-second audio identities, decoded sample/PTS continuity, sampled transition bounds with uncertainty, and bounded stream endpoints. Partial EOF markers outside joint observation are reported as unmeasured. Eleven pure tests, six real cases and three successfully generated recording mutations pass in E16's corrected receipt. The claim is sampled game A/V timing only; microphone alignment and continuous synchronization remain unknown. Human review is pending, not approved.
+
+### D14 scope and diagnostic correction, 2026-11-17
+
+S21's review identifies additional oracle gaps; see D16. The earlier passes keep
+their source scope, not a claim that those gaps were checked. P2-04 restores
+worker stderr to null rather than unconditionally inheriting it into production
+logs. Original service failures informed S20's repairs; no actual secret leakage
+was established. The fixture's synthetic worker diagnostics are explicitly
+redirected inside its private test directories. Production diagnostic design
+remains separate. D14 selected an acceptance fixture, not the optimal product
+architecture; D15 makes that distinction explicit.
+
+## D15: Recenter the PoC on gameplay offload and independent audio return
+
+- Date: 2026-11-17. Current user requirement, S21. Not implementation acceptance.
+- Goal: protect capture-host osu! Input/Audio/Update/Draw/display while moving
+  production work away; independently return production-computed speech/audio
+  to capture-host playback. Minimize shared CPU/GPU/memory/thermal/power and
+  scheduling interference; streaming failure must remain downstream of gameplay.
+- Adopted knowledge correction: [the mission](poc-mission.md) and
+  [environment-gap handoff](environment-gap.md) now lead the next session.
+  Reuse software and keep SplitCast thin. Distinguish infrequent control from
+  the media hot path; prove a specific bottleneck before duplicating infrastructure.
+- Supersedes: treating TTS as dispensable product scope because the current
+  candidate refuses it, or treating a recording-first release recommendation
+  (D11) as the user's adopted mission. D02's historical validation/view policy,
+  D06's evidence separation and D14's experimental route remain dated decisions,
+  not proof of an optimal transport or complete PoC.
+- Observation: `agent.rs::prepare` refuses TTS/EventSub/remote mixing;
+  `media.rs::tunnel` forwards control/RTMP/RTSP, not returned-audio playback.
+  GSR and OBS remain dependencies. S06 already distinguished synthesis from
+  delivery; E16 bypasses the capture side entirely.
+- Open: environment capability gaps; necessary local encoding work; return-path
+  isolation/expiry/playback contract; three independent acceptance budgets.
+  No TTS-first sequence, chosen protocol, concrete numeric target or new PoC is
+  authorized or accepted. No private deployment details belong in public docs.
+
+## D16: Judge cadence, audio coverage and fixture health from observations
+
+- Date: 2026-11-17. S21 review follow-up, implementation/evidence S22.
+- Counterexamples: nominal 30 fps and 270 frames can describe a 25%-drop VFR file;
+  exact 4,800/9,600-sample PCM lengths lose one complete window; 35 missing mic
+  windows of 118 still pass 70% presence. Receipt-only feeder errors do not
+  establish healthy ingress. The original Prepare reset has no established cause.
+- Adopted: decoded PTS density/local counts/gaps over a declared steady prefix;
+  every complete 100 ms PCM window, partial tail explicitly unclassified;
+  consecutive-absence checks; unexpected source errors/exits fail, with explicit
+  fault/Stop boundaries; bounded reset reproduction with private per-agent traces.
+- Verification and residual limits: [the review follow-up](../evidence/pr3-review-20261117.md)
+  records controls, source identities and commands. Synthetic VAD-zero tones are
+  not speech-quality or microphone-alignment proof. No live freshness enforcement,
+  new transport, broader hardening or speculative reset fix is introduced.

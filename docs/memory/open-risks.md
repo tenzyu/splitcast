@@ -84,3 +84,37 @@ sampled game transitions only. The final-source virtual run also observed an
 initial two-agent Prepare connection reset. Its cause is unknown; retain the
 failure even if the single permitted retry passes. Do not call it a fixed bug
 or a proven load-related flake. See E16 for final regression outcomes.
+
+## 2026-11-17 review and mission correction
+
+S21/S22 and [D15/D16](decisions.md) distinguish the renewed mission from current
+implementation. Read [the environment-gap entry](environment-gap.md) next; the
+older next-experiment lists above remain proposals in their dated scope.
+
+- R03 includes an independent **required** production-to-capture speech/other
+  audio return path, not just optional TTS polish. `agent.rs::prepare` refuses
+  speech/EventSub/remote mixing; synthesis component tests are not delivery or
+  playback evidence. Define return-path failure isolation and latency separately
+  from game interference and media freshness. No protocol/order/number approved.
+- R01/R04 remain open despite the [repaired acceptance oracle](../evidence/pr3-review-20261117.md).
+  The new gates test decoded cadence, complete-window coverage, consecutive
+  absence and source health; they do not add capture-Agent/SSH, network
+  congestion, live freshness enforcement, physical audio or gameplay results.
+- The original Prepare reset did not recur in twenty focused no-default-feature
+  attempts or the implementation-head full verifiers. Both agents' traces,
+  worker logs and successful exits are preserved. Cause remains unknown; added
+  diagnostics and different concurrency can alter observation. No speculative
+  fix or reliability guarantee. On recurrence, preserve those same diagnostics
+  and isolate the first demonstrated boundary before editing product code.
+- Worker stderr no longer unconditionally enters production logs. No actual
+  secret leak was confirmed. Suppression reduces raw diagnostics; a future
+  explicit private/bounded/redacted policy remains open rather than expanding
+  the logging boundary under an acceptance-test rationale.
+- Resource minimization and an optimal transport remain unverified. GSR still
+  acquires/encodes on capture host; offloading OBS does not eliminate GPU/memory,
+  thermal/power or scheduling interference. Inventory/reuse existing capabilities
+  before custom hot paths or more distributed control. No new PoC in this PR.
+
+The original human review remains pending, including the quota-limited review
+that returned no verdict. Publication/CI/test success does not authorize merge,
+deployment or private-host/device operations. Runtime/autostart gates unchanged.

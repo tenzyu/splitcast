@@ -122,3 +122,26 @@ S20/E16 tests corrected implementation `42a64e41990eb3a411dcd68e3412ccceac574112
 The first baseline was red on ignored direnv symlinks, the first unsandboxed media attempt failed device isolation, and the first full real-media matrix was red. They remain recorded rather than rewritten as passes. Later documentation commits preserve proof for the tested implementation; they are not additional runtime executions.
 
 No capture-Agent/SSH, actual network delay, live freshness enforcement, microphone alignment, default-VAD speech quality, physical capture, game-performance, deployment, fresh Nix package/consumer build, advisory scan, Miri, fuzzing, or alternate-architecture result is claimed. P1 is narrowed, not closed. Runtime and autostart gates remain disabled.
+
+## 2026-11-17 PR #3 review follow-up
+
+Implementation `fb632bf245b7e666ce9330b25c907c80d59496cc` has separate evidence
+in [S22/E17](evidence/pr3-review-20261117.md), including the old oracle accepting
+the same real VFR/dropout files now rejected, complete PCM-window boundaries,
+restored null worker stderr, enforced source health, and twenty bounded reset
+attempts. A failed VFR-fixture command and its one correction remain recorded.
+
+- `nix develop --no-write-lock-file .#media-test -c cargo run -p splitcast-xtask -- verify-media`:
+  exit 0, `20261117T083058Z-ApaTam5y`, sixteen oracle tests, six cases and six
+  recording controls, cleanup and same-controller recovery PASS.
+- `cargo run -p splitcast-xtask -- verify`: exit 0 in the existing pinned default
+  Nix/direnv shell, run `1794904247771515533`, eleven stages PASS.
+- `cargo run -p splitcast-xtask -- verify-virtual`: exit 0 in that same shell,
+  run `1794904349298835682`, fourteen stages PASS. 156 ordinary tests per feature
+  selection; three additional one-test opt-ins are separate. No reset recurred.
+
+These are implementation-head results; final documentation-bearing HEAD's three
+commands and exact receipts are published separately in
+[PR #3](https://github.com/tenzyu/splitcast/pull/3). The source manifest excludes
+documentation, not executable inputs. No historical result is relabeled and no
+new physical, speech-return, delivery or deployment gate is closed.

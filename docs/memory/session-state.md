@@ -1,8 +1,34 @@
 # Current SplitCast working state
 
-Updated 2026-11-15 JST. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
+Updated 2026-11-17. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
 
 ## Goal and next task
+
+The current goal is [gameplay-first offload plus independent audio return](poc-mission.md)
+(S21/D15), not expansion into a general distributed app. **The next environment-gap
+session starts at [this entry](environment-gap.md).** No new PoC or host work is
+authorized here. The Agent's TTS/EventSub refusal is a gap against that mission,
+not evidence that the return path is no longer required.
+
+PR #3 is open on `acceptance/real-media-plane`, originally published at `8486e81`
+against `2a774d9`. The [2026-11-17 follow-up](../evidence/pr3-review-20261117.md)
+tracks seven findings, current oracle fixes, bounded reset reproduction and
+final-HEAD commands. Human review is separate and pending. No merge/deploy.
+
+S22 implementation `fb632bf` passes all three gates: media run
+`20261117T083058Z-ApaTam5y` (16 units, six cases, six recording controls and
+recovery), ordinary run `1794904247771515533` (11 stages), virtual run
+`1794904349298835682` (14 stages, 156 ordinary tests per feature selection and
+three separate local opt-ins). Twenty focused reset attempts pass; cause remains
+unknown. The first VFR negative fixture failed to generate, was corrected once,
+then all six controls ran and rejected correctly. Final documentation-bearing
+HEAD gets its own all-three-gate receipt in PR #3; do not promote these
+implementation-head runs into a new-HEAD result.
+
+## Preserved 2026-11-15 checkpoint (S20)
+
+The following next-work recommendations are historical S20 proposals, not the
+new session's assignment or an approved implementation sequence.
 
 AV01 is corrected and tested at `42a64e4`: unique source-second audio, decoded PTS continuity, sampled transition uncertainty, boundary identity and stream endpoints replace the falsified `0accf63` phase-fit claim. Eleven pure tests, six real-media cases, and all three generated recording mutations pass. Partial EOF markers outside joint observation are explicitly unmeasured, not fitted away. Human review remains pending after the last reviewer returned no verdict due to provider quota.
 

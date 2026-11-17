@@ -2,6 +2,11 @@
 
 Recorded 2026-11-15 JST. Run-directory timestamps use UTC on 2026-11-14 and 2026-11-15. S20/E16 covers the generated production-only profile, not physical capture, capture-Agent publication, SSH, deployment, or a performance benchmark.
 
+2026-11-17 follow-up: [S22/E17](pr3-review-20261117.md) preserves this receipt
+while correcting further cadence/audio/source-health acceptance holes. These
+historical passes did not test those new requirements. The original reset still
+has no established cause after a bounded 20-attempt diagnostic probe.
+
 ## Timing correction AV01
 
 The initial `0accf63` runs below passed their then-current assertions, but their phase-fit A/V claim is superseded. A pure probe demonstrated that 800 ms of delay could be accepted as a 500 ms fit. Review exposed repeated windows in an intermediate audio code, hidden audio PTS gaps, and unchecked opening audio identity. Correction `67720ca71c6f8026854024b56a9e4d2ee403370a` uses unique source-second frequencies, cumulative sample/PTS validation, explicit transition uncertainty, and identity checks including both boundaries. It does not promise continuous per-sample synchronization.
