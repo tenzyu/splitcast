@@ -1,5 +1,18 @@
 # SplitCast memory
 
+## 2026-11-17 main reconciliation (S26 / E21)
+
+**Authority:** GitHub's `main` ref `ed7fe60e8efd0dea454346b13f38a680096fb60e`, repository tree and the four hosted jobs in [CI run 44097472963](https://github.com/tenzyu/splitcast/actions/runs/44097472963). This is later than the paused S25/PR #9 handoff. Read [the S26 Dreaming receipt](docs/evidence/dreaming-main-20261117.md) for narrow claims and limits.
+
+- [PR #4](https://github.com/tenzyu/splitcast/pull/4), [#5](https://github.com/tenzyu/splitcast/pull/5), [#6](https://github.com/tenzyu/splitcast/pull/6), [#7](https://github.com/tenzyu/splitcast/pull/7), [#8](https://github.com/tenzyu/splitcast/pull/8) and [#9](https://github.com/tenzyu/splitcast/pull/9) **are merged**. PR #9's merge commit is the current main HEAD. The earlier statements that #6 was open or #9 needed base-conflict resolution remain dated evidence, not live action items.
+- Current HEAD's hosted CI passed `verify`, `verify-virtual`, `Native and WASM packages`, and `Delivery scripts`. The earlier [failed run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405) remains failed historical evidence; the test-only #6 fix does not prove universal Stop cleanup.
+- `splitcast poc-play` exists in `packages/splitcast-rs/src/poc_speech.rs` and dispatches through `main.rs`. It validates an explicit fixture and launches one bounded local native player. Its JSON receipt explicitly says `provenance=local_fixture`, `completion_scope=native_player_process`, `listening=unverified`. It is **not** Twitch admission, cross-host transport or physical listening.
+- Current `agent.rs::prepare` continues to refuse enabled EventSub, TTS and remote mixing. The PoC is incomplete: account/channel inputs and event admission, authorized capture-host playback execution, GSR/helper and microphone input/worker route, and matched gameplay/media/return-path acceptance remain separate gaps. Existing WSS/subscription/Helix approval is not a missing permission and must not be requested again.
+- The manually triggered [release-cache run 44097570226](https://github.com/tenzyu/splitcast/actions/runs/44097570226) was **in progress at inspection**. Do not interpret it as a successful or failed publication. Existing signed-cache receipts retain their separate source identities.
+- This is **documentation-only** reconciliation. No application command, local verifier, Twitch API request, SSH worker, device capture, recording, branch merge, production deployment or release publication was performed by S26. Previous operational permissions remain scoped and do not follow from CI success.
+
+The canonical next work remains [the PoC handoff](docs/handoff/poc-20261117.md), as corrected by this section and S26. Historical environment-gap discovery, CI publication and merged-PR work are **not** the current starting task.
+
 Updated 2026-11-17. This is a short pull-based knowledge index, not deployment authorization. Earlier checkpoints remain in the dated decisions, evidence register and Git history (`8486e81` preserves the previous index).
 
 ## User instruction
