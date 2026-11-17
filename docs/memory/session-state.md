@@ -18,6 +18,8 @@ sources:
 | Capture | Read-only inventory identified GSR/helper absent and cached FFmpeg lacking Pulse input | Usable launch and KMS privilege, real game/mic media, physical performance |
 | Release | Earlier signed cache delivery and main hosted checks | Manual release run `44097570226` was still in progress at S26 inspection; do not presume its outcome |
 
+The 2026-11-18 fixture validation follow-up on branch `fix/poc-offline-acceptance` is recorded in [S27/E22](evidence.md). It covers chunk order at the player boundary. Live speech acceptance remains open.
+
 ## Next step and stop conditions
 
 Follow [PoC handoff](../handoff/poc-20261117.md) and [S25 convergence](../evidence/poc-convergence-20261117.md), corrected for already-merged PR #9 by [S26](../evidence/dreaming-main-20261117.md). Select existing channel and OAuth **path**, or existing receiver output; never request raw credentials. Production WSS/Helix/subscription was granted; no new OAuth, chat post or public stream. Capture SSH remains read-only; remote execution, installation and generation switch need independent approval. Do not restart closed CI/cache, PR-conflict or environment-gap tasks.
