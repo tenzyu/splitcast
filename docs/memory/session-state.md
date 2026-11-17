@@ -45,6 +45,16 @@ is a separate candidate; its CI success must be checked against the exact PR
 head before marking it fixed. Neither this documentation nor PR #6 changes
 service gates. See the [Dreaming ledger](dreaming.md#current-correction-ledger-2026-11-17).
 
+### Later merge-status reconciliation, 2026-11-17
+
+The earlier PR #5-open statement above is a dated checkpoint, superseded by
+[PR #5 merge `9ef4431`](https://github.com/tenzyu/splitcast/pull/5).
+[Dreaming PR #7](https://github.com/tenzyu/splitcast/pull/7) also merged
+at `1678a0c`. The original failed workflow run remains failed.
+[PR #6](https://github.com/tenzyu/splitcast/pull/6) is the separate,
+still-unmerged test-only candidate; `verify` and `verify-virtual` passed while
+the package build was pending at this observation. Do not infer a full green run.
+
 ## Preserved 2026-11-15 checkpoint (S20)
 
 The following next-work recommendations are historical S20 proposals, not the
