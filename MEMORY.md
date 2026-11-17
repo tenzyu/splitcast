@@ -15,7 +15,14 @@ Lightweight are goals, not measured results or adopted numeric targets.
 The current Agent refuses incomplete speech/EventSub. See D15, not an old
 recording-first recommendation, for the renewed product goal.
 
-PR #3 is published and under review. S20/E16's generated production-only pass at
+PR #3 is merged at `a5e7a22` on 2026-11-17. S23's private readiness investigation
+confirmed source inclusion, not deployment. The operator supplied the next PoC
+implementation instruction in S24. Start at [the PoC checkpoint](docs/evidence/poc-20261117.md)
+for current permission boundaries, partial implementation and operation-specific
+blockers. Real Twitch-triggered returned audio, game A/V and microphone offload
+remain required; camera is excluded. Baseline comes before proposed thresholds.
+
+The pre-merge checkpoint recorded PR #3 as under review. S20/E16's generated production-only pass at
 `42a64e4` retains its scope and AV01 correction; S22 separately records the new
 review fixes and gates. P1 is narrowed, not closed. Neither source publication,
 test success nor historical permission authorizes merge, deployment, capture,
@@ -25,6 +32,7 @@ private-host access, privilege changes, external listeners or public output.
 
 | Question | Page |
 | --- | --- |
+| What can the authorized initial PoC prove now, and what blocks it? | **[PoC checkpoint](docs/evidence/poc-20261117.md)** |
 | Where does the next environment-gap session start? | **[Environment-gap entry](docs/memory/environment-gap.md)** |
 | Why SplitCast; what moves, what cannot move? | [PoC mission and boundaries](docs/memory/poc-mission.md) |
 | What was adopted or rejected, and why? | [Decisions](docs/memory/decisions.md) |

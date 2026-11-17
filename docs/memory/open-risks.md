@@ -118,3 +118,25 @@ older next-experiment lists above remain proposals in their dated scope.
 The original human review remains pending, including the quota-limited review
 that returned no verdict. Publication/CI/test success does not authorize merge,
 deployment or private-host/device operations. Runtime/autostart gates unchanged.
+
+## 2026-11-17 post-merge initial PoC follow-up
+
+S23 confirms PR #3 merged at `a5e7a22`; the earlier pending-merge wording keeps
+its pre-merge scope. S24's [PoC checkpoint](../evidence/poc-20261117.md) records
+the new operator instruction and partial evidence, not deployment permission.
+
+- R03 still requires real Twitch-event ingestion, production synthesis, returned
+  audio and capture playback. A local fixture command or fixed-text engine probe
+  does not close it. No approved usable receiver was found in the inspected scope.
+- R01 remains open. Read-only live capture inventory sees the working game/DSO
+  condition, but the expected KMS helper is absent and the capture execution route
+  is not authorized by read-only SSH. No silent portal/renderer or audio fallback.
+- R04 remains open. Eight OFF metadata samples lack a fixed input workload and
+  all-frame telemetry; no p99, media freshness, TTS latency or ON comparison follows.
+- The existing media profile retains recordings and includes overlong cases.
+  Do not run it unchanged under S24's temporary-only, per-recording 30-second,
+  aggregate 500-MB, inspect-then-delete contract. A new finite trial must enforce
+  limits and release its owned resources before deleting only its own media.
+- Readiness S23's audio metadata clients socket-activated inactive shared audio
+  services. S24 remote metadata checks service state before connecting and never
+  treats shared services as probe-owned. Preserve the earlier side effect.

@@ -2,7 +2,12 @@
 
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
 
-**Next environment-gap session: [one entry](environment-gap.md).**
+**Current implementation checkpoint: [initial PoC](../evidence/poc-20261117.md).**
+S23 completed private readiness discovery and confirmed PR #3 merge. S24 records
+the operator's implementation instruction, finite trial limits and partial
+evidence. It does not establish PoC completion or authorize deployment.
+
+The preceding environment-gap session starts at [this entry](environment-gap.md).
 Read [the PoC mission](poc-mission.md) for game-first offload, required independent
 audio return and the thin-integration boundary. S21 renews the user goal; S22's
 [PR #3 follow-up](../evidence/pr3-review-20261117.md) records review corrections.

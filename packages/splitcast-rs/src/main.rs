@@ -42,7 +42,7 @@ impl Drop for Signals {
         }
     }
 }
-fn serve(cfg: config::Config) -> io::Result<()> {
+fn with_shutdown(run: impl FnOnce(Arc<AtomicBool>) -> io::Result<()>) -> io::Result<()> {
     let _signals = Signals::install()?;
     let shutdown = Arc::new(AtomicBool::new(false));
     std::thread::scope(|scope| {
@@ -63,12 +63,43 @@ fn serve(cfg: config::Config) -> io::Result<()> {
             }
         }
         let cancel = CancelOnExit(Arc::clone(&shutdown));
-        let result = agent::serve(cfg, shutdown);
+        let result = run(shutdown);
         drop(cancel);
         bridge
             .join()
             .map_err(|_| io::Error::other("signal bridge panicked"))?;
         result
+    })
+}
+
+fn serve(cfg: config::Config) -> io::Result<()> {
+    with_shutdown(|shutdown| agent::serve(cfg, shutdown))
+}
+
+struct PlaybackCli {
+    input: PathBuf,
+    target: String,
+}
+
+fn parse_playback(args: &[String]) -> io::Result<PlaybackCli> {
+    let mut input = None;
+    let mut target = None;
+    for pair in args.chunks(2) {
+        if pair.len() != 2 || pair[1].is_empty() {
+            return Err(invalid(
+                "usage: splitcast poc-play --input FILE.wav --target PIPEWIRE_NODE",
+            ));
+        }
+        match pair[0].as_str() {
+            "--input" if input.is_none() => input = Some(PathBuf::from(&pair[1])),
+            "--target" if target.is_none() => target = Some(pair[1].clone()),
+            _ => return Err(invalid("unknown or repeated poc-play option")),
+        }
+    }
+    Ok(PlaybackCli {
+        input: input.ok_or_else(|| invalid("poc-play requires --input FILE.wav"))?,
+        target: target
+            .ok_or_else(|| invalid("poc-play requires an explicit --target PIPEWIRE_NODE"))?,
     })
 }
 
@@ -218,6 +249,16 @@ fn run() -> io::Result<()> {
         libc::umask(0o077);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("poc-play") {
+        let cli = parse_playback(&args[1..])?;
+        return with_shutdown(|shutdown| {
+            let receipt =
+                splitcast_rs_core::poc_speech::play_fixture(&cli.input, &cli.target, shutdown)
+                    .map_err(io::Error::other)?;
+            println!("{}", receipt.to_json());
+            Ok(())
+        });
+    }
     if args == ["selfcheck"] {
         let mut session = Session::new(Role::Production);
         session
@@ -285,6 +326,47 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixture_playback_requires_both_selections_and_rejects_extra_options() {
+        for args in [
+            vec![],
+            vec!["--input", "fixture.wav"],
+            vec!["--target", "headphones"],
+            vec!["--input", "fixture.wav", "--target"],
+            vec!["--input", "fixture.wav", "--target", ""],
+            vec![
+                "--input",
+                "fixture.wav",
+                "--target",
+                "headphones",
+                "--target",
+                "other",
+            ],
+            vec![
+                "--input",
+                "fixture.wav",
+                "--target",
+                "headphones",
+                "--output",
+                "twitch",
+            ],
+            vec![
+                "--input",
+                "fixture.wav",
+                "--target",
+                "headphones",
+                "--config",
+                "x",
+            ],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+            assert!(parse_playback(&args).is_err(), "accepted {args:?}");
+        }
+        let args = ["--target", "headphones", "--input", "a file.wav"].map(str::to_owned);
+        let cli = parse_playback(&args).unwrap();
+        assert_eq!(cli.input, PathBuf::from("a file.wav"));
+        assert_eq!(cli.target, "headphones");
+    }
     #[test]
     fn cli_rejects_ignored_options() {
         for args in [

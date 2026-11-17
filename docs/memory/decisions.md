@@ -211,4 +211,26 @@ architecture; D15 makes that distinction explicit.
 - Verification and residual limits: [the review follow-up](../evidence/pr3-review-20261117.md)
   records controls, source identities and commands. Synthetic VAD-zero tones are
   not speech-quality or microphone-alignment proof. No live freshness enforcement,
-  new transport, broader hardening or speculative reset fix is introduced.
+   new transport, broader hardening or speculative reset fix is introduced.
+
+## D17: Verify finite speech playback before wiring a delivery service
+
+- Date: 2026-11-17. S24 implementation decision, not complete PoC acceptance.
+- The operator requires game video, game-only audio, microphone offload and real
+  Twitch-triggered returned TTS. Camera is excluded. Baseline precedes proposed
+  performance limits. Temporary trials have permission distinct from deployment.
+- Adopted: one explicit fixture playback operation reuses native `pw-play` and
+  the existing process owner. Shared strict PCM validation happens before spawn;
+  raw stdin avoids a second WAV cache and playback-file deletion state. Player
+  completion is not physical listening. Ordinary Agent refusals remain intact.
+- Rejected: a new Agent WAV endpoint/claim service, a second synthesizer or media
+  stack, removing refusals to represent unfinished delivery, and calling local
+  test text a real Twitch event. Future transport APIs are not added as stubs.
+- Authority boundary: read-only capture SSH does not authorize remote worker
+  execution. Missing capture helper rights do not authorize provisioning. A new
+  Twitch auth/subscription operation remains separately gated. Safe independent
+  work continues while those operations are blocked.
+- Evidence and limits: [S24 checkpoint](../evidence/poc-20261117.md). OFF Direct
+  Scanout samples are not controlled all-frame baseline data. Generated hardware
+  codec execution and real local engine synthesis are separate from physical
+  capture, microphone routing, event ingestion, returned listening and integration.

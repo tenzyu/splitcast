@@ -2,6 +2,16 @@
 
 Updated 2026-11-17. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
 
+## Post-merge implementation checkpoint
+
+PR #3 is merged at `a5e7a22`. S23's private readiness handoff and S24's new
+operator instruction supersede the earlier pending-merge/next-discovery wording
+below only for their stated scopes. Start at [the initial PoC checkpoint](../evidence/poc-20261117.md).
+It records partial local playback work and independent GPU/engine evidence,
+read-only capture inventory, finite recording limits, and exact remaining gates.
+No real Twitch-triggered return, physical offload or controlled non-regression
+result is claimed. New work remains uncommitted and unpublished.
+
 ## Goal and next task
 
 The current goal is [gameplay-first offload plus independent audio return](poc-mission.md)
