@@ -189,3 +189,5 @@ It does not close durable Stop observation, parser exhaustion or R02.
 ## S26: merged-main disposition (later 2026-11-17)
 
 [PR #6](https://github.com/tenzyu/splitcast/pull/6) and [PR #9](https://github.com/tenzyu/splitcast/pull/9) are now merged at main `ed7fe60`. The earlier #6 proposal and PR #9 conflict entries above retain their dated scope. [Hosted CI run 44097472963](https://github.com/tenzyu/splitcast/actions/runs/44097472963) passes four jobs for this HEAD; the historical failing run `44089362405` remains failed, and this evidence **does not** close Stop completion/crash containment (R02/R09), real EventSub/return audio (R03), end-to-end media/freshness (R01/R04), host policy (R05), or gameplay non-regression. The current [S26 receipt](../evidence/dreaming-main-20261117.md) records what was actually inspected. No newly discovered runtime defect or physical remediation is claimed.
+
+**R03 update, 2026-11-18 JST.** [S28/E23](../evidence/audio-return.md) covers the prepared software return, replay fencing and selected private sink. Live chat, real hardware, physical listening, latency and crash containment still require their own evidence.

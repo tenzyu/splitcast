@@ -198,7 +198,9 @@ impl std::fmt::Display for HelperCleanupError {
     }
 }
 impl std::error::Error for HelperCleanupError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
 }
 pub(crate) fn run_operation(
     program: &str,
@@ -275,11 +277,13 @@ pub(crate) fn run_operation(
             thread::sleep(TICK);
         }
     })();
-    process.stop(if result.is_ok() {
-        Duration::ZERO
-    } else {
-        Duration::from_millis(50)
-    }).map_err(|error| io::Error::new(error.kind(), HelperCleanupError(error)))?;
+    process
+        .stop(if result.is_ok() {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(50)
+        })
+        .map_err(|error| io::Error::new(error.kind(), HelperCleanupError(error)))?;
     result
 }
 

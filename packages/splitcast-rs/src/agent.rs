@@ -499,7 +499,10 @@ impl Agent {
         if let Some(receiver) = &mut self.speech_receiver {
             match receiver.stop() {
                 Ok(()) => self.speech_receiver = None,
-                Err(error) => { failed = true; self.warn(&error.to_string()); }
+                Err(error) => {
+                    failed = true;
+                    self.warn(&error.to_string());
+                }
             }
         }
         if self.cfg.role == "production" && self.children.contains(Worker::Obs) {

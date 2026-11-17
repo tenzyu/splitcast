@@ -411,9 +411,16 @@ impl Speech {
     pub fn enqueue(&mut self, text: &str, id: &str) -> io::Result<Value> {
         self.enqueue_until(text, id, Instant::now() + self.expiry)
     }
-    pub(crate) fn enqueue_until(&mut self, text: &str, id: &str, expires: Instant) -> io::Result<Value> {
+    pub(crate) fn enqueue_until(
+        &mut self,
+        text: &str,
+        id: &str,
+        expires: Instant,
+    ) -> io::Result<Value> {
         self.expire();
-        if expires <= Instant::now() { return Err(invalid("speech admission expired")); }
+        if expires <= Instant::now() {
+            return Err(invalid("speech admission expired"));
+        }
         if !safe_id(id) {
             return Err(invalid("invalid speech ID"));
         }

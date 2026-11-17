@@ -2,7 +2,9 @@
 
 **Mission:** Preserve capture-host osu! Input/Audio/Update/Draw/display and local game audio while offloading selected game video, game-only audio, microphone, production composition and VOICEVOX speech. Return production-generated speech to capture-host playback. Camera is excluded. SplitCast is a thin **orchestrator**, not a replacement media stack.
 
-**State (2026-11-17):** main `ed7fe60` includes merged PRs #2–#9; [CI run 44097472963](https://github.com/tenzyu/splitcast/actions/runs/44097472963) passed four hosted jobs. **PoC incomplete**: `poc-play` plays a bounded *local fixture*, not a real Twitch-triggered cross-host reply. Agent still refuses enabled EventSub/TTS/remote mixing. No physical OFF/ON non-regression, game/mic offload, or real playback accepted. Earlier failed checks are not retroactively PASS.
+**Audio return candidate (2026-11-18 JST):** The prepared Agents now return finite synthesized audio over their existing authenticated connection. [S28/E23](docs/evidence/audio-return.md) covers isolated OpenSSH forwarding, native player input, private sink monitors and fault recovery. Physical acceptance and live chat remain open.
+
+**Historical state (2026-11-17):** main `ed7fe60` includes merged PRs #2–#9; [CI run 44097472963](https://github.com/tenzyu/splitcast/actions/runs/44097472963) passed four hosted jobs. **PoC incomplete**: `poc-play` plays a bounded *local fixture*, not a real Twitch-triggered cross-host reply. Agent still refuses enabled EventSub/TTS/remote mixing. No physical OFF/ON non-regression, game/mic offload, or real playback accepted. Earlier failed checks are not retroactively PASS.
 
 **Next missing input:** selected Twitch channel and path to existing suitable OAuth configuration, or an existing receiver's supported local event output. WSS + necessary Helix + `channel.chat.message` v1 using *existing* suitable OAuth are already approved. **Do not** request this permission again or ask for token contents; new OAuth, scope expansion, chat posting, public stream are unauthorized. Capture SSH is read-only, **not** permission to launch workers, install GSR/KMS helper, switch generations or enable services.
 
