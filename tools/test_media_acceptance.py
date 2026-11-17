@@ -1,10 +1,68 @@
 import unittest
 
-from media_acceptance import assess_marks, audio_clock, av_alignment, barcode, frame, tone_power
+from media_acceptance import (analyze_audio, assess_marks, audio_clock, audio_presence,
+                              av_alignment, barcode, frame, source_health, tone_power, video_cadence)
 import math
 
 
 class MediaOracleTests(unittest.TestCase):
+    def test_cadence_rejects_vfr_despite_nominal_rate_and_total_frame_count(self):
+        regular = [index / 30 for index in range(360)]
+        video_cadence(regular)
+        sparse = [at for index, at in enumerate(regular) if index % 4]
+        self.assertGreaterEqual(len(sparse), 250)
+        with self.assertRaisesRegex(AssertionError, "video cadence: low density"):
+            video_cadence(sparse)
+
+    def test_cadence_bounds_local_drop_intervals_and_excludes_fault_tail(self):
+        regular = [index / 30 for index in range(600)]
+        burst = [at for index, at in enumerate(regular) if not 140 <= index < 144]
+        with self.assertRaisesRegex(AssertionError, "video cadence:"):
+            video_cadence(burst)
+        faulty_tail = regular[:300] + regular[450:]
+        video_cadence(faulty_tail, fault_tail=True)
+        with self.assertRaisesRegex(AssertionError, "video cadence:"):
+            video_cadence(faulty_tail)
+        # Container millisecond quantization and the declared startup exclusion.
+        video_cadence([round(at, 3) for index, at in enumerate(regular[:360])
+                       if index >= 30 or index % 4])
+
+    def test_every_complete_pcm_window_is_analyzed_and_partial_tail_is_reported(self):
+        for count in (0, 4799, 4800, 4801, 9599, 9600, 9601):
+            windows, coverage = analyze_audio([0] * count, 1.25)
+            self.assertEqual(len(windows), count // 4800)
+            self.assertEqual(coverage["partial_tail_samples"], count % 4800)
+            if windows:
+                self.assertAlmostEqual(windows[-1][0], 1.25 + (count // 4800 - 1) / 10)
+        first = [int(5000 * math.sin(2 * math.pi * 440 * n / 48000)) for n in range(4800)]
+        last = [int(5000 * math.sin(2 * math.pi * 1640 * n / 48000)) for n in range(4800)]
+        windows, _ = analyze_audio(first + last, 0)
+        self.assertEqual([window[1] for window in windows], [0, 30])
+
+    def test_presence_fraction_cannot_hide_consecutive_dropout(self):
+        def windows(missing):
+            return [(index / 10, index // 10, {"game": 1000, "mic": 0 if index in missing else 1000, "noise": 0})
+                    for index in range(118)]
+        self.assertGreaterEqual(118 - 35, 118 * 0.7)
+        for missing in (range(35), range(30, 65), range(83, 118)):
+            with self.assertRaisesRegex(AssertionError, "mic audio consecutive dropout"):
+                audio_presence(windows(missing))
+        self.assertEqual(audio_presence(windows(range(3)))["mic"]["max_absent_windows"], 3)
+        game_dropout = windows(())
+        for index in range(30, 35):
+            game_dropout[index][2]["game"] = 0
+        with self.assertRaisesRegex(AssertionError, "game audio consecutive dropout"):
+            audio_presence(game_dropout)
+
+    def test_source_failures_are_not_receipt_only_and_injected_stops_are_explicit(self):
+        source_health([], {"game": None, "mic": None}, set())
+        for publishers in ({"game": 0, "mic": None}, {"game": None, "mic": 1}):
+            with self.assertRaisesRegex(AssertionError, "unexpected source publisher exit"):
+                source_health([], publishers, set())
+        with self.assertRaisesRegex(AssertionError, "unexpected source feeder failure"):
+            source_health([{"message": "budget exceeded", "expected": False}], {}, {"game", "mic"})
+        source_health([{"message": "closed raw input", "expected": True}], {"game": -15, "mic": 1}, {"game", "mic"})
+
     def test_generated_identity_survives_independent_pixel_reader(self):
         for tick in (0, 1, 20, 255, 449):
             for epoch in (1, 7, 15):

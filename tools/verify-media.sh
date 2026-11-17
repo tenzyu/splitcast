@@ -7,6 +7,7 @@ if [[ "$PWD" != "$root" ]]; then
     exit 1
 fi
 export PYTHONDONTWRITEBYTECODE=1
+# Host-side units/build/provenance preflight; media services start only below.
 mkdir -p artifacts/media-plane/runs
 evidence="$(mktemp -d "$root/artifacts/media-plane/runs/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXXXX")"
 export SPLITCAST_MEDIA_EVIDENCE_DIR="$evidence"
@@ -15,6 +16,7 @@ python3 -m unittest discover -s tools -p test_media_acceptance.py -v
 cargo build -p splitcast-rs-core --locked --offline
 nix-store --query --requisites "$(dirname "$(dirname "$(readlink -f "$(command -v obs)")")")" > "$evidence/obs-closure.txt"
 python3 tools/media_acceptance.py --build-receipt > "$evidence/build.json"
+# Actual media profile: read-only source, fresh private evidence and no devices.
 exec bwrap --unshare-all --die-with-parent --new-session \
     --ro-bind /nix/store /nix/store --dev /dev --proc /proc --tmpfs /tmp \
     --dir /run --dir /etc \

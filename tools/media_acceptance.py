@@ -48,6 +48,12 @@ LIMITS = {
     "startup_pipe_seconds": 40,
     "scene_startup_samples": 2,
     "max_progress_gap_seconds": 0.5,
+    "cadence_startup_seconds": 1,
+    "cadence_tail_seconds": 0.2,
+    "min_video_density_fps": 28.5,
+    "min_video_second_frames": 27,
+    "max_video_pts_gap_seconds": 0.101,
+    "max_audio_absence_windows": 3,
 }
 
 
@@ -236,6 +242,62 @@ def audio_clock(frames):
         errors.append(error)
         samples += count
     return {"origin_seconds": origin, "samples": samples, "max_pts_error_seconds": max(errors)}
+
+
+def video_cadence(timestamps, fault_tail=False):
+    require(timestamps and all(b > a for a, b in zip(timestamps, timestamps[1:])),
+            "video cadence: missing, duplicate or backward PTS")
+    start = timestamps[0] + LIMITS["cadence_startup_seconds"]
+    end = timestamps[-1] + 1 / FPS - LIMITS["cadence_tail_seconds"]
+    if fault_tail:
+        end = min(end, timestamps[0] + LIMITS["record_seconds"] - LIMITS["cadence_tail_seconds"])
+    require(end - start >= 7, "video cadence: insufficient steady-state coverage")
+    steady = [at for at in timestamps if start <= at < end]
+    density = len(steady) / (end - start)
+    counts = [sum(start + second <= at < start + second + 1 for at in steady)
+              for second in range(math.floor(end - start))]
+    gap = max((b - a for a, b in zip(steady, steady[1:])), default=math.inf)
+    require(density >= LIMITS["min_video_density_fps"], f"video cadence: low density {density}")
+    require(min(counts) >= LIMITS["min_video_second_frames"], f"video cadence: sparse second {counts}")
+    require(gap <= LIMITS["max_video_pts_gap_seconds"], f"video cadence: dropped-frame interval {gap}")
+    return {"start_seconds": start, "end_seconds": end, "density_fps": density,
+            "frames_per_full_second": counts, "max_pts_gap_seconds": gap,
+            "scope": "pre-fault prefix" if fault_tail else "steady-state recording"}
+
+
+def analyze_audio(pcm, origin):
+    windows = []
+    for offset in range(0, len(pcm) - 4800 + 1, 4800):
+        samples = pcm[offset:offset + 4800]
+        powers = [tone_power(samples, frequency) for frequency in AUDIO_FREQUENCIES]
+        source_second = max(range(AUDIO_SECONDS), key=lambda second: powers[second])
+        identity = {"game": powers[source_second], "mic": tone_power(samples, 180),
+                    "noise": tone_power(samples, 1230), "frequency": AUDIO_FREQUENCIES[source_second]}
+        windows.append((origin + offset / 48000, source_second, identity))
+    return windows, {"complete_windows": len(windows), "partial_tail_samples": len(pcm) % 4800,
+                     "partial_tail_policy": "not classified; less than 100 ms; stream endpoints checked separately"}
+
+
+def audio_presence(windows):
+    require(windows, "missing complete audio windows")
+    result = {}
+    for kind, fraction in (("mic", 0.7), ("game", 0.8)):
+        present = [w[2][kind] > max(100, w[2]["noise"] * 10) for w in windows]
+        require(sum(present) >= len(present) * fraction, f"{kind} audio identity absent")
+        longest, current = 0, 0
+        for found in present:
+            current = 0 if found else current + 1
+            longest = max(longest, current)
+        require(longest <= LIMITS["max_audio_absence_windows"],
+                f"{kind} audio consecutive dropout: {longest} windows")
+        result[kind] = {"present_windows": sum(present), "max_absent_windows": longest}
+    return result
+
+
+def source_health(errors, publishers, expected_stops):
+    require(not any(not error["expected"] for error in errors), f"unexpected source feeder failure: {errors}")
+    for name, code in publishers.items():
+        require(code is None or name in expected_stops, f"unexpected source publisher exit: {name}={code}")
 
 
 class Run:
@@ -470,6 +532,8 @@ class Source:
         self.peak_queue_bytes = 0
         self.ledger, self.lock, self.errors = {}, threading.Lock(), []
         self.cancel = threading.Event()
+        self.expected_stops = set()
+        self.observations = []
         self.child = run.spawn(f"game-{epoch}", [
             "ffmpeg", "-v", "error", "-nostdin", "-filter_threads", "1", "-f", "rawvideo",
             "-pixel_format", "gray", "-video_size", "1280x720", "-framerate", "30", "-i", "pipe:0",
@@ -489,10 +553,10 @@ class Source:
 
     def feed(self):
         stream = self.child.stdin
-        os.set_blocking(stream.fileno(), False)
         origin = time.monotonic()
         queue = deque()
         try:
+            os.set_blocking(stream.fileno(), False)
             for ordinal in range(FPS * LIMITS["source_seconds"]):
                 if self.cancel.wait(max(0, origin + ordinal / FPS - time.monotonic())):
                     break
@@ -516,20 +580,36 @@ class Source:
                         except BlockingIOError:
                             pass
         except BrokenPipeError:
-            if not self.cancel.is_set():
-                self.errors.append("publisher closed raw input")
+            self.errors.append({"message": "publisher closed raw input", "at": time.monotonic(),
+                                "expected": "game" in self.expected_stops})
         except Exception as error:
-            self.errors.append(str(error))
+            self.errors.append({"message": str(error), "at": time.monotonic(), "expected": False})
         finally:
             stream.close()
+
+    def observe(self, phase):
+        publishers = {"game": self.child.poll(), "mic": self.mic.poll()}
+        observation = {"phase": phase, "at": time.monotonic(), "publishers": publishers,
+                       "expected_stops": sorted(self.expected_stops), "errors": list(self.errors)}
+        self.observations.append(observation)
+        source_health(observation["errors"], publishers, self.expected_stops)
+
+    def expect_stop(self, phase):
+        self.observe("before " + phase)
+        self.expected_stops.update(("game", "mic"))
+        self.observations.append({"phase": phase, "at": time.monotonic(),
+                                  "expected_stops": sorted(self.expected_stops)})
 
     def close(self):
         self.cancel.set()
         self.thread.join(timeout=12)
         require(not self.thread.is_alive(), "source feeder did not join")
-        write_json(self.run.directory / f"source-{self.epoch}.json", {"epoch": self.epoch, "frozen": self.frozen,
-                   "ledger": self.ledger, "errors": self.errors, "peak_queue_bytes": self.peak_queue_bytes,
-                   "backlog_frames": self.backlog_frames})
+        try:
+            self.observe("feeder joined")
+        finally:
+            write_json(self.run.directory / f"source-{self.epoch}.json", {"epoch": self.epoch, "frozen": self.frozen,
+                        "ledger": self.ledger, "errors": self.errors, "peak_queue_bytes": self.peak_queue_bytes,
+                        "backlog_frames": self.backlog_frames, "observations": self.observations})
 
 
 def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
@@ -569,6 +649,7 @@ def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
         require(timestamps and all(b >= a for a, b in zip(timestamps, timestamps[1:])),
                 "missing or backward decoded presentation timestamps")
     write_json(run.directory / f"frame-timestamps-{tag}.json", timelines)
+    cadence = video_cadence(timelines["video"], fault_tail)
     clock = audio_clock([f for f in decoded_frames if f["media_type"] == "audio"])
     endpoints = {"start_offset_seconds": timelines["audio"][0] - timelines["video"][0],
                  "end_offset_seconds": clock["origin_seconds"] + clock["samples"] / 48000
@@ -587,18 +668,8 @@ def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
                                      "-f", "s16le", "pipe:1"], timeout=60))
     if not fault_tail:
         require(len(pcm) == clock["samples"], "decoded PCM sample count differs from presentation clock")
-    windows = []
-    for offset in range(0, len(pcm) - 4800, 4800):
-        samples = pcm[offset:offset + 4800]
-        powers = [tone_power(samples, frequency) for frequency in AUDIO_FREQUENCIES]
-        source_second = max(range(AUDIO_SECONDS), key=lambda second: powers[second])
-        identity = {"game": powers[source_second], "mic": tone_power(samples, 180),
-                    "noise": tone_power(samples, 1230), "frequency": AUDIO_FREQUENCIES[source_second]}
-        windows.append((timelines["audio"][0] + offset / 48000, source_second, identity))
-    require(sum(w[2]["mic"] > max(100, w[2]["noise"] * 10) for w in windows) >= len(windows) * 0.7,
-            "processed microphone identity absent")
-    require(sum(w[2]["game"] > max(100, w[2]["noise"] * 10) for w in windows) >= len(windows) * 0.8,
-            "game audio identity absent")
+    windows, coverage = analyze_audio(pcm, timelines["audio"][0])
+    presence = audio_presence(windows)
     alignment = av_alignment(valid, windows)
     alignment["first_video_pts_seconds"] = timelines["video"][0]
     alignment["first_audio_pts_seconds"] = timelines["audio"][0]
@@ -606,11 +677,21 @@ def inspect_recording(run, path, epoch, fault_tail=False, evidence_tag=None):
               "content_span_seconds": span, "markers": valid, "audio_windows": windows,
               "av_alignment": alignment,
               "audio_clock": clock,
+              "video_cadence": cadence, "audio_coverage": coverage, "audio_presence": presence,
               "stream_endpoints": endpoints,
               "av_resolution_seconds": 0.1, "full_decode_to_eof": True}
     result["content_analysis"] = "pre-fault ten-second prefix" if fault_tail else "whole recording"
     write_json(run.directory / f"decoded-{tag}.json", result)
     return result
+
+
+def reject_recording(run, path, epoch, tag, reason):
+    try:
+        inspect_recording(run, path, epoch, evidence_tag=tag)
+    except AssertionError as error:
+        require(reason in str(error), f"wrong {tag} rejection: {error}")
+        return {"sha256": digest(path), "rejection": str(error)}
+    raise AssertionError("oracle accepted " + tag)
 
 
 def scenario(directory, binary, case, epoch):
@@ -630,10 +711,13 @@ def scenario(directory, binary, case, epoch):
             time.sleep(max(0, started + len(samples) + 1 - time.monotonic()))
             samples.append(run.preview(source))
             counters.append(run.transport())
+            source.observe("recording sample")
         result["scene_samples"] = samples
         write_json(directory / "scene.json", samples)
         write_json(directory / "transport.json", counters)
         if case in ("disconnect", "stall", "worker-death"):
+            # The injected failure can make Agent teardown close both publishers.
+            source.expect_stop("injected " + case)
             if case == "worker-death":
                 candidates = []
                 for pid, item in descendants(run.agent.pid).items():
@@ -661,6 +745,7 @@ def scenario(directory, binary, case, epoch):
             result["fault"] = {"detected_seconds": time.monotonic() - fault_at, "status": state}
             if case == "stall":
                 os.kill(source.child.pid, signal.SIGCONT)
+        source.expect_stop("controller Stop")
         run.stop(allow_retry=case != "normal")
         recordings = list((directory / "recordings").glob("*.mkv"))
         require(len(recordings) == 1, f"expected one new OBS recording: {recordings}")
@@ -727,6 +812,23 @@ def scenario(directory, binary, case, epoch):
                 result["audio_boundary_negative_control"] = {"sha256": digest(wrong_boundary), "rejection": str(error)}
             else:
                 raise AssertionError("oracle accepted wrong boundary audio")
+            sparse = directory / "bad-video-vfr.mkv"
+            run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
+                      "-vf", "select='mod(n,4)'", "-fps_mode", "vfr",
+                      "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-c:a", "copy", str(sparse)])
+            result["vfr_negative_control"] = reject_recording(run, sparse, epoch, "video-vfr", "video cadence:")
+            tail = directory / "bad-audio-tail.mkv"
+            tail_at = result["decoded"]["audio_clock"]["samples"] / 48000 - 0.4
+            expressions = "|".join(f"if(gte(t,{tail_at}),{replacement},val({channel}))" for channel in (0, 1))
+            run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
+                      "-c:v", "copy", "-af", f"aeval=exprs='{expressions}':c=stereo,aformat=channel_layouts=stereo",
+                      "-c:a", "aac", "-b:a", "160k", str(tail)])
+            result["audio_tail_negative_control"] = reject_recording(run, tail, epoch, "audio-tail", "A/V audio source identity")
+            dropout = directory / "bad-mic-dropout.mkv"
+            run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
+                      "-c:v", "copy", "-af", "bandreject=f=180:t=h:w=100:enable='between(t,3,6.5)'",
+                      "-c:a", "aac", "-b:a", "160k", str(dropout)])
+            result["mic_dropout_negative_control"] = reject_recording(run, dropout, epoch, "mic-dropout", "mic audio consecutive dropout")
         if case == "worker-death":
             source.close()
             for child in (source.child, source.mic):
@@ -742,6 +844,8 @@ def scenario(directory, binary, case, epoch):
             for _ in range(LIMITS["record_seconds"]):
                 time.sleep(max(0, recovery_started + len(recovered_samples) + 1 - time.monotonic()))
                 recovered_samples.append(run.preview(source))
+                source.observe("recovery sample")
+            source.expect_stop("recovery Stop")
             run.stop()
             fresh = set((directory / "recordings").glob("*.mkv")) - set(recordings)
             require(len(fresh) == 1, "recovery did not produce a distinct recording")

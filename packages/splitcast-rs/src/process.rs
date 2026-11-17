@@ -44,7 +44,7 @@ impl OwnedProcess {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::null());
         Self::spawn_command(&mut command)
     }
 
@@ -356,6 +356,23 @@ mod tests {
 
     fn orphan_script(marker: &Marker) -> String {
         format!("bash -c 'trap \"\" TERM; echo $$ > {}; while :; do sleep 1; done' &\nwhile [ ! -s {} ]; do sleep 0.01; done\nexit 23", marker.0.display(), marker.0.display())
+    }
+
+    #[test]
+    fn worker_stderr_is_not_inherited() {
+        let marker = Marker::new();
+        let mut process = OwnedProcess::spawn(&argv(format!(
+            "readlink /proc/self/fd/2 > {}",
+            marker.0.display()
+        )))
+        .unwrap();
+        let end = Instant::now() + Duration::from_secs(3);
+        while process.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < end);
+            thread::sleep(TICK);
+        }
+        assert!(process.stop(Duration::ZERO).unwrap().success());
+        assert_eq!(fs::read_to_string(&marker.0).unwrap().trim(), "/dev/null");
     }
 
     #[test]
