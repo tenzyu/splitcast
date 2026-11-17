@@ -29,6 +29,7 @@ completion. Listening remains unverified. The operation creates no playback
 files or recordings, and does not delete the supplied input. An enclosing trial
 owns inspection and deletion of recordings that trial created.
 
-The ordinary Agent still refuses enabled speech, EventSub, and remote mixing.
-This finite command does not change that contract or the disabled runtime gate.
+Prepared Agents also use this PCM validator and player for session-scoped returns.
+See the [Agent return protocol and evidence](evidence/audio-return.md). EventSub
+and remote mixing remain gated.
 See [the PoC checkpoint](evidence/poc-20261117.md) for actual execution and limits.

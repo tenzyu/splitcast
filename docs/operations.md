@@ -104,7 +104,7 @@ Start only the reviewed opt-in candidate and its owned workers. Check actual dec
 
 Measure a comparable game-only baseline before claiming a performance improvement. Preserve replay/workload, versions, settings, thermal state, and focus, then repeat A/B/A trials. Record distributions rather than a single average. Reject any claimed improvement when inputs differ, work is missing, errors occur, or gameplay exceeds the operator's predeclared regression threshold. No baseline or performance gain is claimed by the extraction tests.
 
-Speech delivery, EventSub, persistent replay, shared selection transactions, full recovery, and role-specific backend separation are unfinished. They cannot be accepted by turning off their assertions. Public broadcast requires separate authorization even after every local gate passes.
+Finite speech return has a [software acceptance receipt and rollback procedure](evidence/audio-return.md). EventSub, shared selection transactions, full crash recovery and role-specific backend separation are unfinished. They cannot be accepted by turning off their assertions. Public broadcast requires separate authorization even after every local gate passes.
 
 ## Stop and rollback
 

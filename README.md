@@ -6,7 +6,7 @@ SplitCast is an experimental Rust controller for a setup in which one Linux host
 
 The goal is to move composition, recording, streaming, and other production work away from performance-sensitive gameplay **without making gameplay depend on the production host**. This is an architectural goal, not a demonstrated reduction in latency or resource use. Capturing and encoding on the game host still consume resources.
 
-> **Project status: experimental and incomplete.** This repository is for development and controlled verification, **not a ready-to-deploy streaming service**. Generated-media tests exercise part of the real production pipeline, but the complete capture-to-production path, physical two-host operation, gameplay non-regression, and the required audio return path have not been accepted. The Nix service remains disabled by default.
+> **Project status: experimental and incomplete.** This repository is for development and controlled verification, **not a ready-to-deploy streaming service**. Generated-media tests exercise part of the real production pipeline, but the complete capture-to-production path, physical two-host operation and gameplay non-regression remain open. Returned speech has passed isolated two-Agent software acceptance. The Nix service remains disabled by default.
 
 ## How it fits together
 
@@ -22,7 +22,7 @@ Selected microphone
 Rust capture agent <- authenticated control / SSH -> Rust production agent
 
 Local game playback: independent of production
-Production-generated speech/audio - - - - -> local playback (required; not implemented)
+Production PCM16 WAV -> owned SSH control forward -> selected capture PipeWire sink
 ```
 
 The capture and production hosts are **roles**, not specific machines. The diagram describes the intended system and existing worker boundaries, **not a fully accepted live flow**. In particular, current generated-media acceptance starts on the production side; it does not exercise GSR on the capture host or the SSH media path. See the [PoC mission and evidence boundaries](docs/memory/poc-mission.md) and [media acceptance profile](docs/media-acceptance.md).
@@ -36,7 +36,7 @@ SplitCast is an **orchestrator, not another media engine**. It uses GPU Screen R
 | Control and configuration | Native CLI, line-mode TUI, Rust/WASM browser client code, typed commands, TOML-first validation, owner-scoped lifecycle and bounded worker cleanup are implemented and covered by local software tests. A built browser client is **not** browser-usage acceptance. |
 | Production-side media | A device-free test runs the real production agent with MediaMTX, RNNoise/private audio, and OBS, then checks the resulting recording with an independent decoder. This is **generated-input, production-only** evidence. |
 | Capture-to-production transport | Capture-side GSR/FFmpeg workers and SSH forwards exist, but actual two-agent media publication, network impairment, decoded-frame freshness enforcement, and physical capture remain unaccepted. Advancing byte counters alone do not prove fresh video. |
-| Returned audio and chat events | Production-generated speech/audio returning to local playback is a **required but missing** capability. The live agent currently refuses enabled TTS delivery, EventSub, and remote TTS mixing instead of pretending they work. |
+| Returned audio and chat events | The prepared Agents return bounded speech to an explicitly selected capture sink. Two-Agent tests observe the exact player input and independently monitor private PipeWire sinks. EventSub and remote TTS mixing remain gated. [Protocol and software evidence](docs/evidence/audio-return.md). |
 | Deployment and recovery | No automatic service start or approved production cutover. Remote cleanup obligations and failure handling exist, but full crash recovery, end-to-end performance, and listener/host acceptance remain open. |
 
 The distinction matters: **implemented code ≠ passed isolated test ≠ accepted deployment**. Read the [production-readiness gates](docs/production-readiness.md), [verification record](docs/verification.md), and [open risks](docs/memory/open-risks.md) before interpreting a green check as a feature guarantee.
