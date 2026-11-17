@@ -274,6 +274,13 @@ fn return_faults_and_replay() {
     // Lost pull reply: interrogate the real production Agent under a fresh test owner.
     let owner = json!({"_owner":"test-capture-lease"});
     f.production.ok("prepare", owner.clone());
+    let expired_id = next_id(&f.production);
+    wait(|| next_id(&f.production) != expired_id);
+    rejected(
+        &f.production,
+        "say",
+        json!({"id":expired_id,"text":"fixture"}),
+    );
     submit(&f.production, &voice, &actual);
     wait(|| f.production.ok("tts", json!({}))["ready"] == 1);
     discard_reply(&f.production, "tts-next", owner.clone());
@@ -281,6 +288,10 @@ fn return_faults_and_replay() {
     assert!(f.production.ok("tts-next", owner.clone()).is_null());
     submit(&f.production, &voice, &actual);
     wait(|| f.production.ok("tts", json!({}))["ready"] == 1);
+    submit(&f.production, &voice, &actual);
+    wait(|| f.production.ok("tts", json!({}))["ready"] == 2);
+    let full = next_id(&f.production);
+    rejected(&f.production, "say", json!({"id":full,"text":"fixture"}));
     wait(|| f.production.ok("tts", json!({}))["ready"] == 0);
     assert!(f.production.ok("tts-next", owner.clone()).is_null());
     f.production.ok("stop", owner);

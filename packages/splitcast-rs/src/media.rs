@@ -422,7 +422,9 @@ fn required_tools(role: &str, return_audio: bool) -> io::Result<Vec<String>> {
     let mut req = vec!["ffmpeg", "ffprobe", "pactl"];
     if role == "capture" {
         req.extend(["ssh", "gpu-screen-recorder"]);
-        if return_audio { req.push("pw-play"); }
+        if return_audio {
+            req.push("pw-play");
+        }
     } else {
         req.extend(["mediamtx", "pulseaudio"])
     };

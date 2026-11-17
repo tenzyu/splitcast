@@ -39,19 +39,25 @@ impl Source {
     pub(crate) fn status(&mut self) -> io::Result<String> {
         let now = Instant::now();
         if self.admission.as_ref().is_none_or(|(_, end)| *end <= now) {
-            self.issued = self.issued.checked_add(1).ok_or_else(|| io::Error::other("speech sequence exhausted"))?;
-            self.admission = Some((format!("{}-{}",self.epoch,self.issued), now + self.expiry));
+            self.issued = self
+                .issued
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("speech sequence exhausted"))?;
+            self.admission = Some((format!("{}-{}", self.epoch, self.issued), now + self.expiry));
         }
         let mut status = self.speech.command("status", &[])?;
         status["epoch"] = json!(self.epoch);
-        status["next_id"] = json!(self.admission.as_ref().map(|(id,_)| id));
+        status["next_id"] = json!(self.admission.as_ref().map(|(id, _)| id));
         Ok(status.to_string())
     }
 
     pub(crate) fn say(&mut self, text: &str, id: Option<&str>) -> io::Result<String> {
         let id =
             id.ok_or_else(|| io::Error::other("say requires the current session speech ID"))?;
-        let (_, expires) = self.admission.as_ref().filter(|(issued,end)| issued == id && *end > Instant::now())
+        let (_, expires) = self
+            .admission
+            .as_ref()
+            .filter(|(issued, end)| issued == id && *end > Instant::now())
             .ok_or_else(|| io::Error::other("speech ID is stale or out of sequence"))?;
         let result = self.speech.enqueue_until(text, id, *expires)?;
         self.admission = None;
@@ -101,7 +107,9 @@ impl Receiver {
     }
 
     pub(crate) fn poll_due(&mut self) -> io::Result<bool> {
-        if self.cleanup_unknown { return Ok(false); }
+        if self.cleanup_unknown {
+            return Ok(false);
+        }
         if let Some(player) = &self.player {
             if !player.handle.is_finished() {
                 return Ok(false);
@@ -159,9 +167,7 @@ impl Receiver {
         self.consumed = sequence;
         let handle = thread::Builder::new()
             .name("splitcast-return-player".into())
-            .spawn(move || {
-                poc_speech::play_return(&wav, &target, &operation)
-            })?;
+            .spawn(move || poc_speech::play_return(&wav, &target, &operation))?;
         self.player = Some(Player { cancel, handle });
         Ok(())
     }
@@ -190,10 +196,65 @@ impl Receiver {
         }
         let result = self.join();
         if self.cleanup_unknown {
-            return Err(io::Error::other("return player cleanup unconfirmed; inspect the enclosing cgroup"));
+            return Err(io::Error::other(
+                "return player cleanup unconfirmed; inspect the enclosing cgroup",
+            ));
         }
         // An ordinary playback error (including requested cancellation) follows group teardown.
-        if let Err(error) = result { eprintln!("return playback ended: {error}"); }
+        if let Err(error) = result {
+            eprintln!("return playback ended: {error}");
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn capture_rejects_wrong_session_replay_bad_framing_and_expired_transfer() {
+        let cfg = Config::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/agent-example.json"
+        )))
+        .unwrap();
+        let epoch = "abcdeabcdeabcdeabcdeabcdeabcdeab";
+        let mut receiver = Receiver::from_status(&json!({"epoch":epoch}).to_string()).unwrap();
+        receiver.consumed = 7;
+        let control = crate::Session::new(crate::Role::Capture).control();
+        let grant = json!({"id":format!("{epoch}-8"),"remaining_ms":1000,"wav":"UklGRg=="});
+        for (field, invalid) in [
+            ("id", json!("old-8")),
+            ("id", json!(format!("{epoch}-7"))),
+            ("id", json!(format!("{epoch}-08"))),
+            ("wav", json!("%%%")),
+            ("remaining_ms", json!(u64::MAX)),
+            ("remaining_ms", json!(0)),
+            ("target", json!("unselected")),
+        ] {
+            let mut body = grant.clone();
+            body[field] = invalid;
+            assert!(receiver
+                .receive(
+                    &body.to_string(),
+                    Instant::now(),
+                    &cfg,
+                    control.clone(),
+                    control.generation()
+                )
+                .is_err());
+            assert!(receiver.player.is_none());
+        }
+        assert!(receiver
+            .receive(
+                &grant.to_string(),
+                Instant::now() - Duration::from_secs(2),
+                &cfg,
+                control.clone(),
+                control.generation()
+            )
+            .is_err());
+        assert_eq!(receiver.consumed, 7);
+        assert!(receiver.player.is_none());
     }
 }
