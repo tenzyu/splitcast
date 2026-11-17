@@ -1,3 +1,11 @@
+---
+type: Historical Handoff
+title: environment-gap
+description: Completed environment discovery entry; resume at current PoC handoff.
+status: deprecated
+sources:
+  - { id: primary, resource: ../evidence/poc-convergence-20261117.md }
+---
 # Next session: environment-gap entry
 
 > **S26 status:** This is a **completed historical discovery entry**, not the current resume task. PR #9 is merged; continue at the [PoC handoff](../handoff/poc-20261117.md) and [current reconciliation](../evidence/dreaming-main-20261117.md). Do not repeat permission questions already resolved for Twitch WSS/Helix/subscription.

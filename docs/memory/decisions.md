@@ -1,3 +1,11 @@
+---
+type: Decision Register
+title: decisions
+description: D01–D18 selected and rejected designs, falsifications and dated supersessions.
+status: stable
+sources:
+  - { id: primary, resource: ../../packages/splitcast-rs/src/agent.rs }
+---
 # SplitCast decisions
 
 Recorded 2026-11-13. Dates below are decision or observation dates, not dates of fresh standalone validation. Source IDs resolve in [the evidence register](evidence.md). High confidence means strong documentary support for the stated scope, not production acceptance.

@@ -1,3 +1,11 @@
+---
+type: Product Mission
+title: poc-mission
+description: Game-first capture/production offload and independent audio return.
+status: stable
+sources:
+  - { id: primary, resource: ../../README.md }
+---
 # SplitCast PoC mission
 
 > **Current implementation boundary (S26):** Main `ed7fe60` includes finite local fixture playback from PR #9, **not** a functioning returned-audio path. The current resume point is [the PoC handoff](../handoff/poc-20261117.md), corrected by [S26](../evidence/dreaming-main-20261117.md), rather than the completed environment-gap discovery.

@@ -1,3 +1,11 @@
+---
+type: Risk Register
+title: open-risks
+description: Unclosed physical, media, control, distribution and deployment gates.
+status: draft
+sources:
+  - { id: primary, resource: ../evidence/poc-convergence-20261117.md }
+---
 # Open risks
 
 Recorded 2026-11-13. These are unresolved historical gates and extraction questions, not newly reproduced standalone defects. Evidence IDs resolve in [the register](evidence.md).

@@ -1,3 +1,11 @@
+---
+type: Evidence Register
+title: evidence
+description: Sxx/Exx source identities, tested artifacts and failure boundaries.
+status: stable
+sources:
+  - { id: primary, resource: ../evidence/dreaming-main-20261117.md }
+---
 # Evidence and source register
 
 Recorded 2026-11-13. Imported reports were read for this memory. Historical tests were not rerun. Source Git object IDs were read locally without contacting hosts or GitHub.

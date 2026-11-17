@@ -1,3 +1,11 @@
+---
+type: Memory Maintenance Protocol
+title: update-protocol
+description: Evidence-preserving update and correction rules.
+status: stable
+sources:
+  - { id: primary, resource: dreaming.md }
+---
 # Update SplitCast knowledge
 
 Use this procedure after a relevant session, design change, failed hypothesis, or verification run. Keep unrelated transcripts and machine histories out of scope.
