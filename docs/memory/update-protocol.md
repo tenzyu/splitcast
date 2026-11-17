@@ -33,3 +33,19 @@ Split or merge pages when lookup becomes harder. Preserve IDs and crosslinks thr
 ## Current memory verification boundary
 
 The 2026-11-13 memory pass read scoped historical documents and inspected original Git identities. It did not run application tests, contact hosts, activate services, or verify the standalone extraction. Register subsequent fresh results separately from E01–E05.
+
+## Progressive retrieval and Dreaming (2026-11-17)
+
+The [Dreaming map](dreaming.md) is the current consolidation protocol, informed
+by Anthropic's 2026-11-06 [agent-memory research](https://www.anthropic.com/research/components-of-agent-memory).
+Use the hierarchy `MEMORY.md → relevant domain page → exact source/receipt`.
+Do not preload every `.md` document, and do not treat a compressed session
+summary or a merged PR as runtime evidence. A new run, contradiction or merge
+should update the minimum current index and risk pointers while leaving the
+original evidence ledger and historical snapshots intact.
+
+When a live source contradicts a stale current paragraph, document the dated
+supersession immediately in the cold-start capsule. Never rewrite the historical
+observation to imply it had always been correct. For uncertain CI fixes, link
+the specific failing run and candidate PR; upgrade to PASS only after the exact
+amended commit is verified.
