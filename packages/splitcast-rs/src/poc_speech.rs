@@ -1,4 +1,4 @@
-//! Finite, explicitly selected local-fixture playback, not live speech delivery.
+//! Finite, explicitly selected playback for local fixtures and prepared Agent returns.
 //!
 //! Process completion is not confirmed listening. Cleanup has the process module's
 //! group-escape, controller-death and kernel-I/O limitations; teardown can exceed
@@ -35,10 +35,10 @@ impl fmt::Display for PlaybackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTarget => write!(f, "an explicit safe PipeWire node name is required"),
-            Self::Input(error) => write!(f, "invalid fixture input: {error}"),
-            Self::Operation(error) => write!(f, "fixture playback operation failed: {error}"),
+            Self::Input(error) => write!(f, "invalid playback input: {error}"),
+            Self::Operation(error) => write!(f, "playback operation failed: {error}"),
             Self::PlayerExit { status, stderr } => {
-                write!(f, "fixture player failed ({status}): {stderr}")
+                write!(f, "native player failed ({status}): {stderr}")
             }
         }
     }
@@ -90,7 +90,7 @@ pub fn play_fixture(
     play_fixture_with(input, target, &operation, "pw-play", &[])
 }
 
-fn valid_target(target: &str) -> bool {
+pub(crate) fn valid_target(target: &str) -> bool {
     if target.is_empty()
         || target.len() > 255
         || !target.as_bytes()[0].is_ascii_alphanumeric()
@@ -165,6 +165,35 @@ fn play_fixture_with(
     }
     let bytes = read_fixture(input, operation)?;
     let wav = PcmWav::parse(&bytes).map_err(PlaybackError::Input)?;
+    play_pcm(&wav, target, operation, program, prefix)?;
+    Ok(FixturePlaybackReceipt {
+        target: target.into(),
+        channels: wav.channels(),
+        sample_rate: wav.sample_rate(),
+        pcm_bytes: wav.pcm().len(),
+        duration: wav.duration(),
+    })
+}
+
+pub(crate) fn play_return(
+    bytes: &[u8],
+    target: &str,
+    operation: &Operation,
+) -> Result<(), PlaybackError> {
+    let wav = PcmWav::parse(bytes).map_err(PlaybackError::Input)?;
+    if !valid_target(target) {
+        return Err(PlaybackError::InvalidTarget);
+    }
+    play_pcm(&wav, target, operation, "pw-play", &[])
+}
+
+fn play_pcm(
+    wav: &PcmWav<'_>,
+    target: &str,
+    operation: &Operation,
+    program: &str,
+    prefix: &[String],
+) -> Result<(), PlaybackError> {
     let mut args = prefix.to_vec();
     args.extend([
         "--raw".into(),
@@ -193,13 +222,7 @@ fn play_fixture_with(
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
-    Ok(FixturePlaybackReceipt {
-        target: target.into(),
-        channels: wav.channels(),
-        sample_rate: wav.sample_rate(),
-        pcm_bytes: wav.pcm().len(),
-        duration: wav.duration(),
-    })
+    Ok(())
 }
 
 #[cfg(test)]

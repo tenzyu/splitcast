@@ -189,6 +189,17 @@ pub fn run_bounded(
 ) -> io::Result<Output> {
     run_operation(program, args, input, timeout, output_cap, None)
 }
+#[derive(Debug)]
+pub(crate) struct HelperCleanupError(io::Error);
+
+impl std::fmt::Display for HelperCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "helper group cleanup unconfirmed: {}", self.0)
+    }
+}
+impl std::error::Error for HelperCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.0) }
+}
 pub(crate) fn run_operation(
     program: &str,
     args: &[String],
@@ -264,21 +275,12 @@ pub(crate) fn run_operation(
             thread::sleep(TICK);
         }
     })();
-    let cleanup = process.stop(if result.is_ok() {
+    process.stop(if result.is_ok() {
         Duration::ZERO
     } else {
         Duration::from_millis(50)
-    });
-    match result {
-        Ok(output) => {
-            cleanup?;
-            Ok(output)
-        }
-        Err(error) => {
-            cleanup?;
-            Err(error)
-        }
-    }
+    }).map_err(|error| io::Error::new(error.kind(), HelperCleanupError(error)))?;
+    result
 }
 
 #[cfg(test)]

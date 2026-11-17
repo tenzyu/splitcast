@@ -1,6 +1,6 @@
 use crate::protocol::{Command, Invocation, MicAction, OwnerId};
 use crate::workers::{Worker, Workers};
-use crate::{config, control, media, obs};
+use crate::{config, control, media, obs, return_audio};
 use crate::{Lifecycle, Output, Role, Session};
 use serde_json::{json, Value};
 use std::fs;
@@ -112,9 +112,11 @@ fn apply_settings(cfg: &config::Config, patch: &Value) -> io::Result<config::Con
 fn transport(cfg: &config::Config) -> io::Result<Value> {
     let document: Value =
         serde_json::from_str(&cfg.document).map_err(|_| err("invalid normalized configuration"))?;
-    Ok(
-        json!({"version":1,"video":{"codec":"H264","width":cfg.width,"height":cfg.height,"fps":cfg.fps},"audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},"ports":{"rtmp":cfg.rtmp,"rtsp":cfg.rtsp},"camera":document["camera"]}),
-    )
+    let mut contract = json!({"version":1,"video":{"codec":"H264","width":cfg.width,"height":cfg.height,"fps":cfg.fps},"audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},"ports":{"rtmp":cfg.rtmp,"rtsp":cfg.rtsp},"camera":document["camera"]});
+    if cfg.tts_enabled {
+        contract["speech_return"] = json!({"version":1, "expiry_seconds":cfg.tts_expiry_seconds});
+    }
+    Ok(contract)
 }
 fn require_rust_production(document: &str) -> io::Result<()> {
     let hello: Value = serde_json::from_str(document).map_err(|_| err("invalid peer status"))?;
@@ -127,12 +129,12 @@ fn require_rust_production(document: &str) -> io::Result<()> {
     Ok(())
 }
 pub fn doctor(cfg: &config::Config) -> io::Result<String> {
-    let missing = media::check_tools(&cfg.role)?;
+    let missing = media::session_tools(cfg)?;
     let selected = cfg.role != "capture"
         || (!cfg.target.is_empty()
             && cfg.game_audio.starts_with("app:")
             && !cfg.mic_source.is_empty());
-    Ok(json!({"ok":missing.is_empty()&&selected&&!cfg.eventsub_enabled&&!cfg.tts_enabled&&!cfg.tts_mix_remote,"engine":"rust-candidate","missing":missing,"capture_target_selected":!cfg.target.is_empty(),"game_only_audio_selected":cfg.game_audio.starts_with("app:"),"rnnoise_plugin_present":cfg.rnnoise_plugin.is_file(),"unimplemented":["EventSub","speech delivery and playback","cross-host shared selection transaction"],"competitive_non_regression":"NOT VERIFIED","cutover_authorized":false}).to_string())
+    Ok(json!({"ok":missing.is_empty()&&selected&&!cfg.eventsub_enabled&&!cfg.tts_mix_remote&&(!cfg.tts_enabled||cfg.role!="capture"||crate::poc_speech::valid_target(&cfg.tts_sink)),"engine":"rust-candidate","missing":missing,"capture_target_selected":!cfg.target.is_empty(),"game_only_audio_selected":cfg.game_audio.starts_with("app:"),"rnnoise_plugin_present":cfg.rnnoise_plugin.is_file(),"unimplemented":["EventSub","remote speech mixing","cross-host shared selection transaction"],"competitive_non_regression":"NOT VERIFIED","cutover_authorized":false}).to_string())
 }
 pub fn cleanup_after_exit(cfg: config::Config) -> io::Result<()> {
     let agent = Agent::new(cfg)?;
@@ -154,6 +156,8 @@ struct Agent {
     receive_monitor: Option<media::ReceiveMonitor>,
     last_health: Instant,
     output_observation: Option<obs::OutputStatus>,
+    speech_source: Option<return_audio::Source>,
+    speech_receiver: Option<return_audio::Receiver>,
 }
 impl Agent {
     fn new(mut cfg: config::Config) -> io::Result<Self> {
@@ -203,6 +207,8 @@ impl Agent {
             receive_monitor: None,
             last_health: Instant::now(),
             output_observation: None,
+            speech_source: None,
+            speech_receiver: None,
         })
     }
     fn status(&self) -> String {
@@ -320,19 +326,35 @@ impl Agent {
             .prepare(owner.cloned(), Instant::now(), self.lease_duration())
             .map_err(|_| err("invalid prepare transition"))?;
         let outcome = (|| -> io::Result<()> {
-            if self.cfg.eventsub_enabled || self.cfg.tts_enabled || self.cfg.tts_mix_remote {
-                return Err(err("EventSub and speech delivery are not complete; they cannot be enabled in a prepared session"));
+            if self.cfg.eventsub_enabled || self.cfg.tts_mix_remote {
+                return Err(err("EventSub and remote speech mixing are not complete; they cannot be enabled in a prepared session"));
             }
-            let missing = media::check_tools(&self.cfg.role)?;
+            let missing = media::session_tools(&self.cfg)?;
             if !missing.is_empty() {
                 return Err(err("SplitCast required native tools missing"));
             }
             if self.cfg.role == "capture" {
+                if self.cfg.tts_enabled && !crate::poc_speech::valid_target(&self.cfg.tts_sink) {
+                    return Err(err(
+                        "return audio requires an explicit capture playback node",
+                    ));
+                }
                 self.spawn(Worker::Tunnel, media::tunnel(&self.cfg))?;
                 self.wait_ready(|| self.rust_peer_ready())?;
                 self.validate_peer_transport()?;
                 self.prepare_remote(OwnerId::parse(&rand_hex()?)?)?;
+                if self.cfg.tts_enabled {
+                    let status =
+                        self.remote_request(&Command::Tts(crate::protocol::TtsAction::Status))?;
+                    self.speech_receiver = Some(return_audio::Receiver::from_status(&status)?);
+                }
             } else {
+                if self.cfg.tts_enabled {
+                    if owner.is_none() {
+                        return Err(err("speech return requires capture-owned Prepare"));
+                    }
+                    self.speech_source = Some(return_audio::Source::new(&self.cfg, rand_hex()?)?);
+                }
                 self.spawn(Worker::Receiver, media::receiver(&self.cfg)?)?;
                 self.wait_ready(|| {
                     media::receive_operation(&self.cfg, self.operation.as_ref()).is_ok()
@@ -472,7 +494,14 @@ impl Agent {
     fn cleanup_owned(&mut self) -> io::Result<()> {
         self.receive_monitor = None;
         self.output_observation = None;
+        self.speech_source.take(); // cancels and joins any synthesis worker
         let mut failed = false;
+        if let Some(receiver) = &mut self.speech_receiver {
+            match receiver.stop() {
+                Ok(()) => self.speech_receiver = None,
+                Err(error) => { failed = true; self.warn(&error.to_string()); }
+            }
+        }
         if self.cfg.role == "production" && self.children.contains(Worker::Obs) {
             failed |= self.obs().and_then(|mut o| o.stop()).is_err();
         }
@@ -581,6 +610,9 @@ impl Agent {
                     "owned infrastructure or media process exited; explicit prepare required",
                 ));
             }
+            if let Err(error) = self.poll_speech() {
+                self.warn(&format!("speech return: {error}"));
+            }
             if self.cfg.role == "production"
                 && self.session.state() == Lifecycle::Running
                 && self.last_health.elapsed() >= Duration::from_secs(1)
@@ -620,6 +652,26 @@ impl Agent {
                 }
             }
         }
+    }
+    fn poll_speech(&mut self) -> io::Result<()> {
+        if let Some(source) = &mut self.speech_source {
+            source.tick();
+        }
+        let Some(receiver) = &mut self.speech_receiver else {
+            return Ok(());
+        };
+        if !receiver.poll_due()? {
+            return Ok(());
+        }
+        let control = self.session.control();
+        let generation = control.generation();
+        let started = Instant::now();
+        let reply = self.remote_request(&Command::TtsNext)?;
+        self.checkpoint()?;
+        self.speech_receiver
+            .as_mut()
+            .expect("prepared receiver owns this poll")
+            .receive(&reply, started, &self.cfg, control, generation)
     }
     fn expire_lease(&mut self) {
         let expired = self.session.lease_expired(Instant::now());
@@ -666,6 +718,10 @@ impl Agent {
             Command::Diagnostics=>Ok(json!({"version":1,"role":self.cfg.role,"state":json_state(self.session.state()),"output":self.session.output().map(Output::as_str),"children":self.children.names(),"mic_muted":self.mic_muted,"retries":0}).to_string()),
             Command::Routes{settings}=>self.routes(settings.as_ref()),
             Command::Devices{remote}=>self.devices(remote),
+            Command::TtsNext => {
+                if owner.is_none() { return Err(err("speech pull requires the production session owner")); }
+                Ok(self.speech_source.as_mut().ok_or_else(||err("no active speech source"))?.take())
+            }
             command=>{
                 if !matches!(self.session.state(),Lifecycle::Ready|Lifecycle::Running|Lifecycle::Degraded){return Err(err("prepare the session first"));}
                 if self.cfg.role=="capture"{return self.peer_command(&command);}
@@ -683,7 +739,11 @@ impl Agent {
                     },
                     Command::Overlay{text}=>{self.obs()?.overlay(&text)?;Ok(json!({"updated":true}).to_string())},
                     Command::Preview=>self.obs()?.preview(),
-                    Command::Tts(_)|Command::Say{..}|Command::TtsNext|Command::TtsAck{..}|Command::TtsFinished{..}=>Err(err("speech synthesis is locally tested, but delivery, playback and EventSub parity are incomplete")),
+                    Command::Tts(crate::protocol::TtsAction::Status) => self.speech_source.as_mut()
+                        .ok_or_else(||err("speech return is disabled"))?.status(),
+                    Command::Say {text, id} => self.speech_source.as_mut()
+                        .ok_or_else(||err("speech return is disabled"))?.say(&text, id.as_deref()),
+                    Command::Tts(_)|Command::TtsAck{..}|Command::TtsFinished{..}=>Err(err("speech return is disabled or this speech control is unsupported")),
                     _=>Err(err("command is not a prepared-session control"))
                 }
             }
