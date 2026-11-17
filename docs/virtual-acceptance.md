@@ -20,6 +20,8 @@ The extended command uses generated inputs and loopback listeners only. It does 
 
 An unavailable tool, failed step, or missing test is a failure, not a skipped pass. Historical results are not added to the current run.
 
+The additional [real production-media profile](media-acceptance.md) runs separately with `nix develop --no-write-lock-file .#media-test -c cargo run -p splitcast-xtask -- verify-media`. It requires real MediaMTX, patched OBS, private audio, and independent recording inspection. It does not replace either regression matrix or establish capture-Agent, SSH, hardware, or deployment acceptance.
+
 ## Software contracts
 
 | Area | Required observation | Limit |
@@ -45,6 +47,10 @@ for a cooperative boundary or current external deadline. Virtual integration
 of the actual agent RTMP and RTSP media path, decoded-frame freshness, and
 broader congestion recovery remains open. The separate generated TCP test does
 not close that software gap, and hardware testing is not needed to address it.
+
+## Production-only media result, 2026-11-15 JST
+
+S20/E16 supersedes the missing-integration statement above only for the generated production-only profile at `42a64e4`. Actual Agent-owned MediaMTX, RNNoise/private Pulse, and OBS produce independently decoded local recordings. Eleven oracle tests and six cases cover normal output, frozen frames, bounded source backlog, disconnect, stall, worker death, and explicit fresh recovery. Three real-recording mutations reject incorrect A/V content or timestamps. AV01 supersedes the initial phase-fit timing claim. See [the exact receipt](evidence/media-plane-20261115.md) for final regression outcomes and preserved failures. Capture-Agent/SSH, actual network impairment, live freshness enforcement, and microphone alignment remain open. The historical S16 stand-in and detached TCP results keep their original scope.
 
 ## Independent physical acceptance
 

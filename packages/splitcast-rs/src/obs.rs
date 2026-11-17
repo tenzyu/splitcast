@@ -1,5 +1,5 @@
 //! Authenticated OBS WebSocket v5 control over loopback TCP only.
-use crate::config::{secret, Config};
+use crate::config::{secret, Config, ObsVideoMode};
 use crate::state::{atomic_file, private_directory};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
@@ -243,7 +243,10 @@ impl Obs {
                     continue;
                 }
                 if answer["d"]["requestStatus"]["result"].as_bool() != Some(true) {
-                    return Err(err("OBS request rejected"));
+                    let code = answer["d"]["requestStatus"]["code"]
+                        .as_u64()
+                        .map_or_else(|| "unknown".into(), |code| code.to_string());
+                    return Err(err(&format!("OBS request {name} rejected (code {code})")));
                 }
                 return Ok(answer.to_string());
             }
@@ -275,12 +278,33 @@ impl Obs {
         }
         Ok(())
     }
+    pub(crate) fn scene_ready(&mut self) -> io::Result<bool> {
+        self.has("GetSceneList", "scenes", "sceneName", "SplitCast")
+    }
+    pub(crate) fn game_decoded(&mut self, cfg: &Config) -> io::Result<bool> {
+        let item = response_data(&self.call(
+            "GetSceneItemId",
+            "{\"sceneName\":\"SplitCast\",\"sourceName\":\"GameFeed\"}",
+        )?)?;
+        let id = item["sceneItemId"]
+            .as_i64()
+            .ok_or_else(|| err("OBS game scene item required"))?;
+        let response = response_data(&self.call(
+            "GetSceneItemTransform",
+            &json!({"sceneName":"SplitCast","sceneItemId":id}).to_string(),
+        )?)?;
+        let transform = &response["sceneItemTransform"];
+        Ok(
+            transform["sourceWidth"].as_f64() == Some(f64::from(cfg.width))
+                && transform["sourceHeight"].as_f64() == Some(f64::from(cfg.height)),
+        )
+    }
     pub fn configure(&mut self, cfg: &Config) -> io::Result<()> {
         self.call("GetVersion", "{}")?;
         if !self.has("GetSceneList", "scenes", "sceneName", "SplitCast")? {
             self.call("CreateScene", "{\"sceneName\":\"SplitCast\"}")?;
         }
-        let feed = |name| json!({"is_local_file":false,"input":format!("rtsp://127.0.0.1:{}/{name}",cfg.rtsp),"input_format":"rtsp","ffmpeg_options":"rtsp_transport=tcp","hw_decode":true,"buffering_mb":1});
+        let feed = |name| json!({"is_local_file":false,"input":format!("rtsp://127.0.0.1:{}/{name}",cfg.rtsp),"input_format":"rtsp","ffmpeg_options":"rtsp_transport=tcp","hw_decode":cfg.obs_video_mode == ObsVideoMode::Hardware,"buffering_mb":1});
         self.input("GameFeed", "ffmpeg_source", feed("game"))?;
         self.input(
             "MicProcessed",
@@ -331,9 +355,26 @@ impl Obs {
         Ok(())
     }
     pub fn stop(&mut self) -> io::Result<()> {
+        let deadline = self
+            .operation
+            .as_ref()
+            .map_or(Ok(Instant::now() + TIMEOUT), |op| op.deadline(TIMEOUT))?;
         for (output, stop) in [("recording", "StopRecord"), ("twitch", "StopStream")] {
-            if self.status(output)? {
-                self.call(stop, "{}")?;
+            let mut requested = false;
+            loop {
+                let response =
+                    response_data(&self.call_until(output_method(output)?, "{}", deadline)?)?;
+                let active = response["outputActive"]
+                    .as_bool()
+                    .ok_or_else(|| err("OBS outputActive boolean required"))?;
+                if !active {
+                    break;
+                }
+                if !requested {
+                    self.call_until(stop, "{}", deadline)?;
+                    requested = true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
             }
         }
         Ok(())
@@ -396,10 +437,14 @@ pub fn launch_args(cfg: &Config) -> io::Result<Vec<String>> {
     if cfg.recording_dir.to_string_lossy().contains(['\n', '\r']) {
         return Err(err("invalid recording directory"));
     }
-    let profile = format!("[General]\nName=SplitCast\n[Video]\nBaseCX={width}\nBaseCY={height}\nOutputCX={width}\nOutputCY={height}\nFPSType=0\nFPSCommon={fps}\n[Output]\nMode=Advanced\n[AdvOut]\nEncoder=obs_nvenc_h264_tex\nRecType=Standard\nRecFilePath={}\nRecFormat2=mkv\nRecEncoder=obs_nvenc_h264_tex\nTrackIndex=1\nRecTracks=1\nRescale=false\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n", cfg.recording_dir.display(),width=cfg.width,height=cfg.height,fps=cfg.fps);
+    let encoder = match cfg.obs_video_mode {
+        ObsVideoMode::Hardware => "obs_nvenc_h264_tex",
+        ObsVideoMode::Software => "obs_x264",
+    };
+    let profile = format!("[General]\nName=SplitCast\n[Video]\nBaseCX={width}\nBaseCY={height}\nOutputCX={width}\nOutputCY={height}\nFPSType=0\nFPSCommon={fps}\n[Output]\nMode=Advanced\n[AdvOut]\nEncoder={encoder}\nRecType=Standard\nRecFilePath={}\nRecFormat2=mkv\nRecEncoder={encoder}\nTrackIndex=1\nRecTracks=1\nRescale=false\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n", cfg.recording_dir.display(),width=cfg.width,height=cfg.height,fps=cfg.fps);
     atomic_file(&studio.join("basic/profiles/SplitCast/basic.ini"), &profile)?;
     atomic_file(&studio.join("user.ini"), "[Basic]\nProfile=SplitCast\nProfileDir=SplitCast\nSceneCollection=SplitCast\nSceneCollectionFile=SplitCast\n[General]\nFirstRun=true\n")?;
-    atomic_file(&studio.join("basic/scenes/SplitCast.json"), "{\"name\":\"SplitCast\",\"current_scene\":\"SplitCast\",\"current_program_scene\":\"SplitCast\",\"scene_order\":[{\"name\":\"SplitCast\"}],\"sources\":[],\"groups\":[],\"transitions\":[]}")?;
+    atomic_file(&studio.join("basic/scenes/SplitCast.json"), "{\"name\":\"SplitCast\",\"current_scene\":\"SplitCast\",\"current_program_scene\":\"SplitCast\",\"scene_order\":[{\"name\":\"SplitCast\"}],\"sources\":[{\"name\":\"SplitCast\",\"id\":\"scene\",\"versioned_id\":\"scene\",\"settings\":{\"items\":[]},\"mixers\":0}],\"groups\":[],\"transitions\":[]}")?;
     Ok(vec![
         "env".into(),
         format!("XDG_CONFIG_HOME={}", base.display()),
@@ -473,6 +518,29 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn profile_uses_selected_encoder_for_stream_and_recording() {
+        let fixture = Fixture::new();
+        let mut cfg = fixture.config(0);
+        for (mode, encoder) in [
+            (ObsVideoMode::Hardware, "obs_nvenc_h264_tex"),
+            (ObsVideoMode::Software, "obs_x264"),
+        ] {
+            cfg.obs_video_mode = mode;
+            launch_args(&cfg).unwrap();
+            let profile = fs::read_to_string(
+                cfg.state_dir
+                    .join("obs-config/obs-studio/basic/profiles/SplitCast/basic.ini"),
+            )
+            .unwrap();
+            assert!(profile
+                .lines()
+                .any(|line| line == format!("Encoder={encoder}")));
+            assert!(profile
+                .lines()
+                .any(|line| line == format!("RecEncoder={encoder}")));
+        }
+    }
     fn config(dir: &Path, port: u16) -> Config {
         Config {
             document: String::new(),
@@ -514,6 +582,7 @@ mod tests {
             camera_height: 480,
             camera_fps: 30,
             obs_binary: "obs".into(),
+            obs_video_mode: ObsVideoMode::Hardware,
             obs_port: port,
             obs_password: dir.join("password"),
             twitch_key: dir.join("twitch"),
@@ -568,6 +637,73 @@ mod tests {
             f(socket);
         });
         (port, thread)
+    }
+
+    #[test]
+    fn configure_sends_selected_decode_mode_over_websocket() {
+        for (mode, hw_decode) in [
+            (ObsVideoMode::Hardware, true),
+            (ObsVideoMode::Software, false),
+        ] {
+            let fixture = Fixture::new();
+            let (port, thread) = server(move |mut socket| {
+                let mut feeds = Vec::new();
+                loop {
+                    let request = read(&mut socket);
+                    let method = request["d"]["requestType"].as_str().unwrap();
+                    if method == "CreateInput" {
+                        let data = &request["d"]["requestData"];
+                        if data["inputKind"] == "ffmpeg_source" {
+                            assert_eq!(data["inputSettings"]["hw_decode"], hw_decode);
+                            feeds.push(data["inputName"].as_str().unwrap().to_owned());
+                        }
+                    }
+                    let data = match method {
+                        "GetSceneList" => json!({"scenes":[{"sceneName":"SplitCast"}]}),
+                        "GetInputList" => json!({"inputs":[]}),
+                        _ => json!({}),
+                    };
+                    answer(&mut socket, &request, data);
+                    if method == "SetCurrentProgramScene" {
+                        break;
+                    }
+                }
+                assert_eq!(feeds, ["GameFeed", "CameraFeed"]);
+            });
+            let mut cfg = fixture.config(port);
+            cfg.obs_video_mode = mode;
+            cfg.camera_enabled = true;
+            Obs::connect(&cfg).unwrap().configure(&cfg).unwrap();
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn game_readiness_requires_decoded_source_geometry() {
+        let fixture = Fixture::new();
+        let (port, thread) = server(|mut socket| {
+            for (width, height) in [(0, 0), (1280, 720), (1920, 1080)] {
+                let request = read(&mut socket);
+                assert_eq!(request["d"]["requestType"], "GetSceneItemId");
+                answer(&mut socket, &request, json!({"sceneItemId":7}));
+                let request = read(&mut socket);
+                assert_eq!(request["d"]["requestType"], "GetSceneItemTransform");
+                assert_eq!(request["d"]["requestData"]["sceneItemId"], 7);
+                answer(
+                    &mut socket,
+                    &request,
+                    json!({"sceneItemTransform":{"sourceWidth":width,"sourceHeight":height}}),
+                );
+            }
+        });
+        let mut cfg = fixture.config(port);
+        cfg.width = 1280;
+        cfg.height = 720;
+        let mut obs = Obs::connect(&cfg).unwrap();
+        assert!(!obs.game_decoded(&cfg).unwrap());
+        assert!(obs.game_decoded(&cfg).unwrap());
+        assert!(!obs.game_decoded(&cfg).unwrap());
+        thread.join().unwrap();
     }
 
     #[test]
@@ -658,7 +794,7 @@ mod tests {
         let mut obs = Obs::connect(&fixture.config(port)).unwrap();
         assert_eq!(
             obs.call("GetVersion", "{}").unwrap_err().to_string(),
-            "OBS request rejected"
+            "OBS request GetVersion rejected (code unknown)"
         );
         assert!(obs
             .call("GetVersion", "{}")
@@ -961,6 +1097,25 @@ mod tests {
         assert!(obs.start(&cfg, "unknown").is_err());
         assert!(obs.start(&cfg, "twitch").is_err());
         obs.start(&cfg, "recording").unwrap();
+        thread.join().unwrap();
+    }
+    #[test]
+    fn stop_waits_for_recording_finalization_before_returning() {
+        let fixture = Fixture::new();
+        let (port, thread) = server(|mut socket| {
+            for (method, data) in [
+                ("GetRecordStatus", json!({"outputActive":true})),
+                ("StopRecord", json!({})),
+                ("GetRecordStatus", json!({"outputActive":true})),
+                ("GetRecordStatus", json!({"outputActive":false})),
+                ("GetStreamStatus", json!({"outputActive":false})),
+            ] {
+                let request = read(&mut socket);
+                assert_eq!(request["d"]["requestType"], method);
+                answer(&mut socket, &request, data);
+            }
+        });
+        Obs::connect(&fixture.config(port)).unwrap().stop().unwrap();
         thread.join().unwrap();
     }
     #[test]

@@ -26,8 +26,18 @@
       splitcast-obs-stock-candidate = pkgs.obs-studio.override {browserSupport = false;};
       splitcast-voicevox = voicevoxPkgs.voicevox-engine;
     };
-    devShells.${system}.default = pkgs.mkShell {
-      packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config pulseaudio ffmpeg-full openssh coreutils wasm-bindgen-cli lld cargo-audit cargo-deny];
+    devShells.${system} = {
+      default = pkgs.mkShell {
+        packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config pulseaudio ffmpeg-full openssh coreutils wasm-bindgen-cli lld cargo-audit cargo-deny];
+      };
+      media-test = pkgs.mkShell {
+        inputsFrom = [self.devShells.${system}.default];
+        packages = with pkgs; [mediamtx splitcast.obs rnnoise-plugin.ladspa xorg-server xauth mesa python3 bubblewrap git];
+        SPLITCAST_RNNOISE_PLUGIN = "${pkgs.rnnoise-plugin.ladspa}/lib/ladspa/librnnoise_ladspa.so";
+        LIBGL_DRIVERS_PATH = "${pkgs.mesa}/lib/dri";
+        __EGL_VENDOR_LIBRARY_FILENAMES = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
+        SPLITCAST_XKB_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
+      };
     };
     checks.${system} = {
       package = splitcast;

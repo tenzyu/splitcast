@@ -23,10 +23,27 @@ struct Agent {
     child: Child,
     port: u16,
     token: String,
+    evidence: PathBuf,
 }
 
 impl Agent {
+    fn trace(&self, event: Value) {
+        // Fixture-only private diagnostics; never record the bearer or password.
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.evidence.join("control-transitions.jsonl"))
+            .unwrap();
+        writeln!(
+            log,
+            "{}",
+            json!({"at":format!("{:?}", Instant::now()), "pid":self.child.id(), "event":event})
+        )
+        .unwrap();
+    }
+
     fn command(&self, command: &str, args: Value) -> (u16, Value) {
+        self.trace(json!({"request":command,"args":args}));
         let body = json!({"command":command,"args":args}).to_string();
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         stream.set_read_timeout(Some(LIMIT)).unwrap();
@@ -34,6 +51,8 @@ impl Agent {
         write!(stream, "POST /api/command HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", self.port, self.port, self.token, body.len()).unwrap();
         let mut response = String::new();
         if let Err(error) = stream.read_to_string(&mut response) {
+            self.trace(json!({"request_failed":command,"error":error.to_string(),"partial_response":response,
+                "process_status":fs::read_to_string(format!("/proc/{}/status",self.child.id())).ok()}));
             if let Ok(tasks) = fs::read_dir(format!("/proc/{}/task", self.child.id())) {
                 for task in tasks.flatten() {
                     let path = task.path();
@@ -59,7 +78,9 @@ impl Agent {
         }
         let (head, body) = response.split_once("\r\n\r\n").unwrap();
         let code = head.split_whitespace().nth(1).unwrap().parse().unwrap();
-        (code, serde_json::from_str(body).unwrap())
+        let body: Value = serde_json::from_str(body).unwrap();
+        self.trace(json!({"response":command,"code":code,"body":body}));
+        (code, body)
     }
 
     fn ok(&self, command: &str, args: Value) -> Value {
@@ -123,6 +144,7 @@ impl Agent {
         let end = Instant::now() + LIMIT;
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
+                self.trace(json!({"shutdown_exit":status.to_string()}));
                 assert!(status.success(), "agent shutdown: {status}");
                 return;
             }
@@ -134,17 +156,21 @@ impl Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+        let observed = self.child.try_wait();
+        self.trace(json!({"drop_exit_observation":format!("{observed:?}")}));
+        if !matches!(observed, Ok(Some(_))) {
             unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) };
             let end = Instant::now() + LIMIT;
             while Instant::now() < end {
-                if matches!(self.child.try_wait(), Ok(Some(_))) {
+                if let Ok(Some(status)) = self.child.try_wait() {
+                    self.trace(json!({"drop_exit":status.to_string()}));
                     return;
                 }
                 thread::sleep(Duration::from_millis(20));
             }
             let _ = self.child.kill();
-            let _ = self.child.wait();
+            let status = self.child.wait();
+            self.trace(json!({"forced_drop_exit":format!("{status:?}")}));
         }
     }
 }
@@ -211,7 +237,7 @@ impl Fixture {
                         executable("sh").display()
                     )
                 } else {
-                    format!("#!{}\nexport SPLITCAST_VIRTUAL_KIND='{name}'\nexec {} --exact virtual_worker --ignored --nocapture\n", executable("sh").display(), quote(&std::env::current_exe().unwrap()))
+                    format!("#!{}\nexport SPLITCAST_VIRTUAL_KIND='{name}'\nexec {} --exact virtual_worker --ignored --nocapture >> {} 2>&1\n", executable("sh").display(), quote(&std::env::current_exe().unwrap()), quote(&dir.join(format!("{name}.log"))))
                 };
                 let path = tools.join(name);
                 fs::write(&path, text).unwrap();
@@ -274,6 +300,7 @@ impl Fixture {
                     .unwrap(),
                 port,
                 token: format!("virtual-{role}-private-token"),
+                evidence: dir.clone(),
             };
             let end = Instant::now() + LIMIT;
             while TcpStream::connect(("127.0.0.1", port)).is_err() {
@@ -786,6 +813,8 @@ fn virtual_obs(dir: &Path) {
             let data = match method {
                 "GetVersion" => json!({"obsVersion":"virtual"}),
                 "GetSceneList" => json!({"scenes":[{"sceneName":"SplitCast"}]}),
+                "GetSceneItemId" => json!({"sceneItemId":1}),
+                "GetSceneItemTransform" => json!({"sceneItemTransform":{"sourceWidth":1280,"sourceHeight":720}}),
                 "GetInputList" => json!({"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}),
                 "StartRecord" => { assert!(!*active); *active = true; json!({}) },
                 "StopRecord" => { *active = false; json!({}) },

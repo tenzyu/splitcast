@@ -47,3 +47,74 @@ R09 remains open for parser-slot exhaustion, ephemeral completion observation,
 cross-host Prepare replay, durable outcomes, and aggregate kernel/cleanup bounds.
 R01, R02, R05, R07, actual media-path integration, and F04–F07 retain their
 separate gates. Shared bearer clients share operator authority, not isolation.
+
+## 2026-11-15 production-media follow-up
+
+S20/E16 and D14 narrow R01 and R04 with actual production Agent, MediaMTX,
+RNNoise/private Pulse, and OBS output at `42a64e4`. The [receipt](../evidence/media-plane-20261115.md)
+binds decoded artifacts and negative/recovery observations to that source.
+This corrects S16's missing production-only integration claim without closing
+the broader risks.
+
+- R04 remains open. Frozen and backlogged frames retain increasing bytes and
+  Running status. Independent checks reject them, but no live freshness policy
+  is enforced. Next, drive a decode-aware live-health policy with the same bad
+  sources and require observable fail-closed behavior. Do not infer freshness
+  from the new startup geometry check.
+- Capture-Agent and SSH publication, network congestion and clock correspondence
+  across hosts remain unverified. Next, use generated capture ingress with both
+  actual controllers and a local SSH topology, then impair actual media traffic
+  without delaying RTMP control handshakes. Require freshly decoded output and
+  both controller statuses. The current queue precedes RTMP ingress.
+- Microphone alignment, intended-VAD speech quality, and long-run drift remain
+  unknown. Next, inject an independently timestamped microphone marker at the
+  intended VAD setting and compare decoded PCM with video markers. The current
+  harmonic source uses VAD threshold zero and establishes routing only.
+- R02 and R05 remain open for deployment containment and ingress. R09 is narrowed
+  by a regression retaining Stopping after unconfirmed OBS finalization, not
+  closed for durable recovery, parser capacity, or kernel bounds. No physical,
+  GPU-performance, game, device-provenance, camera, or browser gate is closed.
+
+The initial software-mode attempt opened a GPU render node and failed. All
+accepted runs hide devices structurally. Retain that contrary observation;
+never promote a software setting into a device-isolation guarantee.
+
+AV01 supersedes the initial phase-fit timing claim; the corrected oracle proves
+sampled game transitions only. The final-source virtual run also observed an
+initial two-agent Prepare connection reset. Its cause is unknown; retain the
+failure even if the single permitted retry passes. Do not call it a fixed bug
+or a proven load-related flake. See E16 for final regression outcomes.
+
+## 2026-11-17 review and mission correction
+
+S21/S22 and [D15/D16](decisions.md) distinguish the renewed mission from current
+implementation. Read [the environment-gap entry](environment-gap.md) next; the
+older next-experiment lists above remain proposals in their dated scope.
+
+- R03 includes an independent **required** production-to-capture speech/other
+  audio return path, not just optional TTS polish. `agent.rs::prepare` refuses
+  speech/EventSub/remote mixing; synthesis component tests are not delivery or
+  playback evidence. Define return-path failure isolation and latency separately
+  from game interference and media freshness. No protocol/order/number approved.
+- R01/R04 remain open despite the [repaired acceptance oracle](../evidence/pr3-review-20261117.md).
+  The new gates test decoded cadence, complete-window coverage, consecutive
+  absence and source health; they do not add capture-Agent/SSH, network
+  congestion, live freshness enforcement, physical audio or gameplay results.
+- The original Prepare reset did not recur in twenty focused no-default-feature
+  attempts or the implementation-head full verifiers. Both agents' traces,
+  worker logs and successful exits are preserved. Cause remains unknown; added
+  diagnostics and different concurrency can alter observation. No speculative
+  fix or reliability guarantee. On recurrence, preserve those same diagnostics
+  and isolate the first demonstrated boundary before editing product code.
+- Worker stderr no longer unconditionally enters production logs. No actual
+  secret leak was confirmed. Suppression reduces raw diagnostics; a future
+  explicit private/bounded/redacted policy remains open rather than expanding
+  the logging boundary under an acceptance-test rationale.
+- Resource minimization and an optimal transport remain unverified. GSR still
+  acquires/encodes on capture host; offloading OBS does not eliminate GPU/memory,
+  thermal/power or scheduling interference. Inventory/reuse existing capabilities
+  before custom hot paths or more distributed control. No new PoC in this PR.
+
+The original human review remains pending, including the quota-limited review
+that returned no verdict. Publication/CI/test success does not authorize merge,
+deployment or private-host/device operations. Runtime/autostart gates unchanged.

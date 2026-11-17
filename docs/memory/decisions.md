@@ -14,6 +14,10 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 
 ## D02: One Rust command and validation contract serves every view
 
+Scope clarification: [D15](#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return)
+retains this historical consistency rule, not an obligation to expand clients or
+control infrastructure before the PoC's resource and return-path gaps are known.
+
 - Date: 2026-11-13. Adopted historical implementation and operator requirement. Confidence: high.
 - Goal: prevent the CLI, TUI, browser, and configuration formats from granting different capabilities.
 - Adopted: TOML-first configuration, transitional JSON through the same native validator, portable typed Rust commands, Rust/WASM browser logic, and generated JavaScript loader glue only. A future desktop client uses GPUI.
@@ -53,6 +57,10 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 - Sources: S05, S06 rollback and completion gates, S07 fail-closed decision, S10 migration and review rows. Related risk: R01.
 
 ## D06: Media, security, and performance require separate evidence
+
+See [D15](#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return)
+for the renewed three-budget mission; no prior synthetic envelope becomes a
+gameplay or returned-audio latency target.
 
 - Date: 2026-11-05 through 2026-11-13. Adopted acceptance policy. Confidence: high.
 - Goal: avoid calling a working process, socket, or synthetic file an accepted stream.
@@ -132,3 +140,75 @@ Fresh E07–E10 now replace the extraction-pass checkpoint's pending local verif
 - Rejected: applying renewal expiry to cleanup retries, recording unsent remote effects, treating 202 or plain Idle as release, and silently replaying uncertain Start or Prepare.
 - Accepted limits: observation is ephemeral without per-intent IDs, later authenticated Prepare is not cross-host replay-fenced, and finite parser slots can exclude HTTP control. Clients must coordinate observation and fresh authorization. No durable registry or executor rewrite was added.
 - Evidence: [S19/E15](evidence.md) and [the review follow-up](../evidence/urgent-control-review-20261114.md). The original D10/S16 statements retain their dated source scope; this candidate supersedes their ordinary Stop and inbound lease-progress limitations only. Outbound health work, media-path integration, browser ownership, kernel stalls, and deployment containment remain separate.
+
+### D13 correction, 2026-11-15 JST
+
+S20 inspected actual main `2a774d9`, whose history contains PR #2 merge `6349fd6`. D13's unmerged-candidate description remains true for its earlier S19 checkpoint, not current main. No deployed-state claim changes. S20's media changes do not replace or reimplement that control work.
+
+## D14: Accept decoded production media independently of liveness
+
+- Date: 2026-11-15 JST. Initial implementation `0accf63`, corrected acceptance at `42a64e4`; sources S20/E16 and [the media receipt](../evidence/media-plane-20261115.md).
+- Goal: distinguish correct generated media traversing the actual production services from living processes and increasing counters. Keep physical capture and deployment separate.
+- Adopted: a single opt-in Python stdlib profile around the real production Agent, real MediaMTX, private Pulse/RNNoise, and real patched OBS. Synthetic publishers replace only hardware ingress. A typed optional OBS video mode selects software encoding and decoding without changing legacy hardware defaults. The namespace launcher hides physical media devices and isolates network, PID, and writable-state ownership.
+- Rejected: a detached FFmpeg recording, fabricated OBS status, profile-rewriting wrappers, independent encoder/decoder knobs, and more elaborate Rust FIFO/thread orchestration for this experiment. A naive delayed RTMP relay was not accepted because it stalled control exchanges rather than proving delayed advancing media. The adopted bounded source backlog is explicitly not network impairment.
+- Disproved assumptions: software rendering alone prevented device enumeration; a WebSocket connection meant the scene was loaded; RNNoise could start before RTSP publication; active output implied usable bytes or pixels; StopRecord acknowledgement proved recording finalization; total marker span ruled out a frozen tail. The receipt separates direct observations, fixture failures, and the first-health counter cause that remains unisolated.
+- Product changes: wait for the initialized scene, track readiness before RNNoise, source geometry and actual bytes before Running, and inactive output before teardown. Propagate unconfirmed OBS finalization while continuing cleanup. Inherit worker stderr so the original service error remains observable.
+- Observed: the final profile decodes real local outputs, identifies advancing source epochs and both audio identities, measures sampled local scene age and game A/V marker offset, rejects frozen/backlogged content despite byte progress, and verifies faults, release, and explicit fresh recovery. Source, build, executable, service, fixture, and output identities remain separate.
+- Limit: Agent health still admits stale advancing content. The independent test detects it; live enforcement is not implemented. No capture-Agent/SSH, real network delay, microphone alignment, default-VAD speech quality, physical gameplay, or deployment acceptance follows. P1 and R04 are narrowed, not closed.
+- Correction links: D06's counter limitation and D10/S16's original missing-integration statement remain preserved. S20 supersedes only the production-only generated-media gap, not their broader timing, hardware, or containment risks. Source records and earlier failed runs are not erased.
+
+### AV01 correction, 2026-11-15 JST
+
+D14/S20's initial `0accf63` phase-fit timing acceptance was falsified: an 800 ms delay could fit inside its claimed 500 ms budget. Intermediate repeated codes, hidden PCM timestamp gaps and incorrect opening identity were also disproved. `42a64e4` adopts unique source-second audio identities, decoded sample/PTS continuity, sampled transition bounds with uncertainty, and bounded stream endpoints. Partial EOF markers outside joint observation are reported as unmeasured. Eleven pure tests, six real cases and three successfully generated recording mutations pass in E16's corrected receipt. The claim is sampled game A/V timing only; microphone alignment and continuous synchronization remain unknown. Human review is pending, not approved.
+
+### D14 scope and diagnostic correction, 2026-11-17
+
+S21's review identifies additional oracle gaps; see D16. The earlier passes keep
+their source scope, not a claim that those gaps were checked. P2-04 restores
+worker stderr to null rather than unconditionally inheriting it into production
+logs. Original service failures informed S20's repairs; no actual secret leakage
+was established. The fixture's synthetic worker diagnostics are explicitly
+redirected inside its private test directories. Production diagnostic design
+remains separate. D14 selected an acceptance fixture, not the optimal product
+architecture; D15 makes that distinction explicit.
+
+## D15: Recenter the PoC on gameplay offload and independent audio return
+
+- Date: 2026-11-17. Current user requirement, S21. Not implementation acceptance.
+- Goal: protect capture-host osu! Input/Audio/Update/Draw/display while moving
+  production work away; independently return production-computed speech/audio
+  to capture-host playback. Minimize shared CPU/GPU/memory/thermal/power and
+  scheduling interference; streaming failure must remain downstream of gameplay.
+- Adopted knowledge correction: [the mission](poc-mission.md) and
+  [environment-gap handoff](environment-gap.md) now lead the next session.
+  Reuse software and keep SplitCast thin. Distinguish infrequent control from
+  the media hot path; prove a specific bottleneck before duplicating infrastructure.
+- Supersedes: treating TTS as dispensable product scope because the current
+  candidate refuses it, or treating a recording-first release recommendation
+  (D11) as the user's adopted mission. D02's historical validation/view policy,
+  D06's evidence separation and D14's experimental route remain dated decisions,
+  not proof of an optimal transport or complete PoC.
+- Observation: `agent.rs::prepare` refuses TTS/EventSub/remote mixing;
+  `media.rs::tunnel` forwards control/RTMP/RTSP, not returned-audio playback.
+  GSR and OBS remain dependencies. S06 already distinguished synthesis from
+  delivery; E16 bypasses the capture side entirely.
+- Open: environment capability gaps; necessary local encoding work; return-path
+  isolation/expiry/playback contract; three independent acceptance budgets.
+  No TTS-first sequence, chosen protocol, concrete numeric target or new PoC is
+  authorized or accepted. No private deployment details belong in public docs.
+
+## D16: Judge cadence, audio coverage and fixture health from observations
+
+- Date: 2026-11-17. S21 review follow-up, implementation/evidence S22.
+- Counterexamples: nominal 30 fps and 270 frames can describe a 25%-drop VFR file;
+  exact 4,800/9,600-sample PCM lengths lose one complete window; 35 missing mic
+  windows of 118 still pass 70% presence. Receipt-only feeder errors do not
+  establish healthy ingress. The original Prepare reset has no established cause.
+- Adopted: decoded PTS density/local counts/gaps over a declared steady prefix;
+  every complete 100 ms PCM window, partial tail explicitly unclassified;
+  consecutive-absence checks; unexpected source errors/exits fail, with explicit
+  fault/Stop boundaries; bounded reset reproduction with private per-agent traces.
+- Verification and residual limits: [the review follow-up](../evidence/pr3-review-20261117.md)
+  records controls, source identities and commands. Synthetic VAD-zero tones are
+  not speech-quality or microphone-alignment proof. No live freshness enforcement,
+  new transport, broader hardening or speculative reset fix is introduced.

@@ -2,6 +2,19 @@
 
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
 
+**Next environment-gap session: [one entry](environment-gap.md).**
+Read [the PoC mission](poc-mission.md) for game-first offload, required independent
+audio return and the thin-integration boundary. S21 renews the user goal; S22's
+[PR #3 follow-up](../evidence/pr3-review-20261117.md) records review corrections.
+Historical entries below retain their dated scope; they are not the next task.
+
+S20/E16 is the preserved production-only software-media checkpoint at `42a64e4`;
+S22/E17 at `fb632bf` tightens and reruns the oracle without expanding that scope.
+Read [the reproducible profile](../media-acceptance.md) and
+[the actual receipt](../evidence/media-plane-20261115.md). Capture-Agent/SSH,
+network congestion, live freshness enforcement, and physical acceptance remain
+open. Earlier S16 and S19 statements retain their dated source scope.
+
 - [Decisions](decisions.md) records the goal, adopted and rejected shapes, contrary observations, and unresolved limits.
 - [Evidence](evidence.md) separates the source repository, historical repaired artifacts, and fresh standalone verification.
 - [Open risks](open-risks.md) lists the evidence required before a claim can be closed.
@@ -12,7 +25,7 @@ Current operating instructions live in [the operations runbook](../operations.md
 
 The current virtual-software contract is [virtual system acceptance](../virtual-acceptance.md). Its current-run commands, failures, and review results are recorded separately as S16 in [the evidence register](evidence.md).
 
-For the next task, read [the GitHub Actions and Nix cache handoff](../handoff/ci-nix-cache.md). [Production-readiness gates](../production-readiness.md) define the release work beyond CI. S17 records this documentation-only planning pass, not a new hosted or application result.
+For historical CI/cache context, read [the GitHub Actions and Nix cache handoff](../handoff/ci-nix-cache.md). [Production-readiness gates](../production-readiness.md) define release work beyond CI, not the renewed PoC's implementation order. S17 records a documentation-only planning pass, not a new hosted or application result.
 
 S18 implements that handoff using signed GitHub Releases rather than an external
 cache account. Its [CI/cache record](../evidence/ci-nix-cache-20261114.md) retains

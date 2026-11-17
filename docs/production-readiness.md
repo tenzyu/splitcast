@@ -10,6 +10,12 @@ Specify supported host roles, operating systems, architectures, capture backends
 
 A recording-first release with unfinished speech and EventSub refused is a recommended way to reduce initial scope, not an operator-approved product decision. If Twitch, camera, speech, or a browser interface is advertised, each advertised path needs its own acceptance evidence. Do not remove a required feature assertion merely to call the release ready.
 
+The 2026-11-17 [renewed PoC mission](memory/poc-mission.md) explicitly requires
+independent production-to-capture audio return and gameplay-first offload. The
+current refusal is safe incomplete behavior, not satisfaction of that goal.
+The ordered release plan below is not an adopted PoC sequence; start the next
+environment-gap session at [its handoff](memory/environment-gap.md).
+
 Uncertain RPC outcomes are unavoidable after a lost response. A supported release can preserve uncertainty, refuse automatic Start retries, fail closed after restart, and provide a tested reconciliation procedure. Durable operation history is required only if the release promises it. This plan does not reverse D10 by making a general operation registry an automatic prerequisite.
 
 ## Required evidence
@@ -17,11 +23,16 @@ Uncertain RPC outcomes are unavoidable after a lost response. A supported releas
 | Gate | Work remaining | Evidence required before closing |
 | --- | --- | --- |
 | P0. Reproducible delivery | Complete for `d2205d0` and its pinned `x86_64-linux` inputs. Keep the delivery checks for future candidates. | [S18 receipt](evidence/ci-nix-cache-20261114-receipt.json): hosted validation/builds, signed public release, retained failed attempts and fresh no-build consumption. Different inputs require new evidence. |
-| P1. Actual software media path | Connect generated sources to the actual agent RTMP and RTSP receive path. Use real media services rather than fabricated progress counters. | Both agent statuses plus independently decoded video/audio, expected tracks, selected geometry, timestamps or frame-age instrumentation, delayed transport, disconnect, child failure, and explicit recovery. Final recording/output must come from the path under test. |
+| P1. Actual software media path | [S20/E16](evidence/media-plane-20261115.md) accepts the production-only generated route at `42a64e4`, with real services, decoded output, corrected sampled A/V checks, faults, and recovery. Capture-Agent/SSH, actual network impairment, live freshness policy, and microphone alignment remain open. | Both agent statuses plus independently decoded video/audio, expected tracks, selected geometry, valid clocks, actual delayed transport, disconnect, child failure, and explicit recovery. The source backlog is not network-delay evidence. P1 is narrowed, not closed. |
 | P2. Responsive control and cleanup | [Candidate control semantics](virtual-control-design.md) separate intent, acknowledgment, effect ownership, and reconciliation. Aggregate cleanup bounds and deployment containment remain open. | [PR #2 review follow-up](evidence/urgent-control-review-20261114.md) covers stalled work, expired-owner release, dispatch boundaries, observation loss, and final-head verification. Parser exhaustion, cross-host replay, and separately authorized crash-containment tests remain distinct limits. Never report Idle or complete cleanup while effects remain unconfirmed. |
 | P3. State and trust boundaries | Resolve settings commit ambiguity, validated configuration boundaries, machine-readable error recovery, browser command ownership, and supported protocol compatibility. | Post-rename sync failure, restart readback, invalid payloads, owner conflicts, stale browser replies, duplicate clicks, cancellation, and authorization tests through supported interfaces. Document any deliberately unsupported stable-library contract. |
 | P4. Operational reliability | Define health signals, failure escalation, upgrade/rollback procedure, secret handling, dependency policy, and support diagnostics. | A finite, declared soak workload and fault matrix with resource/queue observations, bounded retries, leak checks, actionable logs, and a tested rollback to the approved prior artifact. Set acceptance thresholds before evaluating results. |
 | P5. Target-environment acceptance | Accept the actual capture and production environment for the supported release. | Separately authorized capture permissions, selected-device provenance, Direct Scanout behavior, GPU contention, physical audio, actual OBS preview/output, synchronization, gameplay non-regression, listener isolation, and service-cgroup containment. |
+
+The [2026-11-17 review follow-up](evidence/pr3-review-20261117.md) repairs and
+reruns P1's generated-production oracle at `fb632bf`. It does not close P1 or
+upgrade the scopes above. The original Prepare reset remains unexplained after
+a bounded diagnostic probe; human review is still pending.
 
 P0 through P4 can progress without physical hardware-performance approval. Real OBS with generated input and a headless display may also support software integration work, but does not establish physical capture acceptance. P5 is required before calling a particular real deployment accepted. It does not need to block unrelated software changes.
 

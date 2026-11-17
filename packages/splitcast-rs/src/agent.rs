@@ -346,7 +346,11 @@ impl Agent {
                     Worker::Obs,
                     crate::audio::client(&self.cfg, obs::launch_args(&self.cfg)?),
                 )?;
-                self.wait_ready(|| self.obs().is_ok())?;
+                self.wait_ready(|| {
+                    self.obs()
+                        .and_then(|mut o| o.scene_ready())
+                        .unwrap_or(false)
+                })?;
                 let mut o = self.obs()?;
                 o.configure(&self.cfg)?;
             }
@@ -403,24 +407,36 @@ impl Agent {
                 if self.cfg.camera_enabled && self.cfg.camera_location == "production" {
                     self.spawn(Worker::Camera, media::camera(&self.cfg)?)?;
                 }
-                self.spawn(
-                    Worker::Rnnoise,
-                    crate::audio::client(&self.cfg, media::rnnoise(&self.cfg)?),
-                )?;
                 let mut monitor = media::ReceiveMonitor::new(self.cfg.camera_enabled);
                 self.wait_ready(|| {
                     media::receive_operation(&self.cfg, self.operation.as_ref())
                         .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
                 })?;
-                self.receive_monitor = Some(monitor);
+                self.spawn(
+                    Worker::Rnnoise,
+                    crate::audio::client(&self.cfg, media::rnnoise(&self.cfg)?),
+                )?;
                 let mut o = self.obs()?;
                 o.configure(&self.cfg)?;
-                o.start(&self.cfg, which)?;
                 self.wait_ready(|| {
                     self.obs()
-                        .and_then(|mut o| o.status(which))
+                        .and_then(|mut o| o.game_decoded(&self.cfg))
                         .unwrap_or(false)
                 })?;
+                o.start(&self.cfg, which)?;
+                self.wait_ready(|| {
+                    media::receive_operation(&self.cfg, self.operation.as_ref())
+                        .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
+                        && self
+                            .obs()
+                            .and_then(|mut o| o.observe(which))
+                            .is_ok_and(|status| {
+                                status.active
+                                    && status.bytes.is_some_and(|bytes| bytes > 0)
+                                    && status.frames.is_none_or(|frames| frames > 0)
+                            })
+                })?;
+                self.receive_monitor = Some(monitor);
                 self.output_observation = Some(self.obs()?.observe(which)?);
             }
             Ok(())
@@ -456,12 +472,10 @@ impl Agent {
     fn cleanup_owned(&mut self) -> io::Result<()> {
         self.receive_monitor = None;
         self.output_observation = None;
-        if self.cfg.role == "production" && self.children.contains(Worker::Obs) {
-            if let Ok(mut o) = self.obs() {
-                let _ = o.stop();
-            }
-        }
         let mut failed = false;
+        if self.cfg.role == "production" && self.children.contains(Worker::Obs) {
+            failed |= self.obs().and_then(|mut o| o.stop()).is_err();
+        }
         if self.session.remote_owner().is_some() {
             let release = (|| -> io::Result<()> {
                 if !self.children.contains(Worker::Tunnel) {
