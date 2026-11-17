@@ -10,7 +10,7 @@ gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
   -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" \
   -f name="Unverified experimental Nix cache ${GITHUB_SHA:0:12}" \
   -F draft=true -F prerelease=true -f make_latest=false \
-  -F body=@docs/release-cache-notes.md > artifacts/ci/release-draft.json
+  -f body="Experimental SplitCast Nix cache for commit ${GITHUB_SHA}. Not a production or physical-media acceptance. Verify signatures, exact store outputs, source provenance and redistributability before use: https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/binary-cache.md" > artifacts/ci/release-draft.json
 release_id=$(python3 -c 'import json; print(json.load(open("artifacts/ci/release-draft.json"))["id"])')
 [[ "$release_id" =~ ^[0-9]+$ ]]
 gh release upload "$tag" "$directory"/* --repo "$GITHUB_REPOSITORY"
