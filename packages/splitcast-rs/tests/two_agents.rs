@@ -198,6 +198,17 @@ fn private_file(path: &Path, text: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+fn assert_port_not_listening(port: u16) {
+    // A closed listener can leave accepted TCP connections in TIME_WAIT.
+    // Rebinding immediately without SO_REUSEADDR reports EADDRINUSE even
+    // though no process still listens on the port.
+    match TcpStream::connect(("127.0.0.1", port)) {
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+        Ok(_) => panic!("port {port} still accepts TCP connections"),
+        Err(error) => panic!("cannot determine listener state on port {port}: {error}"),
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let root = std::env::current_dir().unwrap().join(format!(
@@ -351,10 +362,7 @@ impl Fixture {
             );
         }
         for index in [6, 7] {
-            assert!(
-                TcpListener::bind(("127.0.0.1", self.ports[index])).is_ok(),
-                "worker port not released"
-            );
+            assert_port_not_listening(self.ports[index]);
         }
     }
 }
@@ -436,10 +444,7 @@ fn two_actual_agents_control_failure_and_explicit_recovery() {
     f.capture.shutdown();
     f.production.shutdown();
     for port in &f.ports {
-        assert!(
-            TcpListener::bind(("127.0.0.1", *port)).is_ok(),
-            "port {port} survived agent shutdown"
-        );
+        assert_port_not_listening(*port);
     }
 }
 
@@ -710,7 +715,7 @@ fn sigterm_during_delayed_prepare_releases_receiver_and_accepted_connections() {
         .to_string()
         .contains("outcome unknown"));
     f.released(&pids);
-    assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+    assert_port_not_listening(port);
     println!(
         "SIGTERM during delayed Prepare: {:?}; receiver and listener released",
         signalled.elapsed()
