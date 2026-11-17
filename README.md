@@ -1,50 +1,78 @@
 # SplitCast
 
-SplitCast is an experimental Rust controller for capture on one host and production on another. It owns native media workers instead of injecting code into a game. Local playback and input must remain independent of the production host.
+**Two-host media production for Linux gameplay, without putting the game under the production host's control.**
 
-**This is a partial implementation, not a production-ready streaming system.** The Nix module keeps the runtime migration-gated by default and defines no autostart target. Speech delivery, EventSub, shared selection transactions, full recovery, live media acceptance, and gameplay non-regression remain open.
+SplitCast is an experimental Rust controller for a setup in which one Linux host captures gameplay and another handles media production. The capture host keeps running the game, rendering its display, and playing game audio locally. SplitCast coordinates separate native media workers and their control lifecycle; it does not inject code into the game.
 
-## Build and verify
+The goal is to move composition, recording, streaming, and other production work away from performance-sensitive gameplay **without making gameplay depend on the production host**. This is an architectural goal, not a demonstrated reduction in latency or resource use. Capturing and encoding on the game host still consume resources.
 
-The supported development environment is Linux x86-64 with Rust 1.95.0, pinned through Nix. This is a conservative supported floor, not a measured historical minimum compiler version.
+> **Project status: experimental and incomplete.** This repository is for development and controlled verification, **not a ready-to-deploy streaming service**. Generated-media tests exercise part of the real production pipeline, but the complete capture-to-production path, physical two-host operation, gameplay non-regression, and the required audio return path have not been accepted. The Nix service remains disabled by default.
+
+## How it fits together
+
+```text
+Capture host (game stays here)               Production host
+
+Game display + selected game audio
+  -> Game capture / encode (GSR) ---------> MediaMTX -> OBS -> recording / stream
+                                     RTMP     |          composition / output
+Selected microphone
+  -> FFmpeg / Opus -----------------------> RTSP -> RNNoise -> private audio -> OBS
+
+Rust capture agent <- authenticated control / SSH -> Rust production agent
+
+Local game playback: independent of production
+Production-generated speech/audio - - - - -> local playback (required; not implemented)
+```
+
+The capture and production hosts are **roles**, not specific machines. The diagram describes the intended system and existing worker boundaries, **not a fully accepted live flow**. In particular, current generated-media acceptance starts on the production side; it does not exercise GSR on the capture host or the SSH media path. See the [PoC mission and evidence boundaries](docs/memory/poc-mission.md) and [media acceptance profile](docs/media-acceptance.md).
+
+SplitCast is an **orchestrator, not another media engine**. It uses GPU Screen Recorder (GSR) for game capture, FFmpeg for media processing, MediaMTX for transport/relay, and OBS Studio for scene composition and output. Unlike Sunshine, it is not a remote-play host: game input and local playback are meant to stay on the capture machine. Unlike Owncast, it is not an audience-facing livestream server. It does not replace OBS Studio or MediaMTX.
+
+## What works, and what is still missing
+
+| Area | Current state |
+| --- | --- |
+| Control and configuration | Native CLI, line-mode TUI, Rust/WASM browser client code, typed commands, TOML-first validation, owner-scoped lifecycle and bounded worker cleanup are implemented and covered by local software tests. A built browser client is **not** browser-usage acceptance. |
+| Production-side media | A device-free test runs the real production agent with MediaMTX, RNNoise/private audio, and OBS, then checks the resulting recording with an independent decoder. This is **generated-input, production-only** evidence. |
+| Capture-to-production transport | Capture-side GSR/FFmpeg workers and SSH forwards exist, but actual two-agent media publication, network impairment, decoded-frame freshness enforcement, and physical capture remain unaccepted. Advancing byte counters alone do not prove fresh video. |
+| Returned audio and chat events | Production-generated speech/audio returning to local playback is a **required but missing** capability. The live agent currently refuses enabled TTS delivery, EventSub, and remote TTS mixing instead of pretending they work. |
+| Deployment and recovery | No automatic service start or approved production cutover. Remote cleanup obligations and failure handling exist, but full crash recovery, end-to-end performance, and listener/host acceptance remain open. |
+
+The distinction matters: **implemented code ≠ passed isolated test ≠ accepted deployment**. Read the [production-readiness gates](docs/production-readiness.md), [verification record](docs/verification.md), and [open risks](docs/memory/open-risks.md) before interpreting a green check as a feature guarantee.
+
+## Start safely: build and inspect offline
+
+The supported development target is **Linux `x86_64`**, using the repository's Nix-pinned Rust toolchain. These commands require Nix with flakes enabled and run from the repository root. They do not enable a service, access physical capture devices, start a public stream, or switch a NixOS generation.
+
+```sh
+nix build .#default
+./result/bin/splitcast selfcheck
+./result/bin/splitcast validate --config packages/splitcast-rs/example.toml
+./result/bin/splitcast doctor --offline --config packages/splitcast-rs/example.toml
+```
+
+`selfcheck` exercises the local lifecycle without starting media. `validate` checks the example configuration offline. The example deliberately selects **no capture target, game-audio application, or microphone**; offline `doctor` should therefore report **not ready** for streaming. That is the expected result, not a failed setup.
+
+For the repository's regular source checks:
 
 ```sh
 nix develop -c cargo run -p splitcast-xtask -- verify
-nix build .#default .#splitcast-web
-result/bin/splitcast validate --config packages/splitcast-rs/example.toml
-result/bin/splitcast doctor --offline --config packages/splitcast-rs/example.toml
 ```
 
-The example has no selected capture or microphone. Doctor must not report it ready to stream. Verification logs go to the ignored `artifacts/verification/` directory. Real audio-daemon and generated-media tests are opt-in; see [operations](docs/operations.md). Ordinary tests use isolated local peers and stand-in workers, not physical capture devices.
+The verifier runs the declared source/test matrix against local software fixtures and stores logs under ignored `artifacts/verification/`. Separate opt-in profiles exercise virtual transport, private audio, and real production software with generated media. **Do not treat them as permission for real SSH hosts, capture hardware, audio changes, public listeners, or broadcasting.** Follow the [virtual acceptance guide](docs/virtual-acceptance.md), [media profile](docs/media-acceptance.md), and [operations runbook](docs/operations.md) for exact scopes and safeguards.
 
-## Prebuilt packages
+## Packages and integration
 
-The verified Linux x86-64 candidate is available through a signed GitHub Releases
-Nix cache, including WASM and patched OBS. See [download without compilation](docs/binary-cache.md)
-for the pinned source, cache URL, public keys and no-build commands.
-No external cache account is needed. This does not enable services or establish
-production readiness.
+The flake exports `packages.x86_64-linux.default`, `packages.x86_64-linux.splitcast-web`, `homeManagerModules.default`, and `nixosModules.default`. A consumer can import these without copying SplitCast sources into its own repository. **Runtime selection is migration-gated** (`rustCandidate = false` by default) and the Home Manager unit has no autostart target; neither building nor importing a module activates streaming.
 
-## What exists
+See [Nix integration](docs/nix-integration.md). A signed GitHub Releases Nix cache is documented for the specifically verified Linux `x86_64` candidate, with pinned source and no-build consumption steps in [binary-cache instructions](docs/binary-cache.md). Cache availability is **distribution evidence, not runtime acceptance**.
 
-- A typed command protocol shared by the native CLI, line-mode TUI, and Rust/WASM browser client.
-- TOML-first configuration with the same strict native validation for JSON, finite routes, and private credential files.
-- Phase-owned local authority, remote preparation obligations, explicit output selection, and bounded process-group teardown.
-- Native bounded loopback HTTP and OBS WebSocket control, plus an isolated production audio server.
-- A tested synthesis component whose incomplete delivery and playback path is refused by the live agent.
+## Repository guide
 
-`packages/splitcast-rs` owns native effects. `packages/splitcast-protocol` is the shared command boundary. `packages/splitcast-web` contains browser behavior; its handwritten JavaScript only loads generated WASM glue. `tools/xtask` runs repeatable development checks. Crates are not configured for registry publication; public Rust interfaces remain experimental.
+- **Implementation:** [`packages/splitcast-rs`](packages/splitcast-rs) owns native effects; [`packages/splitcast-protocol`](packages/splitcast-protocol) defines shared commands; [`packages/splitcast-web`](packages/splitcast-web) provides the Rust/WASM client; [`tools/xtask`](tools/xtask) runs development checks. The crates are experimental and not published to a registry.
+- **Design and evidence:** [Rust design review](docs/design-review.md), [current verification](docs/verification.md), [PoC mission](docs/memory/poc-mission.md), [decisions and unknowns](MEMORY.md), and [import history](docs/history/README.md).
+- **Operating boundaries:** [Operations and rollback](docs/operations.md), [security](SECURITY.md), [production-readiness gates](docs/production-readiness.md), and [Nix integration](docs/nix-integration.md).
+- **Contributing and licensing:** [Contribution policy](CONTRIBUTING.md), [MIT license for original SplitCast code](LICENSE), and [third-party notices](THIRD_PARTY.md). Dependencies, upstream OBS modifications, and other third-party material retain their own licenses.
 
-## Use from another flake
-
-The repository exports `packages.x86_64-linux.default`, `homeManagerModules.default`, and `nixosModules.default`. A consumer imports the modules and supplies deployment settings. It does not copy this repository's source into its own tree. See [Nix integration](docs/nix-integration.md).
-
-## Review and evidence
-
-- [Rust design review](docs/design-review.md) covers contracts, ownership, failure, cancellation, public API, performance, and risks.
-- [Verification](docs/verification.md) distinguishes fresh standalone results from historical source results.
-- [Operations](docs/operations.md) gives test steps, stop conditions, acceptance gates, and rollback.
-- [Memory](MEMORY.md) connects goals, decisions, disproved assumptions, source evidence, and unknowns across sessions.
-- [History](docs/history/README.md) describes normalized source records and original Git blob identities.
-
-Read [contribution policy](CONTRIBUTING.md), [security boundaries](SECURITY.md), and [third-party notices](THIRD_PARTY.md) before extending or publishing this candidate. Original SplitCast code uses the [MIT license](LICENSE); third-party material retains its applicable license.
+New development should target a **specific missing observable behavior**, not expand the orchestration framework ahead of the PoC. The [environment-gap entry](docs/memory/environment-gap.md) identifies the current investigation boundary without authorizing host operations.
