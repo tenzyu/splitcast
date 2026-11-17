@@ -41,6 +41,10 @@ At session start, read the startup index and **one domain page relevant to the t
 
 The last row is a live work item, not an adopted implementation change. Recheck actual PR statuses and CI receipts before using these lines as current facts.
 
+### Post-merge correction (later 2026-11-17)
+
+The table captures an earlier snapshot. Subsequently [PR #5](https://github.com/tenzyu/splitcast/pull/5) merged at `9ef4431` and [PR #7](https://github.com/tenzyu/splitcast/pull/7) merged at `1678a0c`. PR #5's failed CI run is still a failed run, not retroactively passed by the merge. At this check [PR #6](https://github.com/tenzyu/splitcast/pull/6) remained open: `verify` and `verify-virtual` succeeded, but the package job was still running. This is a source-status update only; no capture, media acceptance, deployment, or completed CI is inferred.
+
 ## Next useful investigation
 
 Start at the [environment-gap entry](environment-gap.md), **not** at the old cache-publication or generalized infrastructure checklist. Inventory the existing media and independent returned-audio capabilities at the capture/production boundary; distinguish gameplay interference, media freshness and returned-audio latency. Choose a bounded falsifiable software experiment before inventing another subsystem. The current experimental runtime stays disabled by default and host operations require independent approval.
