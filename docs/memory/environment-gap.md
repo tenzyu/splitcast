@@ -1,5 +1,7 @@
 # Next session: environment-gap entry
 
+> **S26 status:** This is a **completed historical discovery entry**, not the current resume task. PR #9 is merged; continue at the [PoC handoff](../handoff/poc-20261117.md) and [current reconciliation](../evidence/dreaming-main-20261117.md). Do not repeat permission questions already resolved for Twitch WSS/Helix/subscription.
+
 Updated 2026-11-17. **This is the entry for the completed S23 environment-gap
 session.** Continue from [S25's convergence checkpoint](../evidence/poc-convergence-20261117.md).
 The following discovery instructions retain their earlier scope, not a new
