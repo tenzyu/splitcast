@@ -1,5 +1,9 @@
 # Current SplitCast working state
 
+## Latest source state (S26, after PR #9 merge)
+
+[Current-main reconciliation](../evidence/dreaming-main-20261117.md) supersedes **only the current-status wording** in the dated snapshots below. HEAD `ed7fe60` includes merged PRs #4–#9 (including #6's test correction and #9's finite `poc-play`). Hosted CI run `44097472963` passed all four jobs. Old failed workflows remain failures. The prior PR #9 conflict-resolution task is complete and must not be resumed. The [PoC handoff](../handoff/poc-20261117.md) remains useful for missing inputs, permissions and remaining acceptance, **not for its pre-merge Git state**. No local runtime check or physical PoC acceptance was performed in S26. The manually triggered release-cache run `44097570226` was still in progress when inspected.
+
 Updated 2026-11-17. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
 
 PR #9's [base-conflict resolution](../evidence/pr9-conflicts-20261117.md) incorporates
