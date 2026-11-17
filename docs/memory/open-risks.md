@@ -140,3 +140,21 @@ the new operator instruction and partial evidence, not deployment permission.
 - Readiness S23's audio metadata clients socket-activated inactive shared audio
   services. S24 remote metadata checks service state before connecting and never
   treats shared services as probe-owned. Preserve the earlier side effect.
+
+## S25 convergence correction
+
+Use the [convergence checkpoint](../evidence/poc-convergence-20261117.md) for the
+current blocker classification. New Twitch WSS/subscription permission is no
+longer missing. The selected channel and suitable existing OAuth configuration
+are missing in the inspected scope, and event admission to synthesis still has
+no implementation. No scope rejection was observed because no API call ran.
+
+The coarse statement that capture FFmpeg is absent is superseded. Cached
+headless FFmpeg exists but lacks Pulse input. GSR/helper and a worker-launch
+route remain absent. Native microphone and portal candidates are not accepted
+alternatives. DRM-node access alone does not supply the KMS privilege boundary.
+
+The latest whole-suite pass is clean `3c2f913`, not a retrospective pass for the
+first convergence run's three reset failures. Preserve those failures and the
+outside-session source change. No automatic retries beyond the three recorded
+checks are part of this continuation. PoC completion remains open.

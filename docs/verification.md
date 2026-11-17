@@ -1,5 +1,10 @@
 # Standalone verification
 
+The [convergence checkpoint](evidence/poc-convergence-20261117.md) records the
+latest ordinary pass at clean `3c2f913` and the earlier failed convergence run.
+Its scope is software verification. The first run's three reset failures remain
+unexplained and are not erased by a later pass at a changed source identity.
+
 The [2026-11-17 initial PoC checkpoint](evidence/poc-20261117.md) records the
 post-merge finite-playback changes and their actual local checks. Its ordinary
 verifier passes all eleven stages with 165 ordinary tests. That result does not

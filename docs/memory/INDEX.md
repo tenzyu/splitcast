@@ -2,7 +2,13 @@
 
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
 
-**Current implementation checkpoint: [initial PoC](../evidence/poc-20261117.md).**
+**Current checkpoint: [PoC convergence](../evidence/poc-convergence-20261117.md).**
+S25 records the local fixture commit, receipt reconciliation, approved Twitch
+operations, missing account inputs and concrete capture dependencies. No real
+Twitch event or physical offload is accepted. Start with the channel and existing
+OAuth path, not another request for already-approved WSS/subscription permission.
+
+Previous implementation checkpoint: [initial PoC](../evidence/poc-20261117.md).
 S23 completed private readiness discovery and confirmed PR #3 merge. S24 records
 the operator's implementation instruction, finite trial limits and partial
 evidence. It does not establish PoC completion or authorize deployment.

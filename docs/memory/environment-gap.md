@@ -1,7 +1,7 @@
 # Next session: environment-gap entry
 
 Updated 2026-11-17. **This is the entry for the completed S23 environment-gap
-session.** Continue implementation from [S24's PoC checkpoint](../evidence/poc-20261117.md).
+session.** Continue from [S25's convergence checkpoint](../evidence/poc-convergence-20261117.md).
 The following discovery instructions retain their earlier scope, not a new
 prohibition against the operator's separately authorized S24 trials.
 Read [the mission](poc-mission.md), then pull only the sources needed

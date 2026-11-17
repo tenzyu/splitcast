@@ -4,13 +4,28 @@ Updated 2026-11-17. This page is a cold-start capsule. Distinct checks retain th
 
 ## Post-merge implementation checkpoint
 
+S25's [convergence checkpoint](../evidence/poc-convergence-20261117.md) is current.
+The fixture implementation and S24 Wiki are locally committed in `3c2f913`.
+This continuation observed that commit already present and did not create or
+publish it. It preserves the separate `ec38ee3` test change. Latest full verifier
+passes eleven stages at clean `3c2f913`, with 165 tests per feature selection.
+An earlier three-case reset failure remains recorded, not diagnosed as fixed.
+
+Twitch connection, necessary Helix calls and existing suitable OAuth use are
+approved. The selected channel and usable existing token are still absent in
+the inspected deployment. No API call or new receiver was run. Read-only capture
+inventory identifies absent GSR/helper, cached headless FFmpeg without Pulse
+input, existing native audio tools and an untested portal alternative. Capture
+SSH remains read-only. See the checkpoint for the narrow player-execution request.
+
 PR #3 is merged at `a5e7a22`. S23's private readiness handoff and S24's new
 operator instruction supersede the earlier pending-merge/next-discovery wording
 below only for their stated scopes. Start at [the initial PoC checkpoint](../evidence/poc-20261117.md).
 It records partial local playback work and independent GPU/engine evidence,
 read-only capture inventory, finite recording limits, and exact remaining gates.
 No real Twitch-triggered return, physical offload or controlled non-regression
-result is claimed. New work remains uncommitted and unpublished.
+result is claimed. The uncommitted state in the S24 record is historical and is
+superseded by S25's local-commit observation above.
 
 ## Goal and next task
 

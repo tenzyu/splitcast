@@ -211,7 +211,7 @@ architecture; D15 makes that distinction explicit.
 - Verification and residual limits: [the review follow-up](../evidence/pr3-review-20261117.md)
   records controls, source identities and commands. Synthetic VAD-zero tones are
   not speech-quality or microphone-alignment proof. No live freshness enforcement,
-   new transport, broader hardening or speculative reset fix is introduced.
+  new transport, broader hardening or speculative reset fix is introduced.
 
 ## D17: Verify finite speech playback before wiring a delivery service
 
@@ -234,3 +234,22 @@ architecture; D15 makes that distinction explicit.
   Scanout samples are not controlled all-frame baseline data. Generated hardware
   codec execution and real local engine synthesis are separate from physical
   capture, microphone routing, event ingestion, returned listening and integration.
+
+## D18: Separate granted Twitch operations from absent account inputs
+
+- Date: 2026-11-17, S25. EventSub WSS, configured-channel chat v1 subscription,
+  necessary Helix calls and existing suitable OAuth use are now approved. Do not
+  re-request those grants. New OAuth or scope expansion remains forbidden.
+- Observed: production's configured OAuth file is absent and no channel selector
+  exists. Capture-side OBS has a Twitch stream key but no selected OAuth/account
+  metadata in the inspected profile and global configuration. Do not treat a
+  stream key as chat OAuth or infer a channel from repository ownership.
+- Adopted: stop only the missing-input operation, request the existing account
+  path or receiver output, and avoid implementing a duplicate client against an
+  unknown source. Keep mock, local synthesis and real event evidence distinct.
+- Capture discovery corrects the earlier coarse dependency hypothesis. A cached
+  FFmpeg exists but lacks the Pulse demuxer. GSR and the privileged KMS helper
+  are absent. Existing native audio and portal tools are candidates, not verified
+  replacements or permission to run workers through read-only SSH.
+- Source/evidence: [S25 checkpoint](../evidence/poc-convergence-20261117.md).
+  Existing fixture work is locally committed, not promoted to complete PoC.

@@ -9,6 +9,12 @@ the existing retained-media profile unchanged under that permission. Read-only
 SSH is not a worker-launch channel. The [fixture playback command](poc-speech.md)
 does not connect Twitch or authorize physical listening by itself.
 
+[S25's convergence checkpoint](evidence/poc-convergence-20261117.md) records the
+later Twitch authorization. WSS, configured-channel chat subscription, necessary
+Helix calls and existing suitable OAuth use are approved. New OAuth and scope
+changes are not. Missing account inputs stop that operation. Capture SSH still
+permits metadata investigation only, not worker launch or helper provisioning.
+
 ## 1. Record the artifact and scope
 
 Record the Git commit, dirty status, operating system, compiler, dependency lockfile, package path when applicable, command, result, and evidence directory. A source commit does not identify a running operating-system generation. Imported historical results do not count as fresh standalone passes.
