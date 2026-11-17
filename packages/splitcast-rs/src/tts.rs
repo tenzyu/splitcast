@@ -306,8 +306,13 @@ struct Job {
     id: String,
     text: String,
     expires: Instant,
-    path: Option<PathBuf>,
+    audio: Option<ReadyAudio>,
     attempts: u8,
+}
+
+enum ReadyAudio {
+    File(PathBuf),
+    Memory(Vec<u8>),
 }
 
 pub struct Speech {
@@ -316,7 +321,7 @@ pub struct Speech {
     max_text: usize,
     limit: usize,
     expiry: Duration,
-    cache: PathBuf,
+    cache: Option<PathBuf>,
     enabled: bool,
     muted: bool,
     worker: Option<Worker>,
@@ -350,7 +355,13 @@ impl Speech {
                 "TTS cache directory must be private and owned by this user",
             ));
         }
-        Ok(Self {
+        Ok(Self::with_storage(cfg, root, Some(cache)))
+    }
+    pub(crate) fn in_memory(cfg: &Config) -> io::Result<Self> {
+        Ok(Self::with_storage(cfg, origin(&cfg.voicevox_url)?, None))
+    }
+    fn with_storage(cfg: &Config, root: String, cache: Option<PathBuf>) -> Self {
+        Self {
             root,
             speaker: cfg.tts_speaker,
             max_text: cfg.tts_max_text as usize,
@@ -366,10 +377,10 @@ impl Speech {
             seen: VecDeque::new(),
             error: String::new(),
             serial: 0,
-        })
+        }
     }
     fn remove(job: Job) {
-        if let Some(path) = job.path {
+        if let Some(ReadyAudio::File(path)) = job.audio {
             let _ = fs::remove_file(path);
         }
     }
@@ -398,7 +409,11 @@ impl Speech {
         }
     }
     pub fn enqueue(&mut self, text: &str, id: &str) -> io::Result<Value> {
+        self.enqueue_until(text, id, Instant::now() + self.expiry)
+    }
+    pub(crate) fn enqueue_until(&mut self, text: &str, id: &str, expires: Instant) -> io::Result<Value> {
         self.expire();
+        if expires <= Instant::now() { return Err(invalid("speech admission expired")); }
         if !safe_id(id) {
             return Err(invalid("invalid speech ID"));
         }
@@ -423,12 +438,11 @@ impl Speech {
         {
             return Err(invalid("TTS queue is full"));
         }
-        let now = Instant::now();
         self.pending.push_back(Job {
             id: id.into(),
             text: text.into(),
-            expires: now + self.expiry,
-            path: None,
+            expires,
+            audio: None,
             attempts: 0,
         });
         self.seen.push_back(id.into());
@@ -437,20 +451,23 @@ impl Speech {
         }
         Ok(json!({"id":id,"duplicate":false}))
     }
-    fn publish(&mut self, job: &Job, audio: &[u8]) -> io::Result<PathBuf> {
+    fn publish(&mut self, job: &Job, audio: Vec<u8>) -> io::Result<ReadyAudio> {
+        let Some(cache) = &self.cache else {
+            return Ok(ReadyAudio::Memory(audio));
+        };
         self.serial += 1;
         let name = format!("{}-{}-{}", std::process::id(), self.serial, job.id);
-        let tmp = self.cache.join(format!(".{name}.tmp"));
-        let path = self.cache.join(format!("{name}.wav"));
+        let tmp = cache.join(format!(".{name}.tmp"));
+        let path = cache.join(format!("{name}.wav"));
         let result = (|| {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
                 .open(&tmp)?;
-            file.write_all(audio)?;
+            file.write_all(&audio)?;
             fs::rename(&tmp, &path)?;
-            Ok(path)
+            Ok(ReadyAudio::File(path))
         })();
         if result.is_err() {
             let _ = fs::remove_file(tmp);
@@ -482,9 +499,9 @@ impl Speech {
                     let result = result
                         .ok()
                         .and_then(Result::ok)
-                        .and_then(|audio| self.publish(&job, &audio).ok());
-                    if let Some(path) = result {
-                        job.path = Some(path);
+                        .and_then(|audio| self.publish(&job, audio).ok());
+                    if let Some(audio) = result {
+                        job.audio = Some(audio);
                         self.ready.push_back(job);
                         self.error.clear();
                     } else {
@@ -520,6 +537,15 @@ impl Speech {
             handle,
         });
     }
+    /// Consume before constructing a reply. A lost reply deliberately loses the utterance.
+    pub(crate) fn take_return(&mut self) -> Option<(String, Instant, Vec<u8>)> {
+        self.expire();
+        let job = self.ready.pop_front()?;
+        match job.audio {
+            Some(ReadyAudio::Memory(wav)) => Some((job.id, job.expires, wav)),
+            _ => unreachable!("only the in-memory Agent queue is used for return"),
+        }
+    }
     pub fn next_ready(&mut self) -> Value {
         self.expire();
         if !self.enabled || self.muted || self.playing.is_some() {
@@ -538,7 +564,10 @@ impl Speech {
         self.ready
             .iter()
             .find(|j| j.id == id)
-            .and_then(|j| j.path.clone())
+            .and_then(|j| match &j.audio {
+                Some(ReadyAudio::File(path)) => Some(path.clone()),
+                _ => None,
+            })
             .ok_or_else(|| invalid("speech unavailable"))
     }
     pub fn ack(&mut self, id: &str) -> Value {
@@ -688,7 +717,7 @@ mod tests {
             max_text: 50,
             limit: 2,
             expiry: Duration::from_secs(5),
-            cache,
+            cache: Some(cache),
             enabled: true,
             muted: false,
             worker: None,
@@ -859,8 +888,8 @@ mod tests {
         assert!(s.worker.is_none());
         assert!(s.next_ready().is_null());
         assert!(s.audio("cancelled").is_err());
-        assert_eq!(fs::read_dir(&s.cache).unwrap().count(), 0);
-        let cache = s.cache.clone();
+        assert_eq!(fs::read_dir(s.cache.as_ref().unwrap()).unwrap().count(), 0);
+        let cache = s.cache.clone().unwrap();
         drop(s);
         fs::remove_dir(cache).unwrap();
     }
@@ -933,7 +962,7 @@ mod tests {
         assert!(s.worker.is_none() && s.pending.is_empty());
         assert!(s.next_ready().is_null());
         assert_eq!(server.join().unwrap(), 3);
-        let cache = s.cache.clone();
+        let cache = s.cache.clone().unwrap();
         drop(s);
         fs::remove_dir(cache).unwrap();
     }
@@ -1013,7 +1042,7 @@ mod tests {
         s.finished("abc");
         assert!(!path.exists());
         assert_eq!(s.enqueue("again", "abc").unwrap()["duplicate"], true);
-        let cache = s.cache.clone();
+        let cache = s.cache.clone().unwrap();
         drop(s);
         fs::remove_dir(cache).unwrap();
     }
@@ -1040,7 +1069,7 @@ mod tests {
         s.command("unmute", &[]).unwrap();
         assert!(s.enqueue("d", "../bad").is_err());
         s.command("clear", &[]).unwrap();
-        let cache = s.cache.clone();
+        let cache = s.cache.clone().unwrap();
         drop(s);
         fs::remove_dir(cache).unwrap();
     }

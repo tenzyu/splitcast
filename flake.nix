@@ -28,7 +28,7 @@
     };
     devShells.${system} = {
       default = pkgs.mkShell {
-        packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config pulseaudio ffmpeg-full openssh coreutils wasm-bindgen-cli lld cargo-audit cargo-deny];
+        packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config pulseaudio pipewire wireplumber python3 ffmpeg-full openssh coreutils wasm-bindgen-cli lld cargo-audit cargo-deny];
       };
       media-test = pkgs.mkShell {
         inputsFrom = [self.devShells.${system}.default];

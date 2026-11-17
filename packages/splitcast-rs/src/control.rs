@@ -374,7 +374,13 @@ pub(crate) fn request_operation(
     let size = h
         .get("content-length")
         .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n <= RESPONSE_LIMIT)
+        .filter(|n| {
+            *n <= if command == "tts-next" {
+                crate::return_audio::REPLY_LIMIT
+            } else {
+                RESPONSE_LIMIT
+            }
+        })
         .ok_or_else(|| unknown_outcome(err("bounded control response required")))?;
     let response = String::from_utf8(
         read_body(&mut stream, body, size, deadline, operation).map_err(unknown_outcome)?,

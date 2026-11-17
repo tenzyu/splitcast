@@ -188,6 +188,23 @@ fn verify(base: &Path, virtual_system: bool) -> io::Result<bool> {
                 ][..],
             ),
             (
+                "native-return",
+                &[
+                    "test",
+                    "-p",
+                    "splitcast-rs-core",
+                    "--test",
+                    "two_agents",
+                    "return_tests::native_return",
+                    "--locked",
+                    "--offline",
+                    "--",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                ][..],
+            ),
+            (
                 "local-transport",
                 &[
                     "test",

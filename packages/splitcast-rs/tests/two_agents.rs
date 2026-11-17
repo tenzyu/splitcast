@@ -209,8 +209,15 @@ fn assert_port_not_listening(port: u16) {
     }
 }
 
+#[path = "return_audio/session.rs"]
+mod return_tests;
+
 impl Fixture {
     fn new() -> Self {
+        Self::with_speech(false, None)
+    }
+
+    fn with_speech(speech: bool, native_lab: Option<&Path>) -> Self {
         let root = std::env::current_dir().unwrap().join(format!(
             "../../artifacts/verification/two-agents-{}-{}",
             std::process::id(),
@@ -265,7 +272,11 @@ impl Fixture {
             });
             cfg["peer"]["remote_control_port"] = json!(ports[1]);
             cfg["peer"]["forward_control_port"] = json!(if role == "capture" {
-                ports[1]
+                if native_lab.is_some() {
+                    ports[2]
+                } else {
+                    ports[1]
+                }
             } else {
                 ports[2]
             });
@@ -287,6 +298,15 @@ impl Fixture {
             cfg["obs"]["twitch_key_file"] = json!(dir.join("absent-twitch-key"));
             cfg["tts"]["credentials_file"] = json!(dir.join("absent-credentials"));
             cfg["tts"]["voicevox_url"] = json!(format!("http://127.0.0.1:{}", ports[8]));
+            if speech {
+                cfg["tts"]["enabled"] = json!(true);
+                cfg["tts"]["queue_limit"] = json!(2);
+                cfg["tts"]["expiry_seconds"] = json!(5);
+                if role == "capture" {
+                    cfg["audio"]["tts_sink"] = json!("return.selected");
+                    return_tests::install_player(&dir, native_lab);
+                }
+            }
             fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
         }
         drop(reservations);
@@ -328,7 +348,7 @@ impl Fixture {
         let production = spawn("production", ports[1]);
         let capture = spawn("capture", ports[0]);
         println!(
-            "two real agents, stand-in workers only; evidence {}",
+            "two real agents, isolated worker environment; evidence {}",
             root.display()
         );
         Self {

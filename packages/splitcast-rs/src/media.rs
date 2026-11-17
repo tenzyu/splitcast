@@ -411,9 +411,18 @@ pub fn ready_output(buf: &str, name: &str) -> bool {
     parse_media_observation(buf, name).is_ok_and(|o| o.usable(kind))
 }
 pub fn check_tools(role: &str) -> io::Result<Vec<String>> {
+    required_tools(role, false)
+}
+
+pub(crate) fn session_tools(cfg: &Config) -> io::Result<Vec<String>> {
+    required_tools(&cfg.role, cfg.tts_enabled)
+}
+
+fn required_tools(role: &str, return_audio: bool) -> io::Result<Vec<String>> {
     let mut req = vec!["ffmpeg", "ffprobe", "pactl"];
     if role == "capture" {
-        req.extend(["ssh", "gpu-screen-recorder"])
+        req.extend(["ssh", "gpu-screen-recorder"]);
+        if return_audio { req.push("pw-play"); }
     } else {
         req.extend(["mediamtx", "pulseaudio"])
     };

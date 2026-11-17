@@ -121,6 +121,15 @@ impl Operation {
             remote_prepare: None,
         }
     }
+    pub(crate) fn until(shutdown: Arc<AtomicBool>, deadline: Instant) -> Self {
+        Self {
+            shutdown,
+            ticket: None,
+            deadline,
+            control: None,
+            remote_prepare: None,
+        }
+    }
     pub(crate) fn with_control(
         mut self,
         control: crate::lifecycle::SessionControl,
