@@ -8,7 +8,8 @@ The command needs explicit permission to play on its selected host and device.
 The input is a regular, non-symlink file with at most 4 MiB of bounded PCM16 WAV.
 Supported audio has one or two channels, a sample rate from 8 to 48 kHz, and at
 most 30 seconds of samples. Malformed or ambiguous chunks and inconsistent PCM
-headers are rejected before a player starts. The caller's input remains unchanged.
+headers are rejected before a player starts. The format chunk must precede the
+audio data. Padded ancillary chunks may precede the format chunk. The caller's input remains unchanged.
 
 The target is an explicit node name, not a numeric object ID or serial. There is
 no default-sink selection or route mutation.

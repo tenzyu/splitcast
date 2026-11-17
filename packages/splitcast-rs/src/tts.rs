@@ -95,6 +95,9 @@ impl<'a> PcmWav<'a> {
                     u16at(start + 14),
                 ));
             } else if &data[pos..pos + 4] == b"data" {
+                if fmt.is_none() {
+                    return Err(invalid("WAV data before format"));
+                }
                 if pcm.is_some() {
                     return Err(invalid("duplicate WAV data"));
                 }
