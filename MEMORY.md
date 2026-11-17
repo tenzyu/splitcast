@@ -34,6 +34,6 @@ private-host access, privilege changes, external listeners or public output.
 | How do new findings correct old knowledge? | [Update protocol](docs/memory/update-protocol.md) |
 | What changed on PR #3; what remains? | [Current state](docs/memory/session-state.md) and [review follow-up](docs/evidence/pr3-review-20261117.md) |
 
-At the 2026-11-17 snapshot, [README PR #5](https://github.com/tenzyu/splitcast/pull/5) and [Stop-ack test PR #6](https://github.com/tenzyu/splitcast/pull/6) are open. [CI run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405) failed a `no-default-features` Stop-ack test; recheck PR #6's latest CI before claiming a fix.
+**Later 2026-11-17 GitHub state:** [README PR #5](https://github.com/tenzyu/splitcast/pull/5) merged at `9ef4431` and [Dreaming PR #7](https://github.com/tenzyu/splitcast/pull/7) merged at `1678a0c`. The [failed PR #5 run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405) remains failed historical evidence; merge did not make it PASS. [Test-only PR #6](https://github.com/tenzyu/splitcast/pull/6) remains open at this check. Its `verify` and `verify-virtual` jobs passed, while the native/WASM job was still running; check final CI before claiming all checks green.
 
 Read [the Rust entrypoint](RUST_AGENT_ROOT.md) and [engineering policy](RUST_ENGINEERING_AGENTS.md) before nontrivial Rust work. Historical documents under `docs/history/source/` are evidence, not current operating instructions.
