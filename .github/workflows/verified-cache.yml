@@ -1,0 +1,41 @@
+name: Verify published Nix cache
+
+# The publisher creates an unverified prerelease. Its consumer is an independent
+# job; only afterward may a privileged updater change the release metadata.
+on:
+  workflow_run:
+    workflows: ["Release Nix cache"]
+    types: [completed]
+    branches: [main]
+  # Bootstrap the last successfully consumed prerelease on initial installation.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verified-cache.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify exact run and update only the release title and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+            python3 tools/ci/finalize_release.py --run-id "$TARGET_RUN"
+          else
+            python3 tools/ci/finalize_release.py --latest
+          fi

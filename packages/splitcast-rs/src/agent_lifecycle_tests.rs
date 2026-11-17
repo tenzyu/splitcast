@@ -372,23 +372,43 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
     // Remove the actual fault, not the ownership record. The next peer Stop
     // must retry cleanup with the same owner, without emergency owner omission.
     drop(audio);
-    let done = Arc::new(AtomicBool::new(false));
-    let cancel = Arc::clone(&done);
     let owner_thread = thread::spawn(move || {
         let end = Instant::now() + Duration::from_secs(3);
-        while !control.stop_pending() && !cancel.load(Ordering::Relaxed) && Instant::now() < end {
+        while !control.stop_pending() && Instant::now() < end {
             thread::sleep(Duration::from_millis(1));
         }
-        if control.stop_pending() {
-            agent.stop(None).unwrap();
-            let mut body: Value = serde_json::from_str(&agent.status()).unwrap();
-            body["stop"] = json!("completed");
-            body["outcome"] = json!("completed");
-            control.finish_stop((200, body.to_string()));
-        }
+        assert!(
+            control.stop_pending(),
+            "matching owner Stop was not admitted before the test deadline"
+        );
+        agent.stop(None).unwrap();
+        let mut body: Value = serde_json::from_str(&agent.status()).unwrap();
+        body["stop"] = json!("completed");
+        body["outcome"] = json!("completed");
+        control.finish_stop((200, body.to_string()));
         agent
     });
-    // This is the actual owner-scoped transport used by capture cleanup.
+    // A bounded HTTP Stop may acknowledge the intent with 202 before the
+    // effect owner finishes cleanup. That is not a failed Stop or a reason to
+    // cancel its owner thread; both 202 and an immediate 200 are valid.
+    let first = crate::control::request(
+        port,
+        port,
+        TOKEN,
+        "stop",
+        &json!({"_owner":owner.as_str()}).to_string(),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let first: Value = serde_json::from_str(&first).unwrap();
+    match first["stop"].as_str() {
+        Some("requested") => assert_eq!(first["outcome"], "accepted"),
+        Some("completed") => assert_eq!(first["outcome"], "completed"),
+        _ => panic!("unexpected initial Stop response: {first}"),
+    }
+    let mut agent = owner_thread.join().unwrap();
+    // A second Stop from the *same* expired owner is an idempotent completion
+    // observation. It must return owner-scoped proof, not an unowned fallback.
     let retry = crate::control::request(
         port,
         port,
@@ -396,9 +416,9 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
         "stop",
         &json!({"_owner":owner.as_str()}).to_string(),
         Duration::from_secs(2),
-    );
-    done.store(true, Ordering::Relaxed);
-    let mut agent = owner_thread.join().unwrap();
+    )
+    .unwrap();
+    let proof: Value = serde_json::from_str(&retry).unwrap();
     server.join().unwrap();
     drop(queue);
     let state = agent.session.state();
@@ -406,14 +426,9 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
     // Also leave the failing-before fixture clean, without an unowned HTTP
     // escape hatch being mistaken for a successful regression result.
     agent.stop(Some(&owner)).unwrap();
-    assert!(
-        retry.is_ok(),
-        "expired matching peer could not retry retained cleanup: {retry:?}"
-    );
     assert_eq!(state, Lifecycle::Idle);
     assert!(!retained, "retry did not release the actual audio socket");
     assert!(agent.children.names().is_empty());
-    let proof: Value = serde_json::from_str(&retry.unwrap()).unwrap();
     assert_eq!(proof["stop"], "completed");
     assert_eq!(proof["owner"], owner.as_str());
     let old_generation = generation;

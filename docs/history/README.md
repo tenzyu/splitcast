@@ -1,11 +1,18 @@
-# Historical source records
+# Historical records and pruning manifest
 
-`source/` contains normalized publication copies of prior source-repository records. They are not current commands, deployment instructions, or standalone test results. Earlier Python, service, display, and host-specific instructions may be obsolete.
+Prior normalized source copies and overwritten long-form reports remain recoverable, byte-for-byte, at branch [`archive/pre-dreaming-20261117`](https://github.com/tenzyu/splitcast/tree/archive/pre-dreaming-20261117) (snapshot of original main `ed7fe60`). Git history preserves all previous branch edits. This branch is **historical evidence, not current instructions**.
 
-The extraction baseline is source commit `3c8857353581424e5cca517d7ccf0db8de7514d4`. The original implementation and reports remain in the source repository's Git history. `import-manifest.json` records original Git blob IDs, original SHA-256 values, and imported normalized-content SHA-256 values. Later edits to current code do not change an imported snapshot's historical identity.
+## Preserved in current checkout
 
-Publication normalization replaces machine aliases with role labels, operational user accounts with `operator`, and personal home directories with `<operator-home>`. Source URLs invalidated by that normalization point to the import manifest instead of fabricated repository paths. Original repository attribution URLs are intentionally retained as provenance, not deployment identifiers. This deliberately changes hashes. Source Git blobs are the references for raw originals. To inspect one, run `git cat-file blob <source_git_blob>` in a checkout that retains the source history. The standalone repository does not pretend to contain those original Git objects.
+- [ADR-2026-11-07-performance-first.md](source/docs/graphics-streaming/ADR-2026-11-07-performance-first.md) — original architecture/performance ADR (unchanged).
+- [ARCHITECTURE_DECISIONS.md](source/docs/ARCHITECTURE_DECISIONS.md) and [DECISIONS-2026-11-06.md](source/docs/graphics-streaming/DECISIONS-2026-11-06.md) — original rationale, historical environment and rejected alternatives (unchanged).
+- `import-manifest.json` — **historical** source Git blob identities and normalized import hashes; it describes the original extraction, **not** a promise that every imported Markdown remains present at HEAD.
+- Original non-Markdown source artifacts, logs, manifests and code copies not selected for Markdown pruning.
 
-The source corpus includes historical failures, superseded plans, partial passes, and commands that are no longer executable. The memory register identifies which findings remain relevant. Private local logs and recordings are not included merely because a historical report mentions them.
+## Material archived from HEAD
 
-Additional source documents can be imported only with their original object and content identities recorded. Preserve the source first; label normalization and corrections rather than silently rewriting evidence.
+The pruned Markdown paths are listed exactly in the [pre-Dreaming source tree](https://github.com/tenzyu/splitcast/tree/archive/pre-dreaming-20261117/docs/history/source). A request for a deleted path must use the archived branch URL or `git show archive/pre-dreaming-20261117:<path>`. Do not recreate full historical copies in the hot Wiki. Old Python deployment instructions and hardware observations are not valid current status.
+
+The extracted corpus was normalized for publication: machine aliases, users and personal paths may differ from original source blobs; the import manifest distinguishes those hashes. Private raw logs and credentials were never authorized for publication.
+
+For currently adopted choices follow [D01–D18](../memory/decisions.md); for execution/acceptance follow [PoC handoff](../handoff/poc-20261117.md). Never promote archival logs or a commit merge into contemporary test success.

@@ -32,7 +32,8 @@ Uncertain RPC outcomes are unavoidable after a lost response. A supported releas
 The [2026-11-17 review follow-up](evidence/pr3-review-20261117.md) repairs and
 reruns P1's generated-production oracle at `fb632bf`. It does not close P1 or
 upgrade the scopes above. The original Prepare reset remains unexplained after
-a bounded diagnostic probe; human review is still pending.
+a bounded diagnostic probe. PR #3 was subsequently merged into main on
+2026-11-17; merge does not close P1 or authorize deployment.
 
 P0 through P4 can progress without physical hardware-performance approval. Real OBS with generated input and a headless display may also support software integration work, but does not establish physical capture acceptance. P5 is required before calling a particular real deployment accepted. It does not need to block unrelated software changes.
 
