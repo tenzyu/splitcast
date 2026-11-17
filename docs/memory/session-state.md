@@ -10,10 +10,12 @@ session starts at [this entry](environment-gap.md).** No new PoC or host work is
 authorized here. The Agent's TTS/EventSub refusal is a gap against that mission,
 not evidence that the return path is no longer required.
 
-PR #3 is open on `acceptance/real-media-plane`, originally published at `8486e81`
-against `2a774d9`. The [2026-11-17 follow-up](../evidence/pr3-review-20261117.md)
-tracks seven findings, current oracle fixes, bounded reset reproduction and
-final-HEAD commands. Human review is separate and pending. No merge/deploy.
+PR #3 **is merged** into main at `a5e7a229151835ceea55c2b1d695399eeac69828`
+(2026-11-17); PR #2 was merged earlier at `6349fd6`. The
+[2026-11-17 review follow-up](../evidence/pr3-review-20261117.md) remains a
+dated record of seven findings, oracle fixes and bounded reset probes.
+Its older "under review" wording is historical, not the current PR state.
+Neither merge constitutes host activation, deployment or hardware acceptance.
 
 S22 implementation `fb632bf` passes all three gates: media run
 `20261117T083058Z-ApaTam5y` (16 units, six cases, six recording controls and
@@ -24,6 +26,19 @@ unknown. The first VFR negative fixture failed to generate, was corrected once,
 then all six controls ran and rejected correctly. Final documentation-bearing
 HEAD gets its own all-three-gate receipt in PR #3; do not promote these
 implementation-head runs into a new-HEAD result.
+
+## Current source/CI correction, 2026-11-17
+
+PR #5 ([README refresh](https://github.com/tenzyu/splitcast/pull/5)) remained
+open at this snapshot. Its [workflow run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405)
+failed only the `verify` no-default-features stage, at
+`expired_matching_peer_can_retry_retained_cleanup_over_http`: the test required
+`stop=completed` but received `stop=requested`. A bounded `202 requested` is
+permitted by `server.rs` and cannot be interpreted as completed cleanup.
+The [test-only correction in PR #6](https://github.com/tenzyu/splitcast/pull/6)
+is a separate candidate; its CI success must be checked against the exact PR
+head before marking it fixed. Neither this documentation nor PR #6 changes
+service gates. See the [Dreaming ledger](dreaming.md#current-correction-ledger-2026-11-17).
 
 ## Preserved 2026-11-15 checkpoint (S20)
 
@@ -87,7 +102,10 @@ See [the complete run and correction record](../evidence/virtual-system-20261114
 
 ## Open work and safety
 
-Ordinary Stop still queues behind Prepare. Lease maintenance remains serial. Actual media-path integration, congestion behavior, settings durability, browser request ownership, typed validation/error boundaries, and declared crash-recovery semantics need further work. See [open risks](open-risks.md) and the readiness gates rather than repeating the original extraction review as if no repairs occurred.
+The historical assertion that urgent Stop queues behind Prepare was superseded
+by PR #2's listener-side admission. Bounded HTTP Stop acknowledgement is not
+confirmed resource release; owner-scoped completion remains necessary.
+Lease maintenance and aggregate cleanup still have documented limits. Actual media-path integration, congestion behavior, settings durability, browser request ownership, typed validation/error boundaries, and declared crash-recovery semantics need further work. See [open risks](open-risks.md) and the readiness gates rather than repeating the original extraction review as if no repairs occurred.
 
 Direct Scanout, GPU contention, capture permissions, real device provenance, physical audio, real OBS acceptance, and deployment containment remain separately authorized acceptance work. Keep `rustCandidate=false` and autostart targets empty.
 
