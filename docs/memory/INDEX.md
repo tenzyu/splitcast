@@ -2,7 +2,11 @@
 
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
 
-**Current checkpoint: [PoC convergence](../evidence/poc-convergence-20261117.md).**
+**Paused session entry: [PoC handoff](../handoff/poc-20261117.md).**
+The operator authorized checkpoint publication on `handoff/poc-20261117`.
+No merge, PR or deployment is included. Private evidence remains Git-ignored.
+
+Current checkpoint: [PoC convergence](../evidence/poc-convergence-20261117.md).
 S25 records the local fixture commit, receipt reconciliation, approved Twitch
 operations, missing account inputs and concrete capture dependencies. No real
 Twitch event or physical offload is accepted. Start with the channel and existing

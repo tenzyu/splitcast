@@ -17,7 +17,10 @@ recording-first recommendation, for the renewed product goal.
 
 PR #3 is merged at `a5e7a22` on 2026-11-17. S23's private readiness investigation
 confirmed source inclusion, not deployment. The operator supplied the next PoC
-implementation instruction in S24. Continue from [S25's convergence checkpoint](docs/evidence/poc-convergence-20261117.md).
+implementation instruction in S24. Work is paused with a [PoC handoff](docs/handoff/poc-20261117.md)
+and [S25's convergence checkpoint](docs/evidence/poc-convergence-20261117.md).
+The operator subsequently authorized pushing this checkpoint and handoff on
+`handoff/poc-20261117`, not merging the divergent main histories or deploying.
 Fixture work is locally committed in `3c2f913`. Twitch WSS, selected-channel
 subscription and existing suitable OAuth use are now approved, but the selected
 channel and OAuth configuration are absent in the inspected scope. Capture SSH
@@ -34,6 +37,7 @@ private-host access, privilege changes, external listeners or public output.
 
 | Question | Page |
 | --- | --- |
+| Where should the next session resume? | **[PoC handoff](docs/handoff/poc-20261117.md)** |
 | What can the authorized initial PoC prove now, and what blocks it? | **[Convergence checkpoint](docs/evidence/poc-convergence-20261117.md)** |
 | Where does the next environment-gap session start? | **[Environment-gap entry](docs/memory/environment-gap.md)** |
 | Why SplitCast; what moves, what cannot move? | [PoC mission and boundaries](docs/memory/poc-mission.md) |
