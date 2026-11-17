@@ -1,5 +1,7 @@
 # SplitCast PoC mission
 
+> **Current implementation boundary (S26):** Main `ed7fe60` includes finite local fixture playback from PR #9, **not** a functioning returned-audio path. The current resume point is [the PoC handoff](../handoff/poc-20261117.md), corrected by [S26](../evidence/dreaming-main-20261117.md), rather than the completed environment-gap discovery.
+
 Updated 2026-11-17. **User goal, not deployment authorization.** Start the next
 environment-gap session at [the gap handoff](environment-gap.md), not an old
 release checklist. This page integrates S02–S07, S12, S20 and S21 from
