@@ -6,7 +6,7 @@ for the question. Do not start from the old CI/cache or media-expansion task lis
 
 ## First establish the gap, without starting a new PoC here
 
-1. Confirm the actual branch/PR state and [current receipt](../evidence/pr3-review-20261117.md).
+1. Recheck current branch/PR state and [the merged PR #3 receipt](../evidence/pr3-review-20261117.md).
    A successful PR gate is not merge, deployment or physical acceptance.
 2. Inventory capabilities needed at each [responsibility boundary](poc-mission.md#responsibility-and-dependency-boundaries):
    selected acquisition and audio tap, unavoidable local encoding, production
@@ -35,7 +35,7 @@ for the question. Do not start from the old CI/cache or media-expansion task lis
 | Current Agent refuses TTS/EventSub/remote speech mixing (S21/D15). | Do not mark the required return path delivered, or remove it from the mission because the code refuses it. |
 | Source backlog is before RTMP; frozen/backlogged bytes still advance. | Do not rename it network congestion or infer freshness from counters. |
 | AV01 and PR #3 follow-up expose acceptance-oracle holes. | Preserve superseded results; inspect current oracle contracts and negative controls rather than reusing old PASS claims. |
-| P0 delivery closed only for `d2205d0`; PR #2 is merged into the main base used by PR #3. | Do not repeat cache publication, label urgent Stop as still universally queued, or infer current deployment. |
+| P0 delivery closed only for `d2205d0`; PRs #2 and #3 are merged into main. | Do not repeat cache publication, label urgent Stop as still universally queued, or infer current deployment. |
 
 ## Handoff stop conditions
 
@@ -45,4 +45,5 @@ The next session must choose scope explicitly. P1 is still narrowed, not closed;
 the bidirectional goal and gameplay non-interference remain unaccepted.
 Read [risks](open-risks.md) and [the update protocol](update-protocol.md) before
 changing a knowledge claim. [PR #3](https://github.com/tenzyu/splitcast/pull/3)
-holds final-head gate receipts and review status; human approval is separate.
+is merged (2026-11-17); its final-head gate receipts remain scoped to the
+generated-production test. No host activation or deployment approval follows.
