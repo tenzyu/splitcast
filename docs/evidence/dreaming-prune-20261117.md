@@ -8,13 +8,13 @@ Scope: Markdown files (`**/*.md`, including root Markdown) in `tenzyu/splitcast`
 | --- | ---: | ---: | ---: |
 | Active-tree Markdown files | 80 | 45 before this audit receipt | 35 fewer |
 | UTF-8 bytes from Git tree blob sizes | 727,859 | 329,864 before this receipt | **397,995 fewer (54.68%)** |
-| All preserved original files in named archive branch | 80 | 80 | none destroyed |
+| Baseline files recoverable via archive branch **and PR ancestry** | 80 | 80 | none destroyed |
 
 This audit receipt itself adds Markdown bytes; CI docs changes add Python/shell only. Final counts must be remeasured from the PR head; the target is active-tree Markdown `<=363,929` bytes, i.e. at least 50% less than the declared baseline.
 
 ## Information-preservation strategy
 
-- Preserve original pre-prune main at named Git branch [`archive/pre-dreaming-20261117`](https://github.com/tenzyu/splitcast/tree/archive/pre-dreaming-20261117), based on `ed7fe60`. The original PR #10 memory updates are retained in that PR's ancestry; use its original commit `b664f869` for their exact bytes. Git object identity and URLs, not re-summarized prose, preserve forensic detail.
+- Preserve original pre-prune **main** (79 Markdown files) at named Git branch [`archive/pre-dreaming-20261117`](https://github.com/tenzyu/splitcast/tree/archive/pre-dreaming-20261117), based on `ed7fe60`. The original PR #10 memory updates are retained in that PR's ancestry; use its original commit `b664f869` for their exact bytes. Git object identity and URLs, not re-summarized prose, preserve forensic detail.
 - Prune 37 superseded/verbose active-tree Markdown files (326,081 bytes), including historical copied narratives, old CI/cache handoffs, completed audit TODOs and dated duplicate reports. Actual code, non-Markdown receipts, manifest and current operations are retained.
 - Keep live-tree [ADR performance-first](../history/source/docs/graphics-streaming/ADR-2026-11-07-performance-first.md), [architectural decisions](../history/source/docs/ARCHITECTURE_DECISIONS.md), and [approved decisions](../history/source/docs/graphics-streaming/DECISIONS-2026-11-06.md). No ADR deletion, rewrite, or interpretation as current deployment approval.
 - Distill long [semantic review](../design-review.md), [verification](../verification.md), [startup](../../MEMORY.md), and [working state](../memory/session-state.md) into small retrieval notes, with stable archive links to full originals. [Decision IDs](../memory/decisions.md) and [evidence IDs](../memory/evidence.md) remain independently searchable.
