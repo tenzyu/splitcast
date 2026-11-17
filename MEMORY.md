@@ -19,8 +19,9 @@ PR #3 is merged at `a5e7a22` on 2026-11-17. S23's private readiness investigatio
 confirmed source inclusion, not deployment. The operator supplied the next PoC
 implementation instruction in S24. Work is paused with a [PoC handoff](docs/handoff/poc-20261117.md)
 and [S25's convergence checkpoint](docs/evidence/poc-convergence-20261117.md).
-The operator subsequently authorized pushing this checkpoint and handoff on
-`handoff/poc-20261117`, not merging the divergent main histories or deploying.
+The operator authorized checkpoint publication and PR #9, then requested that
+the branch incorporate current main to resolve conflicts. PR merge and deployment
+are not authorized by that conflict-resolution request.
 Fixture work is locally committed in `3c2f913`. Twitch WSS, selected-channel
 subscription and existing suitable OAuth use are now approved, but the selected
 channel and OAuth configuration are absent in the inspected scope. Capture SSH
@@ -30,7 +31,7 @@ remain required; camera is excluded. Baseline comes before proposed thresholds.
 The pre-merge checkpoint recorded PR #3 as under review. S20/E16's generated production-only pass at
 `42a64e4` retains its scope and AV01 correction; S22 separately records the new
 review fixes and gates. P1 is narrowed, not closed. Neither source publication,
-test success nor historical permission authorizes merge, deployment, capture,
+test success nor historical permission authorizes further merge, deployment, capture,
 private-host access, privilege changes, external listeners or public output.
 
 ## Read by question
@@ -39,6 +40,7 @@ private-host access, privilege changes, external listeners or public output.
 | --- | --- |
 | Where should the next session resume? | **[PoC handoff](docs/handoff/poc-20261117.md)** |
 | What can the authorized initial PoC prove now, and what blocks it? | **[Convergence checkpoint](docs/evidence/poc-convergence-20261117.md)** |
+| How should agents consolidate and correct knowledge? | [Dreaming protocol](docs/memory/dreaming.md) |
 | Where does the next environment-gap session start? | **[Environment-gap entry](docs/memory/environment-gap.md)** |
 | Why SplitCast; what moves, what cannot move? | [PoC mission and boundaries](docs/memory/poc-mission.md) |
 | What was adopted or rejected, and why? | [Decisions](docs/memory/decisions.md) |
@@ -46,5 +48,7 @@ private-host access, privilege changes, external listeners or public output.
 | What remains unknown or unsafe to assume? | [Open risks](docs/memory/open-risks.md) |
 | How do new findings correct old knowledge? | [Update protocol](docs/memory/update-protocol.md) |
 | What changed on PR #3; what remains? | [Current state](docs/memory/session-state.md) and [review follow-up](docs/evidence/pr3-review-20261117.md) |
+
+**Later 2026-11-17 GitHub state:** [README PR #5](https://github.com/tenzyu/splitcast/pull/5) merged at `9ef4431` and [Dreaming PR #7](https://github.com/tenzyu/splitcast/pull/7) merged at `1678a0c`. The [failed PR #5 run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405) remains failed historical evidence; merge did not make it PASS. [Test-only PR #6](https://github.com/tenzyu/splitcast/pull/6) remains open at this check. Its `verify` and `verify-virtual` jobs passed, while the native/WASM job was still running; check final CI before claiming all checks green.
 
 Read [the Rust entrypoint](RUST_AGENT_ROOT.md) and [engineering policy](RUST_ENGINEERING_AGENTS.md) before nontrivial Rust work. Historical documents under `docs/history/source/` are evidence, not current operating instructions.

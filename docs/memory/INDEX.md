@@ -1,10 +1,13 @@
 # Memory index
 
 Start with [MEMORY.md](../../MEMORY.md), then follow the question to its evidence.
+For cross-session consolidation and progressive retrieval, use the [Dreaming protocol](dreaming.md).
+This index is not a full-context preload.
 
 **Paused session entry: [PoC handoff](../handoff/poc-20261117.md).**
-The operator authorized checkpoint publication on `handoff/poc-20261117`.
-No merge, PR or deployment is included. Private evidence remains Git-ignored.
+The operator authorized checkpoint publication and PR #9 on
+`handoff/poc-20261117`, then requested conflict resolution against current main.
+PR merge and deployment remain separate. Private evidence stays Git-ignored.
 
 Current checkpoint: [PoC convergence](../evidence/poc-convergence-20261117.md).
 S25 records the local fixture commit, receipt reconciliation, approved Twitch
@@ -34,7 +37,7 @@ open. Earlier S16 and S19 statements retain their dated source scope.
 - [Evidence](evidence.md) separates the source repository, historical repaired artifacts, and fresh standalone verification.
 - [Open risks](open-risks.md) lists the evidence required before a claim can be closed.
 - [Update protocol](update-protocol.md) preserves superseded judgments and source references.
-- [Current working state](session-state.md) is the cold-start capsule, including uncommitted source, corrected review evidence, and next-session limits.
+- [Current working state](session-state.md) is the cold-start capsule, including dated source identities, corrected review evidence, and next-session limits.
 
 Current operating instructions live in [the operations runbook](../operations.md), not the imported historical snapshots. Current verification is recorded separately in [verification](../verification.md).
 
@@ -51,7 +54,8 @@ P0 is complete for the [named delivery receipt](../evidence/ci-nix-cache-2026111
 Use [the download procedure](../binary-cache.md) for the real cache values. Next
 is P1's actual agent media path, not another publication run or deployment.
 
-The separate [S19/E15 control-plane follow-up](evidence.md) tracks unmerged PR #2
-and supersedes S16's ordinary Stop limitation only on that candidate. Start with
-[its review record](../evidence/urgent-control-review-20261114.md) before resuming
-control-plane work; do not infer that main or deployed services contain it.
+The [S19/E15 control-plane follow-up](evidence.md) belongs to [merged PR #2](https://github.com/tenzyu/splitcast/pull/2)
+(merge `6349fd6`); bounded urgent Stop admission is present in current main.
+[PR #3](https://github.com/tenzyu/splitcast/pull/3) was also merged (merge `a5e7a22`),
+but its production-only media acceptance remains narrow. Neither merge proves deployment.
+See the [Dreaming correction ledger](dreaming.md#current-correction-ledger-2026-11-17).

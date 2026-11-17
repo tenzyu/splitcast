@@ -2,6 +2,14 @@
 
 Updated 2026-11-17. This page is a cold-start capsule. Distinct checks retain their own source and run identities below.
 
+PR #9's [base-conflict resolution](../evidence/pr9-conflicts-20261117.md) incorporates
+main `c76e930`, preserving the PoC handoff and Dreaming corrections. It includes
+the merged PR #6 test correction; earlier open-PR statements below remain dated
+snapshots. The resolution record owns any new combined-tree verification result.
+The resolved tree passes all eleven ordinary stages with 165 tests per feature
+selection. Additional CI-script lint/protocol checks hit local tool/dependency
+and retained-special-file blockers, documented without suppressing their failures.
+
 ## Post-merge implementation checkpoint
 
 S25's [convergence checkpoint](../evidence/poc-convergence-20261117.md) is current.
@@ -35,10 +43,17 @@ session starts at [this entry](environment-gap.md).** No new PoC or host work is
 authorized here. The Agent's TTS/EventSub refusal is a gap against that mission,
 not evidence that the return path is no longer required.
 
-PR #3 is open on `acceptance/real-media-plane`, originally published at `8486e81`
-against `2a774d9`. The [2026-11-17 follow-up](../evidence/pr3-review-20261117.md)
-tracks seven findings, current oracle fixes, bounded reset reproduction and
-final-HEAD commands. Human review is separate and pending. No merge/deploy.
+PR #3 **is merged** into main at `a5e7a229151835ceea55c2b1d695399eeac69828`
+(2026-11-17); PR #2 was merged earlier at `6349fd6`. The
+[2026-11-17 review follow-up](../evidence/pr3-review-20261117.md) remains a
+dated record of seven findings, oracle fixes and bounded reset probes.
+Its older "under review" wording is historical, not the current PR state.
+Neither merge constitutes host activation, deployment or hardware acceptance.
+
+### Historical pre-merge verification checkpoint (S22)
+
+The following receipt describes the **implementation head at that time**, not a new
+post-merge run or current host state.
 
 S22 implementation `fb632bf` passes all three gates: media run
 `20261117T083058Z-ApaTam5y` (16 units, six cases, six recording controls and
@@ -49,6 +64,29 @@ unknown. The first VFR negative fixture failed to generate, was corrected once,
 then all six controls ran and rejected correctly. Final documentation-bearing
 HEAD gets its own all-three-gate receipt in PR #3; do not promote these
 implementation-head runs into a new-HEAD result.
+
+## Current source/CI correction, 2026-11-17
+
+PR #5 ([README refresh](https://github.com/tenzyu/splitcast/pull/5)) remained
+open at this snapshot. Its [workflow run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44089362405)
+failed only the `verify` no-default-features stage, at
+`expired_matching_peer_can_retry_retained_cleanup_over_http`: the test required
+`stop=completed` but received `stop=requested`. A bounded `202 requested` is
+permitted by `server.rs` and cannot be interpreted as completed cleanup.
+The [test-only correction in PR #6](https://github.com/tenzyu/splitcast/pull/6)
+is a separate candidate; its CI success must be checked against the exact PR
+head before marking it fixed. Neither this documentation nor PR #6 changes
+service gates. See the [Dreaming ledger](dreaming.md#current-correction-ledger-2026-11-17).
+
+### Later merge-status reconciliation, 2026-11-17
+
+The earlier PR #5-open statement above is a dated checkpoint, superseded by
+[PR #5 merge `9ef4431`](https://github.com/tenzyu/splitcast/pull/5).
+[Dreaming PR #7](https://github.com/tenzyu/splitcast/pull/7) also merged
+at `1678a0c`. The original failed workflow run remains failed.
+[PR #6](https://github.com/tenzyu/splitcast/pull/6) is the separate,
+still-unmerged test-only candidate; `verify` and `verify-virtual` passed while
+the package build was pending at this observation. Do not infer a full green run.
 
 ## Preserved 2026-11-15 checkpoint (S20)
 
@@ -112,13 +150,18 @@ See [the complete run and correction record](../evidence/virtual-system-20261114
 
 ## Open work and safety
 
-Ordinary Stop still queues behind Prepare. Lease maintenance remains serial. Actual media-path integration, congestion behavior, settings durability, browser request ownership, typed validation/error boundaries, and declared crash-recovery semantics need further work. See [open risks](open-risks.md) and the readiness gates rather than repeating the original extraction review as if no repairs occurred.
+The historical assertion that urgent Stop queues behind Prepare was superseded
+by PR #2's listener-side admission. Bounded HTTP Stop acknowledgement is not
+confirmed resource release; owner-scoped completion remains necessary.
+Lease maintenance and aggregate cleanup still have documented limits. Actual media-path integration, congestion behavior, settings durability, browser request ownership, typed validation/error boundaries, and declared crash-recovery semantics need further work. See [open risks](open-risks.md) and the readiness gates rather than repeating the original extraction review as if no repairs occurred.
 
 Direct Scanout, GPU contention, capture permissions, real device provenance, physical audio, real OBS acceptance, and deployment containment remain separately authorized acceptance work. Keep `rustCandidate=false` and autostart targets empty.
 
 `artifacts/` contains ignored local evidence, including original and corrected review instruments. It is not a publication payload. The portable source manifest and summary are under `docs/evidence/`. The canonical decision trail is `.audit/virtual-system.tsv`. Do not require the temporary review worktrees to run ordinary verification.
 
-## 2026-11-14 control-plane branch follow-up
+## 2026-11-14 control-plane branch follow-up (historical snapshot)
+
+The following was true at its recorded checkpoint; PR #2 has since merged.
 
 PR #2 remains a separate, unmerged control-plane candidate. Its
 `review/urgent-control` implementation `5125799` supersedes the historical

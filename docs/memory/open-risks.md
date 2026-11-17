@@ -158,3 +158,22 @@ The latest whole-suite pass is clean `3c2f913`, not a retrospective pass for the
 first convergence run's three reset failures. Preserve those failures and the
 outside-session source change. No automatic retries beyond the three recorded
 checks are part of this continuation. PoC completion remains open.
+
+## 2026-11-17 Dreaming source/state correction
+
+The sections above are **dated evidence and former handoffs**, not an instruction
+to reopen completed CI/cache delivery or to describe merged PRs as unmerged.
+[PR #2](https://github.com/tenzyu/splitcast/pull/2) merged at `6349fd6` and
+[PR #3](https://github.com/tenzyu/splitcast/pull/3) merged at `a5e7a22`.
+Their merge changes source availability, **not** the acceptance scope for R01–R09.
+The [Dreaming correction ledger](dreaming.md#current-correction-ledger-2026-11-17)
+records the current pointers and preserves the original dated observations.
+
+A later [PR #5 CI run](https://github.com/tenzyu/splitcast/actions/runs/44089362405)
+failed `no-default-features` because the expired-owner Stop test required
+immediate `completed` after a transport that permits `202 requested`.
+The [PR #6 test-only proposal](https://github.com/tenzyu/splitcast/pull/6)
+removes the test's cancellation race and validates owner-specific completion
+separately. Until the exact amended head passes hosted CI, this remains an
+**unverified correction**, not proof that runtime cleanup is fully reliable.
+It does not close durable Stop observation, parser exhaustion or R02.
