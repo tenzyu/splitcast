@@ -491,6 +491,18 @@ mod tests {
     }
 
     #[test]
+    fn data_before_format_never_starts_player() {
+        let fixture = Fixture::new();
+        let wav = sample_wav();
+        // Keep both complete chunks and the RIFF size. Change only their order.
+        let reordered = [&wav[..12], &wav[36..], &wav[12..36]].concat();
+        fs::write(fixture.input(), reordered).unwrap();
+        let result = fixture.play("ok", &operation(SAFETY_LIMIT));
+        assert_eq!(fixture.starts(), 0);
+        assert!(matches!(result, Err(PlaybackError::Input(_))));
+    }
+
+    #[test]
     fn rejects_symlink_directory_fifo_and_oversized_files_without_spawn() {
         let fixture = Fixture::new();
         let link = fixture.0.join("link");
