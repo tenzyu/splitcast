@@ -17,6 +17,11 @@ dated record of seven findings, oracle fixes and bounded reset probes.
 Its older "under review" wording is historical, not the current PR state.
 Neither merge constitutes host activation, deployment or hardware acceptance.
 
+### Historical pre-merge verification checkpoint (S22)
+
+The following receipt describes the **implementation head at that time**, not a new
+post-merge run or current host state.
+
 S22 implementation `fb632bf` passes all three gates: media run
 `20261117T083058Z-ApaTam5y` (16 units, six cases, six recording controls and
 recovery), ordinary run `1794904247771515533` (11 stages), virtual run
@@ -111,7 +116,9 @@ Direct Scanout, GPU contention, capture permissions, real device provenance, phy
 
 `artifacts/` contains ignored local evidence, including original and corrected review instruments. It is not a publication payload. The portable source manifest and summary are under `docs/evidence/`. The canonical decision trail is `.audit/virtual-system.tsv`. Do not require the temporary review worktrees to run ordinary verification.
 
-## 2026-11-14 control-plane branch follow-up
+## 2026-11-14 control-plane branch follow-up (historical snapshot)
+
+The following was true at its recorded checkpoint; PR #2 has since merged.
 
 PR #2 remains a separate, unmerged control-plane candidate. Its
 `review/urgent-control` implementation `5125799` supersedes the historical
