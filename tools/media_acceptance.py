@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import select
 import shutil
@@ -363,19 +364,57 @@ class Run:
     def stop(self, allow_retry=False):
         body = self.control("stop")
         deadline = time.monotonic() + 30
+        stop_id = body.get("stop_id")
         while body.get("stop") == "requested":
             require(time.monotonic() < deadline, "Stop completion timed out")
             time.sleep(0.05)
             body = self.control("status")
+            require(stop_id is None or body.get("stop_id") == stop_id,
+                    "Stop observation belongs to a different request")
         if allow_retry and body.get("stop") == "incomplete":
             require(body.get("state") == "stopping" and body.get("outcome") == "unknown",
                     f"incomplete cleanup obligation was lost: {body}")
             self.commands.append({"explicit_cleanup_retry": body, "at": time.monotonic()})
-            self.stop()
-            return
+            return self.stop()
         require(body.get("state") == "idle" and body.get("children") == []
                 and body.get("stop") == "completed" and not body.get("remote_release_pending"),
                 f"incomplete Stop: {body}")
+        return body
+
+    def stop_recording(self):
+        # Keep the log readable after Agent removes its credential-bearing profile.
+        logs = list((self.directory / "state/production").glob("obs-session-*/obs-studio/logs/*.txt"))
+        require(len(logs) == 1, "expected one owned OBS log")
+        processes = []
+        for pid, info in descendants(self.agent.pid).items():
+            try:
+                exe = Path(os.readlink(f"/proc/{pid}/exe"))
+            except FileNotFoundError:
+                continue
+            if exe.name in ("obs", ".obs-wrapped"):
+                processes.append(info)
+        require(len(processes) == 1, "expected one owned OBS process")
+        obs, = processes
+        reply = {}
+        with logs[0].open("rb") as log:
+            try:
+                reply = self.stop()
+            finally:
+                log.seek(max(0, os.fstat(log.fileno()).st_size - (1 << 20)))
+                diagnostic = re.compile(
+                    r"(?:Loading up OpenGL|OpenGL loaded|Total (?:drawn|frames output)|"
+                    r"rendering lag/stalls|Record(?:ing)? Stop|Shutting down|Freeing OBS context data)"
+                )
+                lines = [line for line in log.read(1 << 20).decode(errors="replace").splitlines()
+                         if diagnostic.search(line)]
+                observation = {
+                    "agent_exit_status": reply.get("obs_shutdown"),
+                    "process_released": not still_owned(obs),
+                    "websocket_listener_closed": not port_open(self.ports[5]),
+                    "obs_log": lines,
+                }
+                write_json(self.directory / "obs-shutdown.json", observation)
+        return observation
 
     def transport(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.ports[4], timeout=2)
@@ -756,7 +795,10 @@ def scenario(directory, binary, case, epoch):
             if case == "stall":
                 os.kill(source.child.pid, signal.SIGCONT)
         source.expect_stop("controller Stop")
-        run.stop(allow_retry=case != "normal")
+        if case in ("normal", "camera"):
+            result["obs_shutdown"] = run.stop_recording()
+        else:
+            run.stop(allow_retry=True)
         recordings = list((directory / "recordings").glob("*.mkv"))
         require(len(recordings) == 1, f"expected one new OBS recording: {recordings}")
         if case in ("frozen", "delay"):
@@ -873,6 +915,15 @@ def scenario(directory, binary, case, epoch):
             result["recovery"]["scene_samples"] = recovered_samples
             require(all(sample["age_upper_seconds"] <= LIMITS["max_scene_age_seconds"]
                         for sample in recovered_samples[LIMITS["scene_startup_samples"]:]), "stale recovery scene")
+        if case in ("normal", "camera"):
+            shutdown = result["obs_shutdown"]
+            status = shutdown["agent_exit_status"] or {}
+            require(shutdown["process_released"] and shutdown["websocket_listener_closed"],
+                    "OBS process or listener survived completed Stop")
+            require(status.get("output_inactive_confirmed") is True,
+                    f"OBS output inactivity was not verified: {status}")
+            require(status.get("normal_exit") is True and status.get("exit_code") == 0
+                    and status.get("signal") is None, f"OBS did not exit normally: {status}")
         result["result"] = "PASS"
     except Exception as error:
         result["error"] = f"{type(error).__name__}: {error}"

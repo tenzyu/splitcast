@@ -8,7 +8,31 @@ sources:
 ---
 # Open risks
 
-Recorded 2026-11-13. These are unresolved historical gates and extraction questions, not newly reproduced standalone defects. Evidence IDs resolve in [the register](evidence.md).
+## Current follow-up on PR #16
+
+R01 and R04 retain the integrated two-host media, matched gameplay
+performance, and physical alignment gates. The earlier physical trial
+recorded real game content, physical camera composition and Twitch
+ingest in separately scoped runs. It recorded 117/645 late production
+renders and an OBS SIGSEGV after finalization. The next acceptance requires
+both decoded output and orderly exit. [Physical results and pending gates](session-state.md)
+
+R02 and R09 retain enclosing-cgroup recovery and kernel-stuck worker risks.
+The revised lifecycle attaches a Stop ID to current Agent observations,
+keeps owner-bound remote release, and reports the OBS wait result separately
+from output inactivity. Completion history remains ephemeral across
+Prepare and Agent restart. [Stop and rollback](../operations.md#stop-and-rollback)
+
+R03 and R07 retain full-session live speech and client regression gates.
+The earlier real EventSub-to-VOICEVOX playback and browser/TUI Status and
+Stop checks apply to their observed artifacts. The review found missing
+speech IDs in the manual clients and finite replay capacity in EventSub.
+[Review and verification](../design-review.md#pr-16-review-follow-up)
+
+The dated records below describe their original source and observations.
+Evidence IDs resolve in [the register](evidence.md).
+
+## Historical register from 2026-11-13
 
 | ID | Unknown or risk | Evidence needed to close it | Sources |
 | --- | --- | --- | --- |

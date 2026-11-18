@@ -13,9 +13,6 @@ fn strings(args: &[&str]) -> Vec<String> {
 fn err(s: &str) -> io::Error {
     io::Error::other(s)
 }
-pub fn command_checked(argv: &[String]) -> io::Result<String> {
-    command_operation(argv, None)
-}
 pub(crate) fn command_operation(
     argv: &[String],
     operation: Option<&crate::request::Operation>,
@@ -87,6 +84,7 @@ impl ReceiveMonitor {
     }
 }
 
+#[cfg(test)]
 pub fn receive_snapshot(cfg: &Config) -> io::Result<String> {
     receive_operation(cfg, None)
 }
@@ -127,6 +125,7 @@ impl MediaProgress {
             ..Self::default()
         }
     }
+    #[cfg(test)]
     pub fn observe(&mut self, sample: &MediaObservation) -> bool {
         self.observe_at(sample, Instant::now())
     }
@@ -187,11 +186,6 @@ pub fn parse_media_observation(json: &str, path: &str) -> io::Result<MediaObserv
         audio_codec,
         track_count: tracks.len(),
     })
-}
-pub fn run(exe: &str, args: &[&str]) -> io::Result<String> {
-    let mut cmd = vec![exe.to_string()];
-    cmd.extend(args.iter().map(|s| s.to_string()));
-    command_checked(&cmd)
 }
 pub fn game(cfg: &Config) -> io::Result<Vec<String>> {
     if cfg.target.is_empty() || cfg.game_audio.is_empty() {
@@ -470,6 +464,7 @@ pub fn receiver(cfg: &Config) -> io::Result<Vec<String>> {
         filename.to_string_lossy().to_string(),
     ])
 }
+#[cfg(test)]
 pub fn ready_output(buf: &str, name: &str) -> bool {
     let kind = match name {
         "game" => FeedKind::Game,
@@ -492,7 +487,7 @@ pub(crate) fn missing_tools(cfg: &Config, media: bool, start: bool) -> Vec<Strin
     } else if media {
         req.push("mediamtx");
         if start {
-            req.extend(["pulseaudio", "pactl", "ffmpeg", "timeout"]);
+            req.extend(["pulseaudio", "pactl", "ffmpeg"]);
         }
     }
     let mut missing = vec![];
@@ -511,9 +506,6 @@ pub(crate) fn missing_tools(cfg: &Config, media: bool, start: bool) -> Vec<Strin
         }
     }
     missing
-}
-pub fn devices(role: &str) -> io::Result<serde_json::Value> {
-    devices_operation(role, None)
 }
 pub(crate) fn devices_operation(
     role: &str,

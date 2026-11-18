@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tungstenite::{protocol::WebSocketConfig, Message, WebSocket};
 
@@ -95,6 +95,96 @@ pub struct OutputStatus {
     pub duration_ms: Option<u64>,
 }
 
+// The profile and the requested output have the same lifetime. An attempted
+// Start is recorded before its RPC because a lost reply can leave output active.
+pub(crate) struct SessionProfile {
+    directory: PathBuf,
+    phase: OutputPhase,
+}
+
+enum OutputPhase {
+    Configured,
+    Requested(crate::Output),
+    Observed(crate::Output, OutputStatus),
+}
+
+impl SessionProfile {
+    pub(crate) fn create(directory: PathBuf) -> io::Result<Self> {
+        fs::create_dir(&directory)?;
+        Ok(Self {
+            directory,
+            phase: OutputPhase::Configured,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_attempt(directory: PathBuf, output: crate::Output) -> Self {
+        Self {
+            directory,
+            phase: OutputPhase::Requested(output),
+        }
+    }
+
+    pub(crate) fn launch_args(&self, cfg: &Config) -> io::Result<Vec<String>> {
+        launch_args(cfg, &self.directory)
+    }
+
+    pub(crate) fn request_start(&mut self, obs: &mut Obs, output: crate::Output) -> io::Result<()> {
+        self.phase = OutputPhase::Requested(output);
+        obs.start(output)
+    }
+
+    pub(crate) fn requested_output(&self) -> Option<crate::Output> {
+        match self.phase {
+            OutputPhase::Configured => None,
+            OutputPhase::Requested(output) | OutputPhase::Observed(output, _) => Some(output),
+        }
+    }
+
+    pub(crate) fn observe(&mut self, obs: &mut Obs) -> io::Result<bool> {
+        let output = self
+            .requested_output()
+            .ok_or_else(|| err("owned OBS output unavailable"))?;
+        let current = obs.observe(output)?;
+        let progressing = match &self.phase {
+            OutputPhase::Observed(_, previous) => {
+                current.active
+                    && current
+                        .bytes
+                        .zip(previous.bytes)
+                        .is_some_and(|(now, old)| now > old)
+                    && current
+                        .frames
+                        .zip(previous.frames)
+                        .is_none_or(|(now, old)| now > old)
+            }
+            _ => {
+                current.active
+                    && current.bytes.is_some_and(|bytes| bytes > 0)
+                    && current.frames.is_none_or(|frames| frames > 0)
+            }
+        };
+        self.phase = OutputPhase::Observed(output, current);
+        Ok(progressing)
+    }
+
+    pub(crate) fn progress(&self) -> Option<Value> {
+        let OutputPhase::Observed(_, progress) = &self.phase else {
+            return None;
+        };
+        Some(json!({
+            "active": progress.active, "bytes": progress.bytes,
+            "frames": progress.frames, "duration_ms": progress.duration_ms,
+        }))
+    }
+
+    pub(crate) fn discard(&self) -> io::Result<()> {
+        match fs::remove_dir_all(&self.directory) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+}
 pub struct Obs {
     operation: Option<crate::request::Operation>,
     socket: WebSocket<DeadlineStream>,
@@ -102,7 +192,8 @@ pub struct Obs {
     failed: bool,
 }
 impl Obs {
-    pub fn connect(cfg: &Config) -> io::Result<Self> {
+    #[cfg(test)]
+    fn connect(cfg: &Config) -> io::Result<Self> {
         Self::connect_until(cfg, Instant::now() + TIMEOUT)
     }
     pub(crate) fn connect_operation(
@@ -116,6 +207,7 @@ impl Obs {
         obs.operation = operation;
         Ok(obs)
     }
+    #[cfg(test)]
     fn connect_until(cfg: &Config, deadline: Instant) -> io::Result<Self> {
         Self::connect_context(cfg, deadline, None)
     }
@@ -283,7 +375,12 @@ impl Obs {
             .as_i64()
             .ok_or_else(|| err("OBS scene item required"))
     }
-    fn decoded(&mut self, source: &str, width: u16, height: u16) -> io::Result<bool> {
+    fn source_geometry_matches(
+        &mut self,
+        source: &str,
+        width: u16,
+        height: u16,
+    ) -> io::Result<bool> {
         let id = self.scene_item(source)?;
         let response = response_data(&self.call(
             "GetSceneItemTransform",
@@ -293,12 +390,16 @@ impl Obs {
         Ok(transform["sourceWidth"].as_f64() == Some(f64::from(width))
             && transform["sourceHeight"].as_f64() == Some(f64::from(height)))
     }
-    pub(crate) fn game_decoded(&mut self, cfg: &Config) -> io::Result<bool> {
-        Ok(self.decoded("GameFeed", cfg.width, cfg.height)?
-            && match &cfg.camera {
-                Some(camera) => self.decoded("CameraFeed", camera.width, camera.height)?,
-                None => true,
-            })
+    pub(crate) fn source_geometry_ready(&mut self, cfg: &Config) -> io::Result<bool> {
+        Ok(
+            self.source_geometry_matches("GameFeed", cfg.width, cfg.height)?
+                && match &cfg.camera {
+                    Some(camera) => {
+                        self.source_geometry_matches("CameraFeed", camera.width, camera.height)?
+                    }
+                    None => true,
+                },
+        )
     }
     pub fn configure(&mut self, cfg: &Config) -> io::Result<()> {
         self.call("GetVersion", "{}")?;
@@ -329,6 +430,19 @@ impl Obs {
             "pulse_input_capture",
             json!({"device_id":format!("{}.monitor",cfg.processed_sink)}),
         )?;
+        if cfg.separate_audio_tracks {
+            for (name, game, microphone) in
+                [("GameFeed", true, false), ("MicProcessed", false, true)]
+            {
+                self.call(
+                    "SetInputAudioTracks",
+                    &json!({
+                        "inputName":name, "inputAudioTracks":{"1":true,"2":game,"3":microphone}
+                    })
+                    .to_string(),
+                )?;
+            }
+        }
         self.call(
             "SetInputAudioSyncOffset",
             &json!({"inputName":"MicProcessed","inputAudioSyncOffset":cfg.mic_offset}).to_string(),
@@ -446,7 +560,7 @@ fn status_request(output: crate::Output) -> &'static str {
     }
 }
 
-pub fn launch_args(cfg: &Config, base: &Path, output: crate::Output) -> io::Result<Vec<String>> {
+fn launch_args(cfg: &Config, base: &Path) -> io::Result<Vec<String>> {
     let _port = TcpListener::bind((Ipv4Addr::LOCALHOST, cfg.obs_port))
         .map_err(|_| err("OBS port is already occupied"))?;
     let studio = base.join("obs-studio");
@@ -464,7 +578,12 @@ pub fn launch_args(cfg: &Config, base: &Path, output: crate::Output) -> io::Resu
         ObsVideoMode::Hardware => "obs_nvenc_h264_tex",
         ObsVideoMode::Software => "obs_x264",
     };
-    let profile = format!("[General]\nName=SplitCast\n[Video]\nBaseCX={width}\nBaseCY={height}\nOutputCX={width}\nOutputCY={height}\nFPSType=0\nFPSCommon={fps}\n[Output]\nMode=Advanced\nReconnect=false\n[AdvOut]\nEncoder={encoder}\nRecType=Standard\nRecFilePath={}\nRecFormat2=mkv\nRecEncoder={encoder}\nTrackIndex=1\nRecTracks=1\nRescale=false\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n", cfg.recording_dir.display(),width=cfg.width,height=cfg.height,fps=cfg.fps);
+    let recording_tracks = if cfg.separate_audio_tracks {
+        0b111
+    } else {
+        0b001
+    };
+    let profile = format!("[General]\nName=SplitCast\n[Video]\nBaseCX={width}\nBaseCY={height}\nOutputCX={width}\nOutputCY={height}\nFPSType=0\nFPSCommon={fps}\n[Output]\nMode=Advanced\nReconnect=false\n[AdvOut]\nEncoder={encoder}\nRecType=Standard\nRecFilePath={}\nRecFormat2=mkv\nRecEncoder={encoder}\nTrackIndex=1\nRecTracks={recording_tracks}\nRescale=false\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n", cfg.recording_dir.display(),width=cfg.width,height=cfg.height,fps=cfg.fps);
     atomic_file(&studio.join("basic/profiles/SplitCast/basic.ini"), &profile)?;
     atomic_file(
         &studio.join("basic/profiles/SplitCast/streamEncoder.json"),
@@ -475,15 +594,6 @@ pub fn launch_args(cfg: &Config, base: &Path, output: crate::Output) -> io::Resu
     Ok(vec![
         "env".into(),
         format!("XDG_CONFIG_HOME={}", base.display()),
-        "timeout".into(),
-        "--signal=TERM".into(),
-        "--kill-after=1s".into(),
-        if output == crate::Output::TwitchLive {
-            "18s"
-        } else {
-            "28s"
-        }
-        .into(),
         cfg.obs_binary.to_string_lossy().to_string(),
         "--multi".into(),
         "--disable-shutdown-check".into(),
@@ -534,12 +644,7 @@ mod tests {
         cfg.width = 1280;
         cfg.height = 720;
         cfg.fps = 30;
-        launch_args(
-            &cfg,
-            &cfg.state_dir.join("obs-config"),
-            crate::Output::Recording,
-        )
-        .unwrap();
+        launch_args(&cfg, &cfg.state_dir.join("obs-config")).unwrap();
         let profile = fs::read_to_string(
             cfg.state_dir
                 .join("obs-config/obs-studio/basic/profiles/SplitCast/basic.ini"),
@@ -567,12 +672,7 @@ mod tests {
             (ObsVideoMode::Software, "obs_x264"),
         ] {
             cfg.obs_video_mode = mode;
-            launch_args(
-                &cfg,
-                &cfg.state_dir.join("obs-config"),
-                crate::Output::Recording,
-            )
-            .unwrap();
+            launch_args(&cfg, &cfg.state_dir.join("obs-config")).unwrap();
             let profile = fs::read_to_string(
                 cfg.state_dir
                     .join("obs-config/obs-studio/basic/profiles/SplitCast/basic.ini"),
@@ -587,54 +687,17 @@ mod tests {
         }
     }
     fn config(dir: &Path, port: u16) -> Config {
-        Config {
-            document: String::new(),
-            role: "production".into(),
-            state_dir: dir.into(),
-            token_file: dir.join("token"),
-            remote_token_file: dir.join("token"),
-            ssh_config: None,
-            ssh_host: "localhost".into(),
-            ssh_port: 22,
-            control_port: 18001,
-            remote_control_port: 18002,
-            forward_control_port: 18003,
-            timeout: 1,
-            rtmp: 18004,
-            rtsp: 18005,
-            api: 18006,
-            width: 1920,
-            height: 1080,
-            fps: 60,
-            bitrate: 10000,
-            target: String::new(),
-            game_audio: String::new(),
-            mic_source: String::new(),
-            tts_volume_percent: 100,
-            tts_sink: String::new(),
-            processed_sink: "splitcast_mic".into(),
-            rnnoise_plugin: dir.join("rnnoise"),
-            rnnoise_label: String::new(),
-            rnnoise_control: String::new(),
-            gain_db: 0,
-            mic_offset: 0,
-            obs_binary: "obs".into(),
-            obs_video_mode: ObsVideoMode::Hardware,
-            obs_port: port,
-            twitch: None,
-            camera: None,
-            obs_bitrate: 6000,
-            obs_password: dir.join("password"),
-            recording_dir: dir.join("recordings"),
-            tts_enabled: false,
-            voicevox_url: String::new(),
-            tts_speaker: 0,
-            tts_max_text: 100,
-            tts_queue_limit: 1,
-            tts_expiry_seconds: 5,
-            tts_credentials_file: dir.join("tts"),
-            eventsub_enabled: false,
-        }
+        let mut value: Value =
+            serde_json::from_str(include_str!("../tests/agent-example.json")).unwrap();
+        value["role"] = json!("production");
+        value["peer"]["state_dir"] = json!(dir);
+        value["capture"]["width"] = json!(1920);
+        value["capture"]["height"] = json!(1080);
+        value["obs"]["password_file"] = json!(dir.join("password"));
+        value["obs"]["recording_dir"] = json!(dir.join("recordings"));
+        let mut cfg = Config::parse(value.to_string().as_bytes()).unwrap();
+        cfg.obs_port = port; // zero requests an ephemeral port in profile-only tests
+        cfg
     }
     fn read(socket: &mut WebSocket<TcpStream>) -> Value {
         serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap()
@@ -738,9 +801,9 @@ mod tests {
         cfg.width = 1280;
         cfg.height = 720;
         let mut obs = Obs::connect(&cfg).unwrap();
-        assert!(!obs.game_decoded(&cfg).unwrap());
-        assert!(obs.game_decoded(&cfg).unwrap());
-        assert!(!obs.game_decoded(&cfg).unwrap());
+        assert!(!obs.source_geometry_ready(&cfg).unwrap());
+        assert!(obs.source_geometry_ready(&cfg).unwrap());
+        assert!(!obs.source_geometry_ready(&cfg).unwrap());
         thread.join().unwrap();
     }
 
@@ -1174,7 +1237,6 @@ mod tests {
         assert!(launch_args(
             &fixture.config(listener.local_addr().unwrap().port()),
             &fixture.dir.join("obs-config"),
-            crate::Output::Recording
         )
         .unwrap_err()
         .to_string()
@@ -1185,19 +1247,9 @@ mod tests {
         let fixture = Fixture::new();
         let cfg = fixture.config(0);
         fs::set_permissions(&cfg.obs_password, fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(launch_args(
-            &cfg,
-            &cfg.state_dir.join("obs-config"),
-            crate::Output::Recording
-        )
-        .is_err());
+        assert!(launch_args(&cfg, &cfg.state_dir.join("obs-config"),).is_err());
         fs::set_permissions(&cfg.obs_password, fs::Permissions::from_mode(0o600)).unwrap();
-        launch_args(
-            &cfg,
-            &cfg.state_dir.join("obs-config"),
-            crate::Output::Recording,
-        )
-        .unwrap();
+        launch_args(&cfg, &cfg.state_dir.join("obs-config")).unwrap();
         let credentials = cfg
             .state_dir
             .join("obs-config/obs-studio/plugin_config/obs-websocket/config.json");

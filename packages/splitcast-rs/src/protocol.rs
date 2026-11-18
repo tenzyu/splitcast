@@ -1,5 +1,6 @@
 use serde_json::{json, Map, Value};
 use std::io;
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Output {
@@ -18,6 +19,74 @@ impl Output {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Start {
+    output: Output,
+    limit_seconds: Option<u64>,
+    session_id: Option<String>,
+}
+
+impl Start {
+    pub fn output(&self) -> Output {
+        self.output
+    }
+
+    pub(crate) fn limit(&self) -> Option<Duration> {
+        self.limit_seconds.map(Duration::from_secs)
+    }
+
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    fn parse(args: &Map<String, Value>) -> io::Result<Self> {
+        let output = match args
+            .get("output")
+            .map(|v| v.as_str().ok_or_else(invalid))
+            .transpose()?
+        {
+            None | Some("recording") => Output::Recording,
+            Some("twitch-test") => Output::TwitchTest,
+            Some("twitch-live") => Output::TwitchLive,
+            _ => return Err(invalid()),
+        };
+        let limit_seconds = args
+            .get("duration_seconds")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .filter(|seconds| (1..=28_800).contains(seconds))
+                    .ok_or_else(invalid)
+            })
+            .transpose()?;
+        if output == Output::TwitchLive {
+            if args.get("confirm_public").and_then(Value::as_bool) != Some(true)
+                || limit_seconds.is_none()
+            {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                    "public Start requires confirm_public=true and duration_seconds from 1 to 28800"));
+            }
+        } else if args.contains_key("confirm_public") {
+            return Err(invalid());
+        }
+        let session_id = args
+            .get("session_id")
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|id| valid_id(id))
+                    .map(str::to_owned)
+                    .ok_or_else(invalid)
+            })
+            .transpose()?;
+        Ok(Self {
+            output,
+            limit_seconds,
+            session_id,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MicAction {
     Status,
@@ -32,12 +101,12 @@ pub enum Command {
     Doctor,
     Devices { remote: bool },
     Prepare { media: bool },
-    Start(Output),
+    Start(Start),
     Stop,
     Routes { media: bool },
     Mic(MicAction),
     TtsStatus,
-    Say { text: String, id: Option<String> },
+    Say { text: String, id: String },
     Diagnostics,
     Preview,
     TtsNext,
@@ -108,7 +177,7 @@ impl Invocation {
                 &[]
             }
             "devices" => &["remote"],
-            "start" => &["output"],
+            "start" => &["output", "confirm_public", "duration_seconds", "session_id"],
             "prepare" | "routes" => &["media"],
             "mic" | "tts" => &["action"],
             "say" => &["text", "id"],
@@ -161,19 +230,7 @@ impl Invocation {
             },
             "prepare" => Command::Prepare { media: media()? },
             "stop" => Command::Stop,
-            "start" => Command::Start(
-                match args
-                    .get("output")
-                    .map(|v| v.as_str().ok_or_else(invalid))
-                    .transpose()?
-                    .unwrap_or("recording")
-                {
-                    "recording" => Output::Recording,
-                    "twitch-test" => Output::TwitchTest,
-                    "twitch-live" => Output::TwitchLive,
-                    _ => return Err(invalid()),
-                },
-            ),
+            "start" => Command::Start(Start::parse(args)?),
             "routes" => Command::Routes { media: media()? },
             "mic" => Command::Mic(match action(args)? {
                 "status" => MicAction::Status,
@@ -184,11 +241,7 @@ impl Invocation {
             "tts" if action(args)? == "status" => Command::TtsStatus,
             "say" => Command::Say {
                 text: text(max_text, false)?,
-                id: if args.contains_key("id") {
-                    Some(id()?)
-                } else {
-                    None
-                },
+                id: id()?,
             },
             "diagnostics" => Command::Diagnostics,
             "preview" => Command::Preview,
@@ -216,7 +269,19 @@ impl Command {
             Self::Doctor => ("doctor", json!({})),
             Self::Devices { remote } => ("devices", json!({"remote":remote})),
             Self::Prepare { media } => ("prepare", json!({"media":media})),
-            Self::Start(output) => ("start", json!({"output":output.as_str()})),
+            Self::Start(start) => {
+                let mut args = json!({"output":start.output.as_str()});
+                if let Some(seconds) = start.limit_seconds {
+                    args["duration_seconds"] = json!(seconds);
+                }
+                if let Some(id) = &start.session_id {
+                    args["session_id"] = json!(id);
+                }
+                if start.output == Output::TwitchLive {
+                    args["confirm_public"] = json!(true);
+                }
+                ("start", args)
+            }
             Self::Stop => ("stop", json!({})),
             Self::Routes { media } => ("routes", json!({"media":media})),
             Self::Mic(action) => (
@@ -224,13 +289,7 @@ impl Command {
                 json!({"action":match action{MicAction::Status=>"status",MicAction::Mute=>"mute",MicAction::Unmute=>"unmute"}}),
             ),
             Self::TtsStatus => ("tts", json!({"action":"status"})),
-            Self::Say { text, id } => ("say", {
-                let mut v = json!({"text":text});
-                if let Some(id) = id {
-                    v["id"] = json!(id);
-                }
-                v
-            }),
+            Self::Say { text, id } => ("say", json!({"text":text, "id":id})),
             Self::Diagnostics => ("diagnostics", json!({})),
             Self::Preview => ("preview", json!({})),
             Self::TtsNext => ("tts-next", json!({})),
@@ -245,7 +304,11 @@ mod tests {
     fn default_start_never_publishes() {
         assert_eq!(
             Invocation::parse("start", &json!({}), 200).unwrap().command,
-            Command::Start(Output::Recording)
+            Command::Start(Start {
+                output: Output::Recording,
+                limit_seconds: None,
+                session_id: None,
+            })
         );
         assert!(Invocation::parse("start", &json!({"output":false}), 200).is_err());
     }
@@ -265,7 +328,7 @@ mod tests {
         let original = Invocation {
             command: Command::Say {
                 text: " \"quoted\"\n日本語 ".into(),
-                id: None,
+                id: "epoch-1".into(),
             },
             owner: None,
         };

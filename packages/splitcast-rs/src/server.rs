@@ -235,7 +235,7 @@ fn connection(
                         if let Some(response) = ticket.response() { break response; }
                         if cancel.load(Ordering::Relaxed) || Instant::now() >= end {
                             let cleanup = if cancel.load(Ordering::Relaxed) { "unknown" } else { "pending" };
-                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup}).to_string());
+                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup,"stop_id":ticket.id}).to_string());
                         }
                         thread::sleep(Duration::from_millis(10));
                     }
@@ -270,7 +270,7 @@ fn connection(
     )) {
         Ok(generation) => generation,
         Err(error) => {
-            let response = error_response("not_executed", &error.to_string());
+            let response = error_response(crate::request::Failure::NotExecuted, &error.to_string());
             let _ = control::reply(stream, response.0, &response.1);
             return;
         }
@@ -279,7 +279,10 @@ fn connection(
     // Slow unauthenticated headers can still exhaust the finite total cap.
     if config.normal_waiters.fetch_add(1, Ordering::Relaxed) >= NORMAL_WAIT_LIMIT {
         config.normal_waiters.fetch_sub(1, Ordering::Relaxed);
-        let response = error_response("not_executed", "ordinary command capacity unavailable");
+        let response = error_response(
+            crate::request::Failure::NotExecuted,
+            "ordinary command capacity unavailable",
+        );
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }
@@ -307,7 +310,10 @@ fn connection(
         })
         .is_err()
     {
-        error_response("not_executed", "command queue unavailable")
+        error_response(
+            crate::request::Failure::NotExecuted,
+            "command queue unavailable",
+        )
     } else {
         loop {
             if let Some(response) = ticket.response() {

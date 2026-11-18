@@ -1,6 +1,8 @@
 # SplitCast semantic review — surviving contracts
 
-**Current use:** scope-limited review history; not a current source-line oracle or permission to deploy. The [full 2026-11-13/14 review](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/design-review.md) is preserved at the pre-Dreaming archive ref. Source code, targeted tests and later [decision/evidence IDs](memory/index.md) override stale review line numbers.
+The historical findings below retain their original scope. The PR #16
+follow-up records the current contract and unresolved acceptance gates.
+[Original 2026-11-13/14 review](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/design-review.md) · [Decision and evidence index](memory/index.md)
 
 ## Findings and disposition
 
@@ -9,20 +11,34 @@
 | **F01 P1** | NixOS module exported by prematurely applying a function requiring `config/lib/pkgs` | Fixed in extraction; actual consumer later exposed duplicated Home Manager options through two imports. Canonical version-specific HM module key/path fixed targeted consumer gates. Not a deployment test. |
 | **F02 P1** | Detached connection threads, untracked joins, serialized Prepare/Stop and incomplete bounded shutdown | S16 introduced listener owner, tracked joins and per-operation cancellation; merged PR #2 adds listener-side urgent Stop admission. Per-worker cleanup, parser-slot exhaustion, kernel-stuck tasks and controller SIGKILL remain limits. |
 | **F03 P1** | Timed-out/dropped RPC receiver can leave queued Start/settings effect executing later | Queue expiry/cancellation before effect and explicit *unknown outcome* after effects added in S16; no durable transaction log, exactly-once semantics or safe blind Start retry. |
-| **F04 P2** | `Config` public fields can bypass parser and invalidate sink/filter/role invariants | Validation remains constructor-time, not a universal invariant-bearing public API. Restrict fields/validated updates before stable library claims. |
+| **F04 P2** | `Config` public fields can bypass parser and invalidate sink/filter/role invariants | PR #16 closes field mutation across the crate boundary. Runtime consumers inside the crate and media provenance still require review. |
 | **F05 P2** | libc/FFI sites lack complete adjacent safety and ABI proof; process identity depends on unreaped leader | No demonstrated UB or custom frame ABI; no Miri coverage of real Linux subprocess/signal lifecycle. Adjacent proofs and Linux target contract still needed. |
-| **F06 P2** | String errors collapse protocol categories; cleanup error may mask initiating failure; post-rename fsync can report failure after visible commit | Preserve cause, operation/cleanup status and unknown-commit semantics in stable typed response; no assumption that timeout means no effect. |
+| **F06 P2** | String errors collapse protocol categories; cleanup error may mask initiating failure; post-rename fsync can report failure after visible commit | PR #16 distinguishes pre-effect rejection, unknown command outcome and incomplete Stop. Durable commit and replay history remain open. |
 | **F07 P2** | Browser fetch futures lack ordering ownership; older response may overwrite newer status; token snapshots persist | The native Web client serves fixed assets from the control listener. The bearer stays in the page, normal controls serialize, and a newer Stop supersedes late display updates. CLI and TUI use the same authenticated command parser. |
 
-## Structural invariants, not overclaims
+## PR #16 review follow-up
 
-- `lifecycle.rs` phase encodes authority/output; `OwnerId` validates creation; `Workers` owns typed process handles. Those compile-time invariants do **not** prove network/worker cleanup or resource isolation.
+The mandatory review was submitted against `0823165`. The disposition below
+describes source changes and outstanding evidence. [Review](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950165310) · [Verification](verification.md)
+
+| Finding | Disposition |
+| --- | --- |
+| 1. Competing output deadlines | One production watchdog replaces the trial timers. Public Start requires confirmation, a duration and the prepared session's current Start ID. Expiry fences activation and admits Stop. Capture retains the renewable owner lease. |
+| 2. Late renders and OBS SIGSEGV | OBS is owned directly. Output inactivity, normal exit and forced cleanup have separate observations. A generated-input comparison reproduced the recorded null dereference after SIGTERM and observed normal exit after SIGINT. Both software render measurements exceed 1%. Isolated hardware OBS startup and final-source physical acceptance remain open. [OBS diagnostic](evidence/pr16-obs.md) |
+| 3. EventSub exhaustion | The prepared-session worker reconnects on transient failures, preserves subscription identity, and bounds recent chat IDs by age and count. Revocation and invalid identity end the subscription. |
+| 4. Manual speech and control | Clients obtain the current speech ID and submit once. Stop observation correlates the current admission with its completion. Remote completion remains owner-bound. |
+| 5. Missing combined physical evidence | Integrated media, replay performance, five-minute Twitch bandwidth health and independent viewer playback require final-source observations. The earlier physical successes retain their tested scope. |
+| 6. Encapsulation and source consistency | The public Config boundary requires validated construction and exposes read-only access. PID identity, the generation fence, and the remote release proof remain part of the contract. Both role examples and the operator runbook describe the revised commands. |
+
+## Structural invariants
+
+- `lifecycle.rs` phase encodes authority and output, `OwnerId` validates identity, and `Workers` owns typed process handles. Cleanup evidence comes from the owning process and peer.
 - Process groups require unreaped leaders for PID-group identity; a child can `setsid` escape, a killed controller cannot perform Drop, and uninterruptible kernel I/O is not bounded by user deadlines. The service cgroup is required containment.
-- Lost remote Prepare response may still have committed: record remote cleanup obligation before positive socket write, retain it until owner-specific completion. A `202 requested` Stop is admission, **not** final release.
+- A remote Prepare whose response is lost may have committed. Record the remote cleanup obligation at the positive socket write and retain it until owner-specific completion. Observe completion separately from `202 requested` admission.
 - Shared token-bearing strings may be cloned per in-flight connection; token replacement/revocation of stored state does not erase those copies. Do not promise zeroization.
 - `state.rs` temp-write → fsync → rename → directory fsync means post-rename failure can leave a visible runtime file despite error. Read-back or indeterminate-commit handling needed.
-- `tts.rs` synthesis worker's in-memory dedup/cleanup is not persistent exactly-once audio delivery. The production-only EventSub worker binds chat to the configured user and subscription. The session holds a bounded replay set and speech remains consume-on-read.
-- Production records which OBS output may have started before sending its RPC. Cleanup reconnects to observe and stop that output before releasing the owned OBS process and profile. Public Twitch requires both production configuration and an explicit Start selection.
+- Production EventSub binds chat to the configured user and subscription and retains recent message IDs within the session. Speech remains consume-on-read.
+- Production records which OBS output may have started before sending its RPC. Cleanup reconnects to observe and stop that output before releasing the owned OBS process and profile. Public Twitch requires production opt-in, explicit confirmation and an operator-selected duration.
 - `publish=false` crates, Rust 1.95 x86_64-linux flake, the internal command protocol is versioned for a matching native pair.
 
 ## Performance/acceptance

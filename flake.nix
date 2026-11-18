@@ -44,6 +44,7 @@
       configs = pkgs.runCommand "splitcast-config-check" {} ''
         ${splitcast}/bin/splitcast selfcheck
         ${splitcast}/bin/splitcast validate --config ${./packages/splitcast-rs/example.toml}
+        ${splitcast}/bin/splitcast validate --config ${./packages/splitcast-rs/example-production.toml}
         ${splitcast}/bin/splitcast validate --config ${production}
         touch "$out"
       '';

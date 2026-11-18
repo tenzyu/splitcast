@@ -6,6 +6,27 @@ status: draft
 ---
 # Native two-host PoC · 2026-11-18 JST
 
+## PR #16 stream-readiness follow-up
+
+The review at `0823165` requires separately observable media integrity,
+performance and cleanup. The follow-up changes the managed Start/Stop and
+speech admission contracts. See the run record for source identity and actual
+commands. [Review](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950165310) · [Verification](../verification.md)
+
+| Acceptance gate | Evidence still required for the follow-up |
+| --- | --- |
+| Combined physical media | Final-source capture and production binaries running actual game video and game-only audio with the selected SoloCast through RNNoise, the selected camera inset, and the selected output. Independent decode checks for moving game content, camera freshness, isolated processed mic and A/V alignment. |
+| Gameplay impact | Restart the same replay from its beginning in each OFF/ON/OFF phase. Compare p99 frame time against the 1 ms bound with sample counts and uncertainty. Observe Direct Scanout and game-only local audio. Record unmeasured input and audio dimensions. |
+| Production OBS | Identify actual renderer, decoder and encoder. Measure at most 1% late renders after warmup and independently verify output integrity, an exit code of zero, and cleanup of owned processes and listeners. The historical 18.1% result remains a failure. A controlled generated-input comparison reproduced the recorded SIGSEGV with SIGTERM. SIGINT exited normally in its corresponding run, where 69/601 renders were late. Hardware-backed OBS remains blocked on a usable isolated NVIDIA display. [OBS diagnostic](../evidence/pr16-obs.md) |
+| Managed Twitch output | At least five healthy minutes in bandwidth-test mode followed by verified Stop. The separately authorized bounded public smoke requires independently decoded viewer playback. Viewer-side confirmation is **BLOCKED** until an independent observation is available. |
+| Live speech return | A live Twitch notification received on the selected account through EventSub, synthesized by production-local VOICEVOX and observed on the capture host's selected physical playback path during the integrated session. |
+
+The [current runbook](../operations.md#native-poc-startup) defines Start
+confirmation, timed Stop, and cleanup observations. The historical runs
+below retain their own binary identities and observed scopes.
+
+## Historical physical trials through review head `0823165`
+
 The trial began from `origin/main` `3b2a051efc1c5f8c483d8f7f453d49f6216c7f2d`. Both hosts ran trial binary SHA-256 `c7ef4e4e897be3deaa9ba88b41b5e3bd19ca1bb46c7fde8f07616969d100920d`, built from the in-progress native candidate before the volume control and RNNoise-ready guard. The follow-up source changes have separate local verification. [Verification](../verification.md)
 
 | Gate | Result | Observed boundary |

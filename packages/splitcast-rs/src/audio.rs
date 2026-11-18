@@ -1,8 +1,5 @@
 //! Production audio lives in an owned private server, never the player's graph.
-use crate::{
-    config::{self, Config},
-    media, state,
-};
+use crate::{config::Config, media, state};
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -58,7 +55,7 @@ pub fn server(cfg: &Config) -> io::Result<Vec<String>> {
     let mut random = [0; 256];
     fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
     state::atomic_file(&cookie, random)?;
-    let script=format!("load-module module-native-protocol-unix socket={} auth-anonymous=0 auth-cookie={}\nload-module module-null-sink sink_name={} rate=48000 channels=1\nset-default-sink {}\n",config::json_string(&socket(cfg).to_string_lossy()),config::json_string(&cookie.to_string_lossy()),cfg.processed_sink,cfg.processed_sink);
+    let script=format!("load-module module-native-protocol-unix socket={} auth-anonymous=0 auth-cookie={}\nload-module module-null-sink sink_name={} rate=48000 channels=1\nset-default-sink {}\n",serde_json::json!(socket(cfg).to_string_lossy()),serde_json::json!(cookie.to_string_lossy()),cfg.processed_sink,cfg.processed_sink);
     let script_path = root.join("server.pa");
     state::atomic_file(&script_path, &script)?;
     Ok(vec![
@@ -78,6 +75,7 @@ pub fn server(cfg: &Config) -> io::Result<Vec<String>> {
     ])
 }
 
+#[cfg(test)]
 pub fn ready(cfg: &Config) -> io::Result<bool> {
     ready_operation(cfg, None)
 }

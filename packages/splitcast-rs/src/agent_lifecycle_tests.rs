@@ -197,7 +197,10 @@ fn unconfirmed_obs_finalization_does_not_complete_stop() {
     agent
         .spawn(Worker::Obs, vec!["sleep".into(), "30".into()])
         .unwrap();
-    agent.obs_output = Some(Output::Recording);
+    agent.obs_profile = Some(obs::SessionProfile::test_attempt(
+        agent.cfg.state_dir.join("obs-attempt-test"),
+        Output::Recording,
+    ));
     assert!(agent.stop(None).is_err());
     assert_eq!(agent.session.state(), Lifecycle::Stopping);
     assert!(agent.children.names().is_empty());

@@ -1,5 +1,5 @@
 //! Finite HTTP messages on authenticated loopback connections.
-use crate::config::{json_string, Config};
+use crate::config::Config;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
@@ -84,6 +84,27 @@ impl std::error::Error for UnknownOutcome {
 fn unknown_outcome(error: io::Error) -> io::Error {
     io::Error::new(error.kind(), UnknownOutcome(error))
 }
+
+#[derive(Debug)]
+pub(crate) enum RemoteFailure {
+    NotExecuted,
+    CleanupIncomplete(Option<String>),
+}
+
+impl std::fmt::Display for RemoteFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotExecuted => write!(f, "control command not executed"),
+            Self::CleanupIncomplete(Some(id)) => {
+                write!(f, "Stop {id} cleanup incomplete; inspect Agent status")
+            }
+            Self::CleanupIncomplete(None) => {
+                write!(f, "Stop cleanup incomplete; inspect Agent status")
+            }
+        }
+    }
+}
+impl std::error::Error for RemoteFailure {}
 
 fn read_until_header(
     stream: &mut TcpStream,
@@ -336,7 +357,7 @@ pub(crate) fn request_operation(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
         remaining(deadline)?,
     )?;
-    let body = format!("{{\"command\":{},\"args\":{}}}", json_string(command), args);
+    let body = serde_json::json!({"command":command,"args":serde_json::from_str::<serde_json::Value>(args).map_err(io::Error::other)?}).to_string();
     if body.len() > BODY_LIMIT {
         return Err(err("command exceeds 16KiB"));
     }
@@ -399,8 +420,15 @@ pub(crate) fn request_operation(
     if document["outcome"] == "not_executed" {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "control command not executed; no redirects permitted",
+            RemoteFailure::NotExecuted,
         ));
+    }
+    if command == "stop" && document["stop"] == "incomplete" && document["outcome"] == "unknown" {
+        let id = document["stop_id"]
+            .as_str()
+            .filter(|id| crate::protocol::valid_id(id))
+            .map(str::to_owned);
+        return Err(io::Error::other(RemoteFailure::CleanupIncomplete(id)));
     }
     Err(unknown_outcome(err(
         "control command failed; no redirects permitted",

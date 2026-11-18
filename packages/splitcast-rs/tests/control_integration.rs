@@ -991,13 +991,13 @@ fn cli_default_start_is_recording_and_redirects_are_not_followed() {
     redirect_target.set_nonblocking(true).unwrap();
     let mut cli = fixture.spawn(&["start"], b"");
     let deadline = Instant::now() + LIMIT;
-    let mut connection = loop {
+    let accept = || loop {
         match server.accept() {
             Ok((stream, _)) => break stream,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 assert!(
                     Instant::now() < deadline,
-                    "CLI did not send start: {}",
+                    "CLI did not send the next authenticated command: {}",
                     cli.stderr()
                 );
                 thread::sleep(Duration::from_millis(10));
@@ -1005,32 +1005,24 @@ fn cli_default_start_is_recording_and_redirects_are_not_followed() {
             Err(e) => panic!("{e}"),
         }
     };
-    connection.set_read_timeout(Some(LIMIT)).unwrap();
-    connection.set_write_timeout(Some(LIMIT)).unwrap();
-    let mut request = Vec::new();
-    loop {
-        let mut byte = [0];
-        connection.read_exact(&mut byte).unwrap();
-        request.push(byte[0]);
-        assert!(request.len() < 20 * 1024);
-        if request.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    let header = String::from_utf8(request).unwrap();
-    let length: usize = header
-        .lines()
-        .find_map(|l| l.strip_prefix("Content-Length: "))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert!(length <= 16 * 1024);
-    let mut body = vec![0; length];
-    connection.read_exact(&mut body).unwrap();
+    let mut status = accept();
+    let request = splitcast_rs_core::control::recv(&mut status, fixture.port, TOKEN).unwrap();
     assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"command":"start","args":{"output":"recording"}})
+        serde_json::from_str::<Value>(&request.body).unwrap(),
+        json!({"command":"status","args":{}})
+    );
+    splitcast_rs_core::control::reply(
+        &mut status,
+        200,
+        r#"{"state":"idle","start_id":"fixture-0-idle"}"#,
+    )
+    .unwrap();
+    drop(status);
+    let mut connection = accept();
+    let request = splitcast_rs_core::control::recv(&mut connection, fixture.port, TOKEN).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&request.body).unwrap(),
+        json!({"command":"start","args":{"output":"recording","session_id":"fixture-0-idle"}})
     );
     write!(connection, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", redirect_target.local_addr().unwrap().port()).unwrap();
     drop(connection);

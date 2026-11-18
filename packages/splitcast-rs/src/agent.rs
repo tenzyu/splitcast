@@ -1,4 +1,5 @@
-use crate::protocol::{Command, Invocation, MicAction, OwnerId};
+use crate::protocol::{Command, Invocation, MicAction, OwnerId, Start};
+use crate::request::rejected;
 use crate::workers::{Worker, Workers};
 use crate::{config, control, media, obs, return_audio};
 use crate::{Lifecycle, Output, Role, Session};
@@ -7,7 +8,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::path::PathBuf;
+use std::os::unix::process::ExitStatusExt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -92,6 +93,23 @@ pub fn cleanup_after_exit(cfg: config::Config) -> io::Result<()> {
     }
     Ok(())
 }
+#[derive(Default)]
+struct ObsShutdown {
+    output_inactive: Option<bool>,
+    exit: Option<std::process::ExitStatus>,
+}
+
+impl ObsShutdown {
+    fn status(&self) -> Value {
+        json!({
+            "output_inactive_confirmed": self.output_inactive,
+            "exit_code": self.exit.and_then(|status| status.code()),
+            "signal": self.exit.and_then(|status| status.signal()),
+            "normal_exit": self.exit.map(|status| status.success()),
+        })
+    }
+}
+
 struct Agent {
     operation: Option<crate::request::Operation>,
     cfg: config::Config,
@@ -104,11 +122,9 @@ struct Agent {
     _lock: fs::File,
     receive_monitor: Option<media::ReceiveMonitor>,
     last_health: Instant,
-    output_observation: Option<obs::OutputStatus>,
     media_prepared: bool,
-    output_deadline: Option<Instant>,
-    obs_output: Option<Output>,
-    obs_state: Option<PathBuf>,
+    obs_profile: Option<obs::SessionProfile>,
+    obs_shutdown: Option<ObsShutdown>,
     speech_source: Option<return_audio::Source>,
     speech_receiver: Option<return_audio::Receiver>,
 }
@@ -142,7 +158,7 @@ impl Agent {
         Ok(Self {
             operation: None,
             cfg,
-            session: Session::new(role),
+            session: Session::for_agent(role, rand_hex()?),
             children: Workers::default(),
             error: String::new(),
             warnings: vec![],
@@ -151,55 +167,40 @@ impl Agent {
             _lock: lock,
             receive_monitor: None,
             last_health: Instant::now(),
-            output_observation: None,
             media_prepared: false,
-            output_deadline: None,
-            obs_output: None,
-            obs_state: None,
+            obs_profile: None,
+            obs_shutdown: None,
             speech_source: None,
             speech_receiver: None,
         })
     }
     fn status(&self) -> String {
-        let list = self
-            .children
-            .names()
-            .iter()
-            .map(|k| config::json_string(k))
-            .collect::<Vec<_>>()
-            .join(",");
-        let notices = self
-            .warnings
-            .iter()
-            .map(|x| config::json_string(x))
-            .collect::<Vec<_>>()
-            .join(",");
-        let out = self
-            .session
-            .output()
-            .map(|x| config::json_string(x.as_str()))
-            .unwrap_or_else(|| "null".into());
-        let completed_owner = self.session.control().completed_owner();
-        let owner = completed_owner
-            .as_ref()
-            .map(|owner| config::json_string(owner.as_str()))
-            .unwrap_or_else(|| "null".into());
-        let stop = if self.session.control().stop_pending() {
-            "\"requested\""
+        self.status_value().to_string()
+    }
+
+    fn status_value(&self) -> Value {
+        let control = self.session.control();
+        let (stop, outcome) = if control.stop_pending() {
+            (Some("requested"), Some("accepted"))
         } else if self.session.state() == Lifecycle::Stopping {
-            "\"incomplete\""
-        } else if self.session.control().stop_completed() {
-            "\"completed\""
+            (Some("incomplete"), Some("unknown"))
+        } else if control.stop_completed() {
+            (Some("completed"), Some("completed"))
         } else {
-            "null"
+            (None, None)
         };
-        let outcome = match stop {
-            "\"requested\"" => "\"accepted\"",
-            "\"incomplete\"" => "\"unknown\"",
-            "\"completed\"" => "\"completed\"",
-            _ => "null",
-        };
-        format!("{{\"version\":1,\"engine\":\"rust-candidate\",\"role\":{},\"state\":{},\"output\":{out},\"error\":{},\"warnings\":[{notices}],\"mic_muted\":{},\"children\":[{list}],\"stop\":{stop},\"outcome\":{outcome},\"owner\":{owner},\"remote_release_pending\":{}}}",config::json_string(&self.cfg.role),config::json_string(json_state(self.session.state())),config::json_string(&self.error),self.mic_muted,self.session.remote_owner().is_some())
+        json!({
+            "version": 1, "engine": "rust-candidate", "role": self.cfg.role,
+            "state": json_state(self.session.state()), "output": self.session.output().map(Output::as_str),
+            "start_id": self.session.start_id(),
+            "output_seconds_remaining": self.session.output_seconds_remaining(),
+            "output_progress": self.obs_profile.as_ref().and_then(obs::SessionProfile::progress),
+            "error": self.error, "warnings": self.warnings, "mic_muted": self.mic_muted,
+            "children": self.children.names(), "stop": stop, "outcome": outcome, "stop_id": control.stop_id(),
+            "owner": control.completed_owner().as_ref().map(OwnerId::as_str),
+            "remote_release_pending": self.session.remote_owner().is_some(),
+            "obs_shutdown": self.obs_shutdown.as_ref().map(ObsShutdown::status),
+        })
     }
     fn spawn(&mut self, worker: Worker, argv: Vec<String>) -> io::Result<()> {
         self.checkpoint()?;
@@ -248,9 +249,9 @@ impl Agent {
         Ok(())
     }
     fn guard_lease(&self, owner: Option<&OwnerId>) -> io::Result<()> {
-        self.session
-            .authorize(owner)
-            .map_err(|_| err("session is already owned; stop it locally before changing owners"))
+        self.session.authorize(owner).map_err(|_| {
+            rejected("session is already owned; stop it locally before changing owners")
+        })
     }
     fn renew_lease(&mut self, owner: &OwnerId) -> io::Result<()> {
         self.session
@@ -326,14 +327,30 @@ impl Agent {
         self.last_heartbeat = Instant::now();
         Ok(())
     }
-    fn start(&mut self, output: Output, owner: Option<&OwnerId>) -> io::Result<()> {
+    fn start(&mut self, start: Start, owner: Option<&OwnerId>) -> io::Result<()> {
+        let output = start.output();
         self.checkpoint()?;
         self.guard_lease(owner)?;
+        if owner.is_none() {
+            if let Some(id) = start.session_id() {
+                if self.session.start_id().as_deref() != Some(id) {
+                    return Err(rejected("Start session ID is stale; refresh status"));
+                }
+            }
+            if output == Output::TwitchLive
+                && (start.session_id().is_none() || self.session.state() == Lifecycle::Idle)
+            {
+                return Err(rejected(
+                    "public Start requires a prepared session and its current Start ID",
+                ));
+            }
+        }
+
         if self.session.state() == Lifecycle::Running {
             return if self.session.output() == Some(output) {
                 Ok(())
             } else {
-                Err(err("stop before changing outputs"))
+                Err(rejected("stop before changing outputs"))
             };
         }
         if self.cfg.role == "production" && output != Output::Recording {
@@ -341,24 +358,26 @@ impl Agent {
                 .cfg
                 .twitch
                 .as_ref()
-                .ok_or_else(|| err("Twitch is not configured on production"))?;
+                .ok_or_else(|| rejected("Twitch is not configured on production"))?;
             if output == Output::TwitchLive && !twitch.allow_public {
-                return Err(err("public Twitch output is disabled on production"));
+                return Err(rejected("public Twitch output is disabled on production"));
             }
         }
         if self.session.state() == Lifecycle::Idle {
             if owner.is_some() {
-                return Err(err(
+                return Err(rejected(
                     "remote Start requires an existing matching preparation",
                 ));
             }
             self.prepare(owner, true)?;
         }
         if self.session.state() != Lifecycle::Ready {
-            return Err(err("not prepared"));
+            return Err(rejected("not prepared"));
         }
         if !self.media_prepared {
-            return Err(err("stop the speech-only session before starting media"));
+            return Err(rejected(
+                "stop the speech-only session before starting media",
+            ));
         }
         let outcome = (|| -> io::Result<()> {
             if !media::missing_tools(&self.cfg, true, true).is_empty() {
@@ -373,7 +392,7 @@ impl Agent {
                 if let Some(argv) = camera {
                     self.spawn(Worker::Camera, argv)?;
                 }
-                self.remote_request(&Command::Start(output))?;
+                self.remote_request(&Command::Start(start))?;
             } else {
                 if let Some(argv) = camera {
                     self.spawn(Worker::Camera, argv)?;
@@ -388,19 +407,18 @@ impl Agent {
                     crate::audio::ready_operation(&self.cfg, self.operation.as_ref())
                         .unwrap_or(false)
                 })?;
-                let obs_state = self
+                let directory = self
                     .cfg
                     .state_dir
                     .join(format!("obs-session-{}", rand_hex()?));
-                fs::create_dir(&obs_state)?;
-                self.obs_state = Some(obs_state.clone());
-                self.spawn(
-                    Worker::Obs,
-                    crate::audio::client(
-                        &self.cfg,
-                        obs::launch_args(&self.cfg, &obs_state, output)?,
-                    ),
-                )?;
+                self.obs_profile = Some(obs::SessionProfile::create(directory)?);
+                self.obs_shutdown = None;
+                let argv = self
+                    .obs_profile
+                    .as_ref()
+                    .expect("profile just allocated")
+                    .launch_args(&self.cfg)?;
+                self.spawn(Worker::Obs, crate::audio::client(&self.cfg, argv))?;
                 self.wait_ready(|| {
                     self.obs()
                         .and_then(|mut o| o.scene_ready())
@@ -418,15 +436,17 @@ impl Agent {
                 o.configure(&self.cfg)?;
                 self.wait_ready(|| {
                     self.obs()
-                        .and_then(|mut o| o.game_decoded(&self.cfg))
+                        .and_then(|mut o| o.source_geometry_ready(&self.cfg))
                         .unwrap_or(false)
                 })?;
                 o.configure_output(&self.cfg, output)?;
-                let seconds = if output == Output::TwitchLive { 12 } else { 20 };
-                self.output_deadline = Some(Instant::now() + Duration::from_secs(seconds));
-                // A missing Start reply can leave the requested OBS output active.
-                self.obs_output = Some(output);
-                o.start(output)?;
+                self.session
+                    .arm_output_limit(start.limit())
+                    .map_err(io::Error::other)?;
+                self.obs_profile
+                    .as_mut()
+                    .expect("profile allocated before launching OBS")
+                    .request_start(&mut o, output)?;
                 self.wait_ready(|| {
                     media::receive_operation(&self.cfg, self.operation.as_ref())
                         .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
@@ -440,7 +460,15 @@ impl Agent {
                             })
                 })?;
                 self.receive_monitor = Some(monitor);
-                self.output_observation = Some(self.obs()?.observe(output)?);
+                let mut studio = self.obs()?;
+                if !self
+                    .obs_profile
+                    .as_mut()
+                    .expect("profile allocated before launching OBS")
+                    .observe(&mut studio)?
+                {
+                    return Err(err("OBS output was inactive before confirming Start"));
+                }
             }
             Ok(())
         })();
@@ -450,7 +478,7 @@ impl Agent {
         self.checkpoint().map_err(|e| self.fail(e))?;
         self.session
             .start(output)
-            .map_err(|_| err("start lifecycle error"))?;
+            .map_err(|error| self.fail(io::Error::other(error)))?;
         self.last_health = Instant::now();
         if let Some(o) = owner {
             self.renew_lease(o)?;
@@ -468,9 +496,7 @@ impl Agent {
         result
     }
     fn cleanup_owned(&mut self) -> io::Result<()> {
-        self.output_deadline = None;
         self.receive_monitor = None;
-        self.output_observation = None;
         self.speech_source.take(); // cancels and joins any synthesis worker
         let mut failed = false;
         if let Some(receiver) = &mut self.speech_receiver {
@@ -482,11 +508,25 @@ impl Agent {
                 }
             }
         }
-        if let Some(output) = self
-            .obs_output
-            .filter(|_| self.children.contains(Worker::Obs))
-        {
-            failed |= self.obs().and_then(|mut o| o.stop(output)).is_err();
+        if self.children.contains(Worker::Obs) {
+            let mut shutdown = ObsShutdown::default();
+            if let Some(output) = self
+                .obs_profile
+                .as_ref()
+                .and_then(obs::SessionProfile::requested_output)
+            {
+                let inactive = self.obs().and_then(|mut o| o.stop(output)).is_ok();
+                shutdown.output_inactive = Some(inactive);
+                failed |= !inactive;
+            }
+            match self.children.close_obs() {
+                Ok(exit) => shutdown.exit = exit,
+                Err(_) => failed = true,
+            }
+            if shutdown.exit.is_some_and(|status| !status.success()) {
+                self.warn("OBS exited abnormally; inspect obs_shutdown in status");
+            }
+            self.obs_shutdown = Some(shutdown);
         }
         if self.session.remote_owner().is_some() {
             let release = (|| -> io::Result<()> {
@@ -532,12 +572,11 @@ impl Agent {
         }
         failed |= self.children.stop_all(Duration::from_millis(200)).is_err();
         if !self.children.contains(Worker::Obs) {
-            self.obs_output = None;
-            if let Some(directory) = &self.obs_state {
-                match fs::remove_dir_all(directory) {
-                    Ok(()) => self.obs_state = None,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => self.obs_state = None,
-                    Err(_) => failed = true,
+            if let Some(profile) = &self.obs_profile {
+                if profile.discard().is_ok() {
+                    self.obs_profile = None;
+                } else {
+                    failed = true;
                 }
             }
         }
@@ -560,7 +599,7 @@ impl Agent {
         }
         let _ = self.session.fail();
         let error = match self.cleanup() {
-            Ok(()) => cause,
+            Ok(()) => err(&cause.to_string()),
             Err(cleanup) => err(&format!("{cause}; cleanup incomplete: {cleanup}")),
         };
         self.error = error.to_string();
@@ -589,15 +628,6 @@ impl Agent {
     }
     fn tick(&mut self) {
         self.expire_lease();
-        if self
-            .output_deadline
-            .is_some_and(|end| end <= Instant::now())
-        {
-            if self.stop(None).is_err() {
-                self.warn("output budget elapsed; cleanup is incomplete");
-            }
-            return;
-        }
         if matches!(self.session.state(), Lifecycle::Ready | Lifecycle::Running) {
             if self.cfg.role == "capture"
                 && self.children.contains(Worker::Tunnel)
@@ -633,24 +663,11 @@ impl Agent {
                     {
                         return Ok(false);
                     }
-                    let output = self
-                        .session
-                        .output()
-                        .ok_or_else(|| err("owned output unavailable"))?;
-                    let current = self.obs()?.observe(output)?;
-                    let progressing = self.output_observation.as_ref().is_some_and(|previous| {
-                        current.active
-                            && current
-                                .bytes
-                                .zip(previous.bytes)
-                                .is_some_and(|(now, old)| now > old)
-                            && current
-                                .frames
-                                .zip(previous.frames)
-                                .is_none_or(|(now, old)| now > old)
-                    });
-                    self.output_observation = Some(current);
-                    Ok(progressing)
+                    let mut studio = self.obs()?;
+                    self.obs_profile
+                        .as_mut()
+                        .ok_or_else(|| err("owned OBS profile unavailable"))?
+                        .observe(&mut studio)
                 })();
                 if !matches!(health, Ok(true)) {
                     let _ = self.fail(err("incoming media or OBS output stopped progressing; output stopped without automatic publication"));
@@ -680,16 +697,38 @@ impl Agent {
     }
     fn expire_lease(&mut self) {
         let expired = self.session.lease_expired(Instant::now());
-        if expired {
-            // Revoke queued work even when the owner beats the watchdog to
-            // lease expiry and enters Stopping before the next listener poll.
-            self.session.control().expire();
-            if self.stop(None).is_ok() {
-                self.warn("production owner lease expired; owned media stopped");
-            } else {
-                self.warn("production owner lease expired; cleanup is incomplete");
-            }
+        let control = self.session.control();
+        control.expire();
+        if !control.stop_pending() {
+            return;
         }
+        let response = match self.stop(None) {
+            Ok(()) => {
+                if expired {
+                    self.warn("session watchdog expired; owned media stopped");
+                }
+                let mut body = self.status_value();
+                body["stop"] = json!("completed");
+                body["outcome"] = json!("completed");
+                (200, body.to_string())
+            }
+            Err(error) => {
+                if expired {
+                    self.warn("session watchdog expired; cleanup is incomplete");
+                }
+                (
+                    409,
+                    json!({
+                        "error":error.to_string(), "state":json_state(self.session.state()),
+                        "stop":"incomplete", "outcome":"unknown", "code":"cleanup_incomplete",
+                        "remote_release_pending":self.session.remote_owner().is_some(),
+                        "obs_shutdown":self.obs_shutdown.as_ref().map(ObsShutdown::status),
+                    })
+                    .to_string(),
+                )
+            }
+        };
+        control.finish_stop(response);
     }
     fn warn(&mut self, message: &str) {
         if self.warnings.len() == 16 {
@@ -708,7 +747,7 @@ impl Agent {
         self.checkpoint()?;
         let owner = invocation.owner.as_ref();
         if owner.is_some() && self.cfg.role != "production" {
-            return Err(err("only production accepts remote ownership"));
+            return Err(rejected("only production accepts remote ownership"));
         }
         if owner.is_some() {
             self.guard_lease(owner)?;
@@ -728,7 +767,7 @@ impl Agent {
                 Ok(self.speech_source.as_mut().ok_or_else(||err("no active speech source"))?.take())
             }
             command=>{
-                if !matches!(self.session.state(),Lifecycle::Ready|Lifecycle::Running|Lifecycle::Degraded){return Err(err("prepare the session first"));}
+                if !matches!(self.session.state(),Lifecycle::Ready|Lifecycle::Running|Lifecycle::Degraded){return Err(rejected("prepare the session first"));}
                 if self.cfg.role=="capture"{return self.peer_command(&command);}
                 match command {
                     Command::Mic(action)=>{
@@ -744,9 +783,9 @@ impl Agent {
                     },
                     Command::Preview => self.obs()?.preview(),
                     Command::TtsStatus => self.speech_source.as_mut()
-                        .ok_or_else(||err("speech return is disabled"))?.status(),
+                        .ok_or_else(||rejected("speech return is disabled"))?.status(),
                     Command::Say {text, id} => self.speech_source.as_mut()
-                        .ok_or_else(||err("speech return is disabled"))?.say(&text, id.as_deref()),
+                        .ok_or_else(||rejected("speech return is disabled"))?.say(&text, &id),
                     _=>Err(err("command is not a prepared-session control"))
                 }
             }
@@ -777,7 +816,7 @@ impl Agent {
         };
         if !control.begin(work.generation, activation_owner) {
             work.ticket.finish(crate::request::error_response(
-                "not_executed",
+                crate::request::Failure::NotExecuted,
                 "request superseded by Stop",
             ));
             return;
@@ -794,13 +833,7 @@ impl Agent {
         let response = self
             .execute(work.invocation)
             .map(|body| (200, body))
-            .unwrap_or_else(|e| {
-                (
-                    409,
-                    json!({"error":e.to_string(),"code":"command_failed","outcome":"unknown"})
-                        .to_string(),
-                )
-            });
+            .unwrap_or_else(crate::request::command_failure);
         control.end();
         work.ticket.finish(response);
     }
@@ -931,18 +964,6 @@ fn serve_bound(
     )?;
     while !shutdown.load(Ordering::Relaxed) {
         let control = agent.session.control();
-        if control.stop_pending() {
-            let response = match agent.stop(None) {
-                Ok(()) => {
-                    let mut body: Value = serde_json::from_str(&agent.status()).expect("agent status is JSON");
-                    body["stop"] = json!("completed");
-                    body["outcome"] = json!("completed");
-                    (200, body.to_string())
-                }
-                Err(error) => (409, json!({"error":error.to_string(),"state":json_state(agent.session.state()),"stop":"incomplete","outcome":"unknown","code":"cleanup_incomplete"}).to_string()),
-            };
-            control.finish_stop(response);
-        }
         agent.operation = Some(
             crate::request::Operation::new(Arc::clone(&shutdown), None, limits.operation)
                 .with_control(control.clone(), control.generation()),
@@ -1078,7 +1099,7 @@ mod tests {
         let shutdown = Arc::new(AtomicBool::new(false));
         let queued: Vec<_> = [
             Command::Prepare { media: true },
-            Command::Start(Output::Recording),
+            Invocation::parse("start", &json!({}), 100).unwrap().command,
         ]
         .into_iter()
         .map(|command| crate::server::Work {
@@ -1122,10 +1143,15 @@ mod tests {
         let mut agent = prepared_agent();
         agent.session.start(Output::Recording).unwrap();
         assert!(
-            agent.start(Output::Recording, None).is_ok(),
+            agent.command("start", "{}").is_ok(),
             "repeated recording start was refused"
         );
-        assert!(agent.start(Output::TwitchLive, None).is_err());
+        assert!(agent
+            .command(
+                "start",
+                r#"{"output":"twitch-live","duration_seconds":60,"confirm_public":true}"#
+            )
+            .is_err());
         assert_eq!(agent.session.output(), Some(Output::Recording));
     }
 

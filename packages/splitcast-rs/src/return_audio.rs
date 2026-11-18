@@ -68,14 +68,12 @@ impl Source {
         Ok(status.to_string())
     }
 
-    pub(crate) fn say(&mut self, text: &str, id: Option<&str>) -> io::Result<String> {
-        let id =
-            id.ok_or_else(|| io::Error::other("say requires the current session speech ID"))?;
+    pub(crate) fn say(&mut self, text: &str, id: &str) -> io::Result<String> {
         let (_, expires) = self
             .admission
             .as_ref()
             .filter(|(issued, end)| issued == id && *end > Instant::now())
-            .ok_or_else(|| io::Error::other("speech ID is stale or out of sequence"))?;
+            .ok_or_else(|| crate::request::rejected("speech ID is stale or out of sequence"))?;
         self.speech.enqueue_until(text, id, *expires)?;
         self.admission = None;
         Ok(json!({"id": id, "duplicate": false}).to_string())

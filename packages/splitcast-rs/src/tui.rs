@@ -1,5 +1,8 @@
-use serde_json::{json, Value};
+use crate::LocalClient;
+use serde_json::json;
 use std::io::{self, BufRead, Read, Write};
+use std::sync::Mutex;
+use std::thread;
 
 const MENU: &str = "
 1 Status          2 Discover devices     3 Routes
@@ -12,11 +15,16 @@ Choice: ";
 
 fn prompt(
     input: &mut impl BufRead,
-    output: &mut impl Write,
+    output: &Mutex<(impl Write, u64)>,
     label: &str,
 ) -> io::Result<Option<String>> {
-    write!(output, "{label}")?;
-    output.flush()?;
+    {
+        let mut output = output
+            .lock()
+            .map_err(|_| io::Error::other("terminal output lock poisoned"))?;
+        write!(output.0, "{label}")?;
+        output.0.flush()?;
+    }
     let mut line = String::new();
     if input.take(4097).read_line(&mut line)? == 0 {
         return Ok(None);
@@ -45,88 +53,149 @@ fn display(output: &mut impl Write, text: &str) -> io::Result<()> {
     writeln!(output)
 }
 
-pub(crate) fn run(
-    mut input: impl BufRead,
-    mut output: impl Write,
-    mut request: impl FnMut(&str, &str) -> io::Result<String>,
+fn show(
+    output: &mut impl Write,
+    command: &str,
+    result: io::Result<serde_json::Value>,
 ) -> io::Result<()> {
-    writeln!(output, "SplitCast terminal")?;
-    while let Some(choice) = prompt(&mut input, &mut output, MENU)? {
-        let (command, args) = match choice.trim() {
-            "0" | "q" | "quit" => return Ok(()),
-            "1" => ("status", json!({})),
-            "2" => ("devices", json!({})),
-            "3" => ("routes", json!({})),
-            "4" => ("prepare", json!({"media":true})),
-            "5" => ("prepare", json!({"media":false})),
-            "6" => ("start", json!({"output":"recording"})),
-            "7" => ("stop", json!({})),
-            "8" => ("preview", json!({})),
-            "9" => ("tts", json!({})),
-            "10" => ("mic", json!({"action":"mute"})),
-            "11" => ("mic", json!({"action":"unmute"})),
-            "12" => match prompt(&mut input, &mut output, "Speech: ")? {
-                Some(text) => ("say", json!({"text":text})),
-                None => return Ok(()),
-            },
-            "13" => ("start", json!({"output":"twitch-test"})),
-            "14" => match prompt(
-                &mut input,
-                &mut output,
-                "Type LIVE to start a public Twitch broadcast: ",
-            )? {
-                Some(word) if word == "LIVE" => ("start", json!({"output":"twitch-live"})),
-                Some(_) => continue,
-                None => return Ok(()),
-            },
-            _ => {
-                writeln!(output, "Choose a displayed number.")?;
-                continue;
-            }
-        };
-        match request(command, &args.to_string()) {
-            Ok(body) => {
-                let reply: Value = serde_json::from_str(&body).map_err(io::Error::other)?;
-                if command == "preview" {
-                    let bytes = reply["image"].as_str().map_or(0, str::len);
-                    writeln!(output, "OBS preview received ({bytes} encoded bytes). Open the Web client to view it.")?;
-                } else {
-                    display(&mut output, &serde_json::to_string_pretty(&reply)?)?;
-                }
-            }
-            Err(error) => display(&mut output, &error.to_string())?,
+    match result {
+        Ok(reply) if command == "preview" => {
+            let bytes = reply["image"].as_str().map_or(0, str::len);
+            writeln!(
+                output,
+                "OBS preview received ({bytes} encoded bytes). Open the Web client to view it."
+            )
         }
+        Ok(reply) => display(output, &serde_json::to_string_pretty(&reply)?),
+        Err(error) => display(output, &error.to_string()),
     }
-    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn menus_require_explicit_live_confirmation_and_leave_sessions_on_eof() {
-        let mut requests = Vec::new();
-        run(
-            &b"14\nno\n6\n5\n13\n14\nLIVE\n14\n"[..],
-            Vec::new(),
-            |command, args| {
-                requests.push((
-                    command.to_owned(),
-                    serde_json::from_str::<Value>(args).unwrap(),
-                ));
-                Ok("{}".into())
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            requests,
-            [
-                ("start".into(), json!({"output":"recording"})),
-                ("prepare".into(), json!({"media":false})),
-                ("start".into(), json!({"output":"twitch-test"})),
-                ("start".into(), json!({"output":"twitch-live"})),
-            ]
-        );
-    }
+pub(crate) fn run(
+    mut input: impl BufRead,
+    output: impl Write + Send,
+    client: &LocalClient<'_>,
+) -> io::Result<()> {
+    let console = Mutex::new((output, 0u64));
+    let mut output = console
+        .lock()
+        .map_err(|_| io::Error::other("terminal output lock poisoned"))?;
+    writeln!(output.0, "SplitCast terminal")?;
+    drop(output);
+    thread::scope(|scope| {
+        let mut normal: Option<thread::ScopedJoinHandle<'_, io::Result<()>>> = None;
+        while let Some(choice) = prompt(&mut input, &console, MENU)? {
+            if normal.as_ref().is_some_and(|task| task.is_finished()) {
+                normal
+                    .take()
+                    .unwrap()
+                    .join()
+                    .map_err(|_| io::Error::other("terminal command panicked"))??;
+            }
+            if normal.is_some() && !matches!(choice.trim(), "0" | "q" | "quit" | "7") {
+                writeln!(
+                    console
+                        .lock()
+                        .map_err(|_| io::Error::other("terminal output lock poisoned"))?
+                        .0,
+                    "Command pending. Stop is available."
+                )?;
+                continue;
+            }
+            let (command, args) = match choice.trim() {
+                "0" | "q" | "quit" => return Ok(()),
+                "1" => ("status", json!({})),
+                "2" => ("devices", json!({})),
+                "3" => ("routes", json!({})),
+                "4" => ("prepare", json!({"media":true})),
+                "5" => ("prepare", json!({"media":false})),
+                "6" => ("start", json!({"output":"recording"})),
+                "7" => ("stop", json!({})),
+                "8" => ("preview", json!({})),
+                "9" => ("tts", json!({})),
+                "10" => ("mic", json!({"action":"mute"})),
+                "11" => ("mic", json!({"action":"unmute"})),
+                "12" => match prompt(&mut input, &console, "Speech: ")? {
+                    Some(text) => ("say", json!({"text":text})),
+                    None => return Ok(()),
+                },
+                "13" => ("start", json!({"output":"twitch-test"})),
+                "14" => {
+                    let Some(seconds) = prompt(
+                        &mut input,
+                        &console,
+                        "Maximum public duration in seconds (1–28800): ",
+                    )?
+                    else {
+                        return Ok(());
+                    };
+                    let Ok(seconds @ 1..=28_800) = seconds.parse::<u64>() else {
+                        writeln!(
+                            console
+                                .lock()
+                                .map_err(|_| io::Error::other("terminal output lock poisoned"))?
+                                .0,
+                            "Enter a duration from 1 to 28800 seconds."
+                        )?;
+                        continue;
+                    };
+                    match prompt(
+                        &mut input,
+                        &console,
+                        "Type LIVE to start a public Twitch broadcast: ",
+                    )? {
+                        Some(word) if word == "LIVE" => (
+                            "start",
+                            json!({"output":"twitch-live","duration_seconds":seconds,"confirm_public":true}),
+                        ),
+                        Some(_) => continue,
+                        None => return Ok(()),
+                    }
+                }
+                _ => {
+                    writeln!(
+                        console
+                            .lock()
+                            .map_err(|_| io::Error::other("terminal output lock poisoned"))?
+                            .0,
+                        "Choose a displayed number."
+                    )?;
+                    continue;
+                }
+            };
+            let generation = {
+                let mut console = console
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal output lock poisoned"))?;
+                console.1 += 1;
+                console.1
+            };
+            if command == "stop" {
+                let result = client.execute(command, args);
+                show(
+                    &mut console
+                        .lock()
+                        .map_err(|_| io::Error::other("terminal output lock poisoned"))?
+                        .0,
+                    command,
+                    result,
+                )?;
+                continue;
+            }
+            let screen = &console;
+            normal = Some(scope.spawn(move || {
+                let result = client.execute_if_current(command, args, || {
+                    screen.lock().is_ok_and(|screen| screen.1 == generation)
+                });
+                let mut screen = screen
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal output lock poisoned"))?;
+                if screen.1 == generation {
+                    show(&mut screen.0, command, result)?;
+                }
+                Ok(())
+            }));
+        }
+        Ok(())
+    })
 }

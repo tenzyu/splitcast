@@ -1,6 +1,9 @@
 version = 1
 role = "capture"
 
+# Pair with example-production.toml. Keep local routes unselected until
+# the capture host's hardware and game audio application are identified.
+
 [peer]
 ssh_host = "production-host"
 ssh_port = 22
@@ -13,8 +16,8 @@ state_dir = "~/.local/state/splitcast"
 timeout_seconds = 15
 
 [capture]
-target = ""
-game_audio = ""
+target = ""     # Selected GSR capture output, for example "eDP-1".
+game_audio = "" # Selected game only, for example "app:osu!".
 width = 1280
 height = 720
 fps = 60
@@ -24,8 +27,8 @@ rtsp_port = 8554
 api_port = 9997
 
 [audio]
-mic_source = ""
-tts_sink = ""
+mic_source = "" # Select the raw ALSA microphone source from devices.
+tts_sink = ""   # Select the local PipeWire playback sink.
 tts_volume_percent = 100
 processed_sink = "splitcast_mic"
 rnnoise_plugin = "/usr/lib/ladspa/librnnoise.so"
@@ -35,6 +38,7 @@ gain_db = 0
 mic_offset_ms = 0
 
 [obs]
+# Production controls OBS. This section is required for the shared schema.
 binary = "obs"
 websocket_port = 4455
 password_file = "~/.config/splitcast/obs.password"
@@ -42,7 +46,7 @@ recording_dir = "~/Videos/SplitCast"
 bitrate_kbps = 6000
 
 [tts]
-enabled = false
+enabled = false # Enable on both hosts with the same expiry for speech return.
 voicevox_url = "http://127.0.0.1:50021"
 speaker = 3
 queue_limit = 16
@@ -50,3 +54,14 @@ expiry_seconds = 60
 max_text = 200
 eventsub = false
 credentials_file = "~/.config/splitcast/twitch.json"
+
+# Optional capture-host camera. Uncomment the camera block in both examples
+# and select a stable by-id device on the capture host before starting media.
+# [camera]
+# location = "capture"
+# device = "/dev/v4l/by-id/usb-example-video-index0"
+# input_format = "yuyv422"
+# encoder = "libx264"
+# width = 320
+# height = 180
+# fps = 15

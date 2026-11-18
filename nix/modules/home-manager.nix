@@ -97,11 +97,12 @@ in {
         Type = "simple";
         LimitCORE = 0;
         ExecStart = if cfg.rustCandidate then "${command "agent"}" else "${gated}";
+        ExecStop = lib.mkIf cfg.rustCandidate "${command "stop"}";
         Environment = lib.mapAttrsToList (name: value: "${name}=${value}") cfg.environment;
         Restart = "on-failure";
         RestartSec = 5;
         KillMode = "control-group";
-        TimeoutStopSec = 20;
+        TimeoutStopSec = 25;
         ExecStopPost = "${command "cleanup"}";
         SendSIGKILL = true;
         UMask = "0077";

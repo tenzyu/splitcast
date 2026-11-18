@@ -1,7 +1,7 @@
 ---
 type: Decision Register
 title: decisions
-description: D01–D18 selected and rejected designs, falsifications and dated supersessions.
+description: D01–D20 selected and rejected designs, falsifications and dated supersessions.
 status: stable
 sources:
   - { id: primary, resource: ../../packages/splitcast-rs/src/agent.rs }
@@ -23,8 +23,8 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 ## D02: One Rust command and validation contract serves every view
 
 Scope clarification: [D15](#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return)
-retains this historical consistency rule, not an obligation to expand clients or
-control infrastructure before the PoC's resource and return-path gaps are known.
+retains the consistency rule. [D20](#d20-speech-admission-and-chat-replay-belong-to-the-prepared-session)
+records the superseding native browser and speech contracts.
 
 - Date: 2026-11-13. Adopted historical implementation and operator requirement. Confidence: high.
 - Goal: prevent the CLI, TUI, browser, and configuration formats from granting different capabilities.
@@ -261,3 +261,42 @@ architecture; D15 makes that distinction explicit.
   replacements or permission to run workers through read-only SSH.
 - Source/evidence: [S25 checkpoint](../evidence/poc-convergence-20261117.md).
   Existing fixture work is locally committed, not promoted to complete PoC.
+
+## D19: One owned watchdog governs timed output
+
+The trial represented at review head `0823165` used Agent deadlines of 12
+seconds for public and 20 seconds for private output, plus independent
+OBS timeouts at 18 and 28 seconds respectively. The two limits started at
+different points. The findings establish a deadline conflict and a separate
+requirement to investigate the observed OBS crash.
+
+The production lifecycle accepts an optional bounded duration at activation.
+Public Start requires per-command confirmation, duration and the current
+prepared-session Start ID. A delayed local request can carry an ID that no
+longer matches the state or generation. The same Stop admission and
+generation fence enforce expiry. Capture renews its owner lease while
+healthy. Production stays idle after recovery until a new Start is admitted.
+
+OBS output inactivity and the process exit status are separate evidence.
+The controller asks the directly owned OBS process to close after the
+output Stop, then limits cleanup using the process group. An unreaped
+leader retains group identity. The enclosing service remains the
+containment boundary. Controller-managed Stop IDs correlate current
+observations while owner identity establishes remote release.
+[Original review S31](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950165310) · [Operations](../operations.md#stop-and-rollback)
+
+## D20: Speech admission and chat replay belong to the prepared session
+
+The native Agent serves Web assets and owns the single authenticated
+command contract. This supersedes the browser transport and implementation
+choices recorded in D02. For Speak, the client retrieves the current
+`next_id` and submits the text once with that ID. Admission state belongs
+to the Agent. Stale or consumed IDs fail before a second enqueue.
+
+Production validates EventSub subscription identity and holds one
+cancellation-aware reconnect worker per prepared session. That session
+keeps bounded replay state across reconnects. The retention contract covers
+the 4,096 most recent distinct chat message IDs for up to ten minutes.
+A queue drop consumes the same ID. Expiry, eviction, or a new session
+allows an older ID to be seen again. This permits long sessions with memory
+bounded by message count and lifetime. [Operations](../operations.md#native-poc-startup)

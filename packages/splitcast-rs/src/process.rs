@@ -7,6 +7,8 @@
 //! API can promise bounded reaping of a task stuck in uninterruptible kernel I/O.
 //! Callers must not independently reap these children or ignore SIGCHLD.
 
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 #[cfg(not(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -65,7 +67,11 @@ impl OwnedProcess {
         if let Ownership::Reaped(status) = self.ownership {
             return Ok(Some(status));
         }
+        // SAFETY: Linux siginfo_t has only C integer, pointer and padding
+        // storage. A zero si_pid denotes no result in a WNOHANG call.
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: info is writable and P_PID names our still-owned child.
+        // WNOWAIT observes state without consuming the process-group anchor.
         let rc = unsafe {
             libc::waitid(
                 libc::P_PID,
@@ -77,9 +83,11 @@ impl OwnedProcess {
         if rc < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: successful waitid either filled a SIGCHLD result or left si_pid zero.
         if unsafe { info.si_pid() } == 0 {
             return Ok(None);
         }
+        // SAFETY: nonzero si_pid with WEXITED selects the SIGCHLD exit data.
         let status = unsafe { info.si_status() };
         let raw = match info.si_code {
             libc::CLD_EXITED => status << 8,
@@ -91,7 +99,8 @@ impl OwnedProcess {
     }
 
     fn signal(&self, signal: i32) -> io::Result<()> {
-        // Called only while the unreaped child pins this process-group number.
+        // SAFETY: called only while the unreaped child pins its own positive PID
+        // as the process-group number. Negating it selects precisely that group.
         if unsafe { libc::kill(-(self.id() as i32), signal) } == 0 {
             return Ok(());
         }
@@ -111,6 +120,32 @@ impl OwnedProcess {
         }
         self.signal(libc::SIGTERM)?;
         thread::sleep(grace);
+        self.kill_and_reap()
+    }
+
+    // OBS handles SIGINT by closing its main window on the UI thread. Keep
+    // the leader pinned until its remaining process group has been signalled.
+    pub(crate) fn close_obs(&mut self, grace: Duration) -> io::Result<ExitStatus> {
+        if let Ownership::Reaped(status) = self.ownership {
+            return Ok(status);
+        }
+        if self.try_wait()?.is_none() {
+            // SAFETY: the child PID remains owned and unreaped until kill_and_reap.
+            if unsafe { libc::kill(self.id() as libc::pid_t, libc::SIGINT) } == -1 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error);
+                }
+            }
+            let end = Instant::now() + grace;
+            while self.try_wait()?.is_none() && Instant::now() < end {
+                thread::sleep(TICK);
+            }
+        }
+        self.kill_and_reap()
+    }
+
+    fn kill_and_reap(&mut self) -> io::Result<ExitStatus> {
         self.signal(libc::SIGKILL)?;
         let start = Instant::now();
         loop {
@@ -140,8 +175,13 @@ impl Drop for OwnedProcess {
 
 fn nonblocking(pipe: &impl AsRawFd) -> io::Result<()> {
     let fd = pipe.as_raw_fd();
+    // SAFETY: fd belongs to the borrowed owned pipe and F_GETFL takes no value.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd is still borrowed and the third argument is a valid C int.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())

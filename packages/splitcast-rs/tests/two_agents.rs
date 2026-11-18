@@ -134,7 +134,10 @@ impl Agent {
         if command == "stop" && code == 202 {
             assert_eq!(body["stop"], "requested");
             assert_eq!(body["outcome"], "accepted");
-            return self.wait_for_stop();
+            assert!(body["stop_id"].as_str().is_some_and(|id| !id.is_empty()));
+            let completed = self.wait_for_stop();
+            assert_eq!(completed["stop_id"], body["stop_id"]);
+            return completed;
         }
         assert_eq!(code, 200, "{command}: {body}");
         body
@@ -517,21 +520,24 @@ fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
     assert_eq!(status_line, b"HTTP/1.1 202 Accepted\r\n");
     drop(lost);
     let end = Instant::now() + LIMIT;
-    loop {
+    let first_stop = loop {
         let (code, observation) = f.production.command("status", json!({"_owner":first}));
         assert_eq!(code, 200, "{observation}");
         if observation["stop"] == "completed" {
             assert_eq!(observation["owner"], first);
             assert_eq!(observation["state"], "idle");
             assert_eq!(observation["children"], json!([]));
-            break;
+            assert!(observation["stop_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()));
+            break observation["stop_id"].clone();
         }
         assert!(
             Instant::now() < end,
             "lost-reply Stop did not resolve: {observation}"
         );
         thread::sleep(Duration::from_millis(10));
-    }
+    };
     f.released(&pids);
     f.production.ok("prepare", json!({"_owner":second}));
     let current = f.production.ok("status", json!({}));
@@ -541,6 +547,7 @@ fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
         "new session fabricated old completion"
     );
     assert!(current["owner"].is_null());
+    assert!(current["stop_id"].is_null());
     assert!(!current["children"].as_array().unwrap().is_empty());
     for command in ["status", "stop", "prepare", "heartbeat"] {
         assert_eq!(
@@ -556,6 +563,7 @@ fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
     let overwritten = f.production.ok("status", json!({"_owner":first}));
     assert_eq!(overwritten["stop"], "completed");
     assert_eq!(overwritten["owner"], second);
+    assert_ne!(overwritten["stop_id"], first_stop);
     assert_ne!(
         overwritten["owner"], first,
         "another session became the first owner's release proof"

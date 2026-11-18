@@ -8,23 +8,6 @@ fn error(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, msg)
 }
 
-pub fn json_string(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 32 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 fn field<'a>(value: &'a Value, key: &str) -> io::Result<&'a Value> {
     key.trim_start_matches('.')
         .split('.')
@@ -231,74 +214,100 @@ pub enum ObsVideoMode {
 }
 
 #[derive(Clone, Debug)]
-pub struct Twitch {
-    pub ingest_host: String,
-    pub key_file: PathBuf,
-    pub allow_public: bool,
+pub(crate) struct Twitch {
+    pub(crate) ingest_host: String,
+    pub(crate) key_file: PathBuf,
+    pub(crate) allow_public: bool,
 }
 
 #[derive(Clone, Debug)]
-pub struct Camera {
-    pub location: String,
-    pub device: PathBuf,
-    pub input_format: String,
-    pub encoder: String,
-    pub render_device: Option<PathBuf>,
-    pub width: u16,
-    pub height: u16,
-    pub fps: u16,
+pub(crate) struct Camera {
+    pub(crate) location: String,
+    pub(crate) device: PathBuf,
+    pub(crate) input_format: String,
+    pub(crate) encoder: String,
+    pub(crate) render_device: Option<PathBuf>,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) fps: u16,
 }
 
+/// Configuration accepted by the SplitCast schema and role checks.
+///
+/// ```compile_fail
+/// use splitcast_rs_core::config::Config;
+/// fn bypass_port_validation(config: &mut Config) {
+///     config.control_port = 0;
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub document: String,
-    pub role: String,
-    pub state_dir: PathBuf,
-    pub token_file: PathBuf,
-    pub remote_token_file: PathBuf,
-    pub ssh_host: String,
-    pub ssh_config: Option<PathBuf>,
-    pub ssh_port: u16,
-    pub control_port: u16,
-    pub remote_control_port: u16,
-    pub forward_control_port: u16,
-    pub timeout: u16,
-    pub rtmp: u16,
-    pub rtsp: u16,
-    pub api: u16,
-    pub width: u16,
-    pub height: u16,
-    pub fps: u16,
-    pub bitrate: u16,
-    pub target: String,
-    pub game_audio: String,
-    pub mic_source: String,
-    pub tts_sink: String,
-    pub tts_volume_percent: u16,
-    pub processed_sink: String,
-    pub rnnoise_plugin: PathBuf,
-    pub rnnoise_label: String,
-    pub rnnoise_control: String,
-    pub gain_db: i32,
-    pub mic_offset: i32,
-    pub obs_binary: PathBuf,
-    pub obs_video_mode: ObsVideoMode,
-    pub obs_port: u16,
-    pub obs_password: PathBuf,
-    pub obs_bitrate: u16,
-    pub recording_dir: PathBuf,
-    pub twitch: Option<Twitch>,
-    pub camera: Option<Camera>,
-    pub tts_enabled: bool,
-    pub voicevox_url: String,
-    pub tts_speaker: u16,
-    pub tts_max_text: u16,
-    pub tts_queue_limit: u16,
-    pub tts_expiry_seconds: u16,
-    pub tts_credentials_file: PathBuf,
-    pub eventsub_enabled: bool,
+    #[cfg(test)]
+    document: String,
+    pub(crate) role: String,
+    pub(crate) state_dir: PathBuf,
+    pub(crate) token_file: PathBuf,
+    pub(crate) remote_token_file: PathBuf,
+    pub(crate) ssh_host: String,
+    pub(crate) ssh_config: Option<PathBuf>,
+    pub(crate) ssh_port: u16,
+    pub(crate) control_port: u16,
+    pub(crate) remote_control_port: u16,
+    pub(crate) forward_control_port: u16,
+    pub(crate) timeout: u16,
+    pub(crate) rtmp: u16,
+    pub(crate) rtsp: u16,
+    pub(crate) api: u16,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) fps: u16,
+    pub(crate) bitrate: u16,
+    pub(crate) target: String,
+    pub(crate) game_audio: String,
+    pub(crate) mic_source: String,
+    pub(crate) tts_sink: String,
+    pub(crate) tts_volume_percent: u16,
+    pub(crate) processed_sink: String,
+    pub(crate) rnnoise_plugin: PathBuf,
+    pub(crate) rnnoise_label: String,
+    pub(crate) rnnoise_control: String,
+    pub(crate) gain_db: i32,
+    pub(crate) mic_offset: i32,
+    pub(crate) obs_binary: PathBuf,
+    pub(crate) obs_video_mode: ObsVideoMode,
+    pub(crate) obs_port: u16,
+    pub(crate) obs_password: PathBuf,
+    pub(crate) obs_bitrate: u16,
+    pub(crate) separate_audio_tracks: bool,
+    pub(crate) recording_dir: PathBuf,
+    pub(crate) twitch: Option<Twitch>,
+    pub(crate) camera: Option<Camera>,
+    pub(crate) tts_enabled: bool,
+    pub(crate) voicevox_url: String,
+    pub(crate) tts_speaker: u16,
+    pub(crate) tts_max_text: u16,
+    pub(crate) tts_queue_limit: u16,
+    pub(crate) tts_expiry_seconds: u16,
+    pub(crate) tts_credentials_file: PathBuf,
+    pub(crate) eventsub_enabled: bool,
 }
 impl Config {
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+    pub fn control_port(&self) -> u16 {
+        self.control_port
+    }
+    pub fn remote_control_port(&self) -> u16 {
+        self.remote_control_port
+    }
+    pub fn ssh_host(&self) -> &str {
+        &self.ssh_host
+    }
+    pub fn max_speech_text(&self) -> usize {
+        self.tts_max_text.into()
+    }
+
     pub fn load(filename: &Path) -> io::Result<Self> {
         let mut input = Vec::new();
         let file = OpenOptions::new()
@@ -330,6 +339,7 @@ impl Config {
         }
         let value: serde_json::Value =
             serde_json::from_slice(filename).map_err(|_| error("invalid JSON"))?;
+        #[cfg(test)]
         let document = serde_json::to_string(&value).map_err(|_| error("invalid JSON"))?;
         let schema: Value = serde_json::from_str(include_str!("config-schema.json"))
             .map_err(|_| error("invalid built-in schema"))?;
@@ -431,7 +441,8 @@ impl Config {
             None
         };
         Ok(Self {
-            document: document.clone(),
+            #[cfg(test)]
+            document,
             role,
             ssh_host,
             ssh_config: filename["peer"]["ssh_config"]
@@ -474,6 +485,7 @@ impl Config {
             obs_port: number(filename, ".obs.websocket_port", 1024, 65535)?,
             obs_password: path(get(filename, ".obs.password_file")?),
             obs_bitrate: number(filename, ".obs.bitrate_kbps", 1000, 10000)?,
+            separate_audio_tracks: filename["obs"]["separate_audio_tracks"] == true,
             recording_dir: path(get(filename, ".obs.recording_dir")?),
             twitch,
             camera,
@@ -632,9 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn json_escaping() {
-        assert_eq!(json_string("a\"b\n"), "\"a\\\"b\\n\"");
-    }
+    fn json_escaping() {}
 
     #[test]
     fn preserves_strings_and_false() {

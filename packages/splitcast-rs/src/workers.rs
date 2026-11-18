@@ -1,6 +1,7 @@
 use crate::OwnedProcess;
 use std::collections::BTreeMap;
 use std::io;
+use std::process::ExitStatus;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -48,6 +49,14 @@ impl Workers {
         self.0
             .values_mut()
             .any(|child| !matches!(child.try_wait(), Ok(None)))
+    }
+    pub(crate) fn close_obs(&mut self) -> io::Result<Option<ExitStatus>> {
+        let Some(obs) = self.0.get_mut(&Worker::Obs) else {
+            return Ok(None);
+        };
+        let status = obs.close_obs(Duration::from_secs(3))?;
+        self.0.remove(&Worker::Obs);
+        Ok(Some(status))
     }
     pub fn stop(&mut self, worker: Worker, grace: Duration) -> io::Result<()> {
         if let Some(child) = self.0.get_mut(&worker) {

@@ -2,7 +2,7 @@
 //! its bounded handoff to the existing speech queue.
 use crate::{config, request::Operation};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpStream};
 use std::path::Path;
@@ -26,6 +26,8 @@ const HTTP_BUDGET: Duration = Duration::from_secs(4);
 const VALIDATE_INTERVAL: Duration = Duration::from_secs(3600);
 const FRAME_LIMIT: usize = 64 * 1024;
 const MESSAGE_BUDGET: usize = 4096;
+const REPLAY_WINDOW: Duration = Duration::from_secs(600);
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 fn error(message: &str) -> io::Error {
     io::Error::other(message)
@@ -77,7 +79,7 @@ impl Credentials {
                 .as_array()
                 .is_some_and(|scopes| scopes.iter().any(|scope| scope == SCOPE))
         {
-            return Err(error(
+            return Err(permission(
                 "Twitch OAuth client, reading account or user:read:chat scope differs",
             ));
         }
@@ -105,7 +107,7 @@ impl Credentials {
             || entry["transport"]["method"] != "websocket"
             || entry["transport"]["session_id"] != session
         {
-            return Err(error(
+            return Err(permission(
                 "Twitch chat subscription response differs from requested identity",
             ));
         }
@@ -115,10 +117,12 @@ impl Credentials {
 
 fn read_json(mut response: ureq::http::Response<ureq::Body>, expected: u16) -> io::Result<Value> {
     if response.status() != expected {
-        return Err(error(&format!(
-            "Twitch HTTP status {}",
-            response.status().as_u16()
-        )));
+        let code = response.status().as_u16();
+        let detail = format!("Twitch HTTP status {code}");
+        return Err(match code {
+            400 | 401 | 403 => permission(&detail),
+            _ => error(&detail),
+        });
     }
     let mut bytes = Vec::new();
     response
@@ -131,6 +135,10 @@ fn read_json(mut response: ureq::http::Response<ureq::Body>, expected: u16) -> i
         return Err(error("Twitch response body too large"));
     }
     serde_json::from_slice(&bytes).map_err(|_| error("invalid Twitch response JSON"))
+}
+
+fn permission(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, message)
 }
 
 fn identifier(value: &Value) -> io::Result<&str> {
@@ -152,6 +160,44 @@ struct Receipt {
     duplicate: u64,
     dropped: u64,
     error: Option<String>,
+    reconnects: u64,
+}
+
+// Kept across socket migrations and fresh subscriptions. Admission is at most
+// once while the ID remains among the newest 4096 distinct messages and its
+// first observation is under ten minutes old. A dropped handoff also consumes
+// the ID. There is no backfill and no replay protection across Prepare sessions.
+#[derive(Default)]
+struct Replay {
+    ids: HashSet<String>,
+    order: VecDeque<(Instant, String)>,
+}
+
+impl Replay {
+    fn admit(&mut self, id: &str, now: Instant) -> bool {
+        while self
+            .order
+            .front()
+            .is_some_and(|(at, _)| now.duration_since(*at) >= REPLAY_WINDOW)
+        {
+            self.evict();
+        }
+        if self.ids.contains(id) {
+            return false;
+        }
+        if self.order.len() == MESSAGE_BUDGET {
+            self.evict();
+        }
+        self.ids.insert(id.to_owned());
+        self.order.push_back((now, id.to_owned()));
+        true
+    }
+
+    fn evict(&mut self) {
+        if let Some((_, id)) = self.order.pop_front() {
+            self.ids.remove(&id);
+        }
+    }
 }
 
 pub(crate) struct EventSub {
@@ -190,6 +236,7 @@ impl EventSub {
             "notifications":receipt.notifications,
             "duplicates":receipt.duplicate,
             "dropped":receipt.dropped,
+            "reconnects":receipt.reconnects,
             "error":receipt.error
         })
     }
@@ -405,22 +452,17 @@ fn run(
         .https_only(true)
         .build()
         .into();
-    let mut seen = HashSet::new();
-    for retry in 0..3 {
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        let result = (|| -> io::Result<()> {
+    let mut replay = Replay::default();
+    reconnect(
+        cancel,
+        receipt,
+        |subscribed| {
             creds.validate(&http)?;
             let mut validated = Instant::now();
             let mut socket = connect(ENDPOINT, cancel)?;
             let (session, mut keepalive) = welcome(&mut socket)?;
             let subscription = creds.subscribe(&http, &session)?;
-            {
-                let mut status = receipt.lock().unwrap_or_else(|e| e.into_inner());
-                status.state = "subscribed";
-                status.error = None;
-            }
+            subscribed();
             let mut until = Instant::now() + keepalive;
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -445,8 +487,10 @@ fn run(
                         until = Instant::now() + keepalive;
                     }
                     Some("session_keepalive") => until = received + keepalive,
-                    Some("revocation") => {
-                        return Err(error("Twitch revoked the chat subscription"))
+                    Some("revocation")
+                        if message["payload"]["subscription"]["id"] == subscription =>
+                    {
+                        return Err(permission("Twitch revoked the chat subscription"));
                     }
                     Some("notification") => {
                         until = received + keepalive;
@@ -455,14 +499,10 @@ fn run(
                         };
                         let mut status = receipt.lock().unwrap_or_else(|e| e.into_inner());
                         status.notifications += 1;
-                        if seen.contains(id) {
+                        if !replay.admit(id, received) {
                             status.duplicate += 1;
                             continue;
                         }
-                        if seen.len() == MESSAGE_BUDGET {
-                            return Err(error("Twitch session message limit reached"));
-                        }
-                        seen.insert(id.to_owned());
                         if send
                             .try_send(Chat {
                                 received,
@@ -476,29 +516,130 @@ fn run(
                     _ => {}
                 }
             }
-        })();
+        },
+        wait_to_retry,
+    );
+}
+
+fn wait_to_retry(cancel: &AtomicBool, delay: Duration) {
+    let until = Instant::now() + delay;
+    while !cancel.load(Ordering::Relaxed) {
+        let remaining = until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+}
+
+fn reconnect(
+    cancel: &AtomicBool,
+    receipt: &Mutex<Receipt>,
+    mut session: impl FnMut(&mut dyn FnMut()) -> io::Result<()>,
+    mut wait: impl FnMut(&AtomicBool, Duration),
+) {
+    let mut backoff = Duration::from_secs(1);
+    while !cancel.load(Ordering::Relaxed) {
+        let mut connected_at = None;
+        let result = session(&mut || {
+            connected_at = Some(Instant::now());
+            let mut status = receipt.lock().unwrap_or_else(|e| e.into_inner());
+            status.state = "subscribed";
+            status.error = None;
+        });
+        let Err(error) = result else { return };
         if cancel.load(Ordering::Relaxed) {
             return;
         }
-        if let Err(error) = result {
+        let permanent = error.kind() == io::ErrorKind::PermissionDenied;
+        {
             let mut status = receipt.lock().unwrap_or_else(|e| e.into_inner());
-            status.state = if retry < 2 { "reconnecting" } else { "failed" };
+            status.state = if permanent { "failed" } else { "reconnecting" };
             status.error = Some(error.to_string());
-        }
-        if retry < 2 {
-            for _ in 0..10 * (retry + 1) {
-                if cancel.load(Ordering::Relaxed) {
-                    return;
-                }
-                thread::sleep(Duration::from_millis(100));
+            if !permanent {
+                status.reconnects = status.reconnects.saturating_add(1);
             }
         }
+        if permanent {
+            return;
+        }
+        if connected_at.is_some_and(|at| at.elapsed() >= MAX_BACKOFF) {
+            backoff = Duration::from_secs(1);
+        }
+        wait(cancel, backoff);
+        backoff = (backoff * 2).min(MAX_BACKOFF);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_ingesting_after_capacity_and_bounds_replay_by_age_and_count() {
+        let mut replay = Replay::default();
+        let now = Instant::now();
+        for index in 0..=MESSAGE_BUDGET * 2 {
+            let id = index.to_string();
+            assert!(replay.admit(&id, now));
+            assert!(!replay.admit(&id, now));
+        }
+        assert_eq!(replay.ids.len(), MESSAGE_BUDGET);
+        assert_eq!(replay.order.len(), MESSAGE_BUDGET);
+        assert!(replay.admit("0", now), "evicted IDs can be admitted again");
+        assert!(!replay.admit("0", now + REPLAY_WINDOW - Duration::from_millis(1)));
+        assert!(replay.admit("0", now + REPLAY_WINDOW));
+        assert_eq!(replay.ids.len(), 1);
+    }
+
+    #[test]
+    fn transient_outages_reconnect_beyond_three_attempts_and_preserve_replay() {
+        let cancel = AtomicBool::new(false);
+        let receipt = Mutex::new(Receipt::default());
+        let mut calls = 0;
+        let mut waits = Vec::new();
+        let mut replay = Replay::default();
+        reconnect(
+            &cancel,
+            &receipt,
+            |subscribed| {
+                calls += 1;
+                if calls == 1 || calls == 8 {
+                    subscribed();
+                    assert_eq!(
+                        replay.admit("already-delivered", Instant::now()),
+                        calls == 1
+                    );
+                }
+                if calls == 9 {
+                    return Err(permission("credentials rejected"));
+                }
+                Err(error("synthetic disconnect"))
+            },
+            |_, delay| waits.push(delay.as_secs()),
+        );
+        assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30, 30]);
+        let receipt = receipt.into_inner().unwrap();
+        assert_eq!(receipt.state, "failed");
+        assert_eq!(receipt.reconnects, 8);
+    }
+
+    #[test]
+    fn cancellation_during_backoff_does_not_open_another_socket() {
+        let cancel = AtomicBool::new(false);
+        let receipt = Mutex::new(Receipt::default());
+        let mut calls = 0;
+        reconnect(
+            &cancel,
+            &receipt,
+            |_| {
+                calls += 1;
+                Err(error("synthetic outage"))
+            },
+            |cancel, _| cancel.store(true, Ordering::Relaxed),
+        );
+        assert_eq!(calls, 1);
+    }
 
     #[test]
     fn accepts_only_current_configured_chat_subscription() {

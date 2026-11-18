@@ -78,6 +78,7 @@
     disabledUserUnit = !(lib.any (lib.hasPrefix "splitcast-") (builtins.attrNames off.systemd.user.services));
     migrationGate = lib.hasInfix "migration-gated" (builtins.head gatedUnit.Service.ExecStart);
     candidateCommand = lib.hasSuffix "splitcast-agent" (builtins.head candidateUnit.Service.ExecStart);
+    orderlyStopCommand = lib.hasSuffix "splitcast-stop" candidateUnit.Service.ExecStop && !(gatedUnit.Service ? ExecStop);
     cleanupCommand = lib.hasSuffix "splitcast-cleanup" gatedUnit.Service.ExecStopPost;
     manualUserUnit = gatedUnit.Install.WantedBy == [];
     cgroup = gatedUnit.Service.KillMode == "control-group";
