@@ -5,7 +5,11 @@ description: Trace SplitCast design decisions, incidents, disputed acceptance cl
 
 # SplitCast context
 
-Start with the [startup capsule](../../../MEMORY.md) and [topic index](../../../docs/memory/index.md). Reuse them if already loaded. Open just the matching section. Follow its pinned source with `git show REV:path` or `git grep -n PATTERN REV -- path`. Read the rule **and** the observation that exercises it. For a polling incident, look for the scheduling bound as well as the trace. For a lifecycle race, check work admitted before the transition as well as the final owner proof.
+Use the **working-tree** [capsule](../../../MEMORY.md) and [topic index](../../../docs/memory/index.md). Reuse them if already loaded. The Wiki can postdate the implementation it describes.
+
+Jump to the linked heading with `rg -A 8 '^### Heading' path`. Follow its primary links at their own revisions, e.g. `git show REV:path | sed -n '40,60p'` for a link ending in `#L40-L60`. Batch ranges shared by several questions. Once a rule and its receipt answer the question, finish the lookup.
+
+For polling, report each reader’s eligibility, concurrency limit and interval or backoff where specified. For a lifecycle race, trace work already queued through the transition and check who proves release.
 
 Before promoting a claim, identify the revision, role, environment, evidence class (source, observation, inference or unknown), and remaining uncertainty. Cite the exact symbol, test, job or dated receipt. A later pass can narrow an earlier failure. Physical acceptance requires the corresponding physical observation.
 
