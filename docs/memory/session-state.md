@@ -19,7 +19,9 @@ private Twitch bandwidth test with generated inputs. [Physical and viewer receip
 The matched replay restarts preserved Direct Scanout and both physical audio
 links in 120 samples across OFF/ON/OFF. Gameplay p99, input latency, physical
 A/V alignment and the NVIDIA render gate remain open. Three Xorg attempts
-left kernel-stuck tasks on production after Stop timed out. Physical
+left kernel-stuck tasks on production after Stop timed out. An operator VM
+reset cleared the trial tasks, cgroups and runtime directories and restored
+the recorded active system. Physical
 Twitch/VOICEVOX return was heard in a separate speech-only session. During the
 public game test EventSub admitted the message before Stop, with no observed
 synthesis completion. [Outstanding gates](open-risks.md) · [Current runbook](../operations.md)

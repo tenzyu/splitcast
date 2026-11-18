@@ -22,7 +22,9 @@ The OBS signal comparison reproduces the recorded SIGSEGV with SIGTERM, and
 SIGINT produced an orderly exit in the independent and managed recordings.
 The first isolated Xorg attempt left a QXL DRM task stuck in the kernel. Two
 subsequent attempts left tasks blocked on the VT console lock. All three
-service Stops timed out. Production NVIDIA rendering remains blocked.
+service Stops timed out. An operator VM reset cleared these trial resources.
+Production NVIDIA rendering and clean rollback of a future hardware display
+run remain unverified.
 [OBS comparison](../evidence/pr16-obs.md) · [Stop and rollback](../operations.md#stop-and-rollback)
 
 R03 retains full-session physical speech return. The refreshed Twitch trial
