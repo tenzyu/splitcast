@@ -28,7 +28,7 @@
     },
     "docs/memory/evidence.md": {
       "kind": "reference",
-      "sources": ["docs/verification.md", "docs/evidence/dreaming-retrieval-20261118.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/evidence/real-voicevox-physical-return.md"]
+      "sources": ["docs/verification.md", "docs/evidence/dreaming-retrieval-20261118.md", "docs/evidence/wiki-context-skill.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/evidence/real-voicevox-physical-return.md"]
     },
     "docs/memory/log.md": {
       "kind": "reference",
