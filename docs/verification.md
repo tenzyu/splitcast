@@ -12,9 +12,15 @@ The [audio return receipt](evidence/audio-return.md) records the two-Agent softw
 | `direnv exec . cargo test -p splitcast-rs-core --locked --offline --test two_agents -- production_watchdog_ tui_quit_ tui_eof_ tui_can_stop_ --nocapture` | Four passed on the source committed as `eb0d4ac`. The authenticated production Agent accepted advancing counters and stopped on missing, wrong-type, unchanged and decreasing stream frame counters. It confirmed output inactivity, and the fixture observed released workers and listeners. The terminal tests held the Start response and checked Quit, EOF and urgent Stop. An intermediate run retained a failed fixture assertion that used the wrong cleanup field name. Private log `artifacts/mission/pr16-managed/review-f13-f14-focused-final.log`. |
 | `direnv exec . cargo run -p splitcast-xtask -- verify-virtual` | All 14 checks passed on `eb0d4acd6369cadacb22aee7bd0cc159a69ca754`. Receipt `artifacts/verification/runs/1794976855239153906`. |
 | Hosted CI on `e8d9427` before F13 and F14 | Four checks passed, including Native package. The package receipt binds the GitHub test merge `205a44e`. [Hosted run](https://github.com/tenzyu/splitcast/actions/runs/44236505311) |
+| Hosted CI on `abf6f3d` with F13 and F14 | All four checks passed. [Hosted run](https://github.com/tenzyu/splitcast/actions/runs/44239360350) |
+| `nix develop --no-write-lock-file --max-jobs 1 --cores 4 .#media-test -c bash tools/verify-media.sh --case normal` | On `abf6f3d`, packaged OBS recorded and decoded to EOF, confirmed inactive output, exited with code 0, and released its process and listener. The negative control failed. One notch left the 180 Hz mic signature in enough windows to keep the longest detected dropout at two. All 117 game windows retained their identity. Receipt `20261118T045553Z-SmjVkppW`. |
+| `nix develop --no-write-lock-file --max-jobs 1 --cores 4 .#media-test -c cargo run -p splitcast-xtask -- verify-media` | All seven device-free packaged-OBS cases and the 16 media oracle tests passed on `1f7f8649c7144164a4d706995b96484ecca83672`. On the retained failed sample, the replacement high-pass mute held the game identity in all 117 windows and removed the mic signature for 14 consecutive windows. The fresh normal case rejected the mutation at 14 consecutive windows and verified inactive output, OBS exit code 0, and resource cleanup. Receipt `20261118T045941Z-T1dNJYup`. |
 
 The review follow-up used isolated OBS WebSocket responses for counter faults.
-The physical observations below remain bound to the earlier executable.
+All 22 public and 62 private samples from the earlier Twitch sessions supplied
+strictly increasing frame and byte counters. The physical observations below
+remain bound to the earlier executable. The production VM recovery and prior
+display Stop failures have a [separate host receipt](evidence/pr16-managed-acceptance.md#failures-and-cleanup).
 
 ## 2026-11-18 managed broadcast follow-up on PR #16
 
