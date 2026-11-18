@@ -69,6 +69,26 @@ impl PreviewGeometry {
     }
 }
 
+#[derive(Default)]
+struct WindowState {
+    focused: bool,
+    occluded: bool,
+}
+
+impl WindowState {
+    fn observe(&mut self, event: &WindowEvent) {
+        match event {
+            WindowEvent::Focused(focused) => self.focused = *focused,
+            WindowEvent::Occluded(occluded) => self.occluded = *occluded,
+            _ => {}
+        }
+    }
+
+    fn viewable(&self, shown: bool) -> bool {
+        shown && !self.occluded
+    }
+}
+
 struct Studio {
     network: Network,
     epoch: u64,
@@ -85,8 +105,7 @@ struct Studio {
     valid_fields: bool,
     editor: Editor,
     read_scene: bool,
-    active: bool,
-    occluded: bool,
+    window: WindowState,
     preview: Reader,
     chat_reader: Reader,
     previous_frame: Option<image::RgbaImage>,
@@ -114,8 +133,7 @@ impl Studio {
             valid_fields: true,
             editor: Editor::default(),
             read_scene: true,
-            active: false,
-            occluded: false,
+            window: WindowState::default(),
             preview: Reader::new(now),
             chat_reader: Reader::new(now),
             previous_frame: None,
@@ -152,10 +170,10 @@ impl Studio {
     }
 
     fn readers(&mut self, ui: &StudioWindow) -> bool {
-        let active = self.active && !self.occluded && !self.stop.pending();
+        let viewable = self.window.viewable(ui.window().is_visible()) && !self.stop.pending();
         let phase = self.active_phase();
         let preview = self.preview.visibility(
-            active
+            viewable
                 && ui.get_preview_open()
                 && ui.get_editor_open()
                 && phase == Some(Phase::Running),
@@ -165,7 +183,7 @@ impl Studio {
             self.preview_error = false;
         }
         let chat = self.chat_reader.visibility(
-            active
+            viewable
                 && ui.get_chat_open()
                 && matches!(phase, Some(Phase::Ready | Phase::Running | Phase::Degraded)),
         );
@@ -981,18 +999,12 @@ pub(crate) fn run(
         ui.window().on_winit_window_event(move |_, event| {
             if let Some(ui) = weak.upgrade() {
                 let mut state = current.borrow_mut();
+                state.window.observe(event);
                 match event {
-                    WindowEvent::Focused(active) => {
-                        state.active = *active;
-                        if !active {
-                            state.drag = None;
-                        }
-                        if state.readers(&ui) {
-                            state.publish(&ui);
-                        }
+                    WindowEvent::Focused(false) => {
+                        state.drag = None;
                     }
-                    WindowEvent::Occluded(occluded) => {
-                        state.occluded = *occluded;
+                    WindowEvent::Occluded(_) => {
                         if state.readers(&ui) {
                             state.publish(&ui);
                         }
@@ -1008,7 +1020,7 @@ pub(crate) fn run(
                         };
                         eprintln!(
                             "studio-render {phase} | {stop} | {scene} | {frame} | active={} | chat={}",
-                            state.active, state.chat.messages.len()
+                            state.window.focused, state.chat.messages.len()
                         );
                         ui.invoke_report_targets();
                     }
@@ -1019,4 +1031,37 @@ pub(crate) fn run(
         });
     }
     ui.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_loss_preserves_visible_reads_and_occlusion_invalidates_them() {
+        let now = Instant::now();
+        let mut window = WindowState::default();
+        let mut reader = Reader::new(now);
+        window.observe(&WindowEvent::Focused(true));
+        assert!(reader.visibility(window.viewable(true)));
+        let revision = reader.revision;
+        reader.next = now + SNAPSHOT_INTERVAL;
+
+        window.observe(&WindowEvent::Focused(false));
+        assert!(!window.focused);
+        assert!(!reader.visibility(window.viewable(true)));
+        assert!(reader.accepts(revision));
+        assert!(!reader.due(now));
+        assert!(reader.due(now + SNAPSHOT_INTERVAL));
+
+        window.observe(&WindowEvent::Occluded(true));
+        assert!(reader.visibility(window.viewable(true)));
+        assert!(!reader.accepts(revision));
+        assert!(!reader.due(now + SNAPSHOT_INTERVAL));
+
+        window.observe(&WindowEvent::Occluded(false));
+        assert!(!window.viewable(false));
+        assert!(reader.visibility(window.viewable(true)));
+        assert!(!reader.accepts(revision));
+    }
 }

@@ -53,6 +53,13 @@
         SPLITCAST_TEST_XKB_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
         SPLITCAST_TEST_FONTS = "${pkgs.dejavu_fonts}/share/fonts";
       };
+      studio-wayland-test = pkgs.mkShell {
+        inputsFrom = [self.devShells.${system}.studio];
+        packages = with pkgs; [cargo rustc gcc (python3.withPackages (ps: [ps.pillow])) sway-unwrapped foot grim wtype];
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath studio.runtimeLibraries;
+        SPLITCAST_TEST_XKB_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
+        SPLITCAST_TEST_FONTS = "${pkgs.dejavu_fonts}/share/fonts";
+      };
     };
     checks.${system} = {
       package = splitcast;

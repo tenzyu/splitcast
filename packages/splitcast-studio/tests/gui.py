@@ -100,7 +100,8 @@ class Relay(http.server.ThreadingHTTPServer):
         self.stop_responses = []
         self.hold = None
         self.drop = None
-        self.chat_delta = False
+        self.chat_count = None
+        self.preview = None
         self.held = threading.Event()
         self.release = threading.Event()
         super().__init__(("127.0.0.1", 0), Handler)
@@ -129,19 +130,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             code, body = exchange_http(self.server.upstream, headers, command, args)
             if command == "stop":
                 self.server.stop_responses.append((code, json.loads(body).get("stop_id")))
-            if self.server.chat_delta and command == "chat" and code == 200:
-                # Inject one bounded delta at the authenticated relay boundary.
+            if self.server.chat_count is not None and command == "chat" and code == 200:
+                # Inject bounded pages at the authenticated relay boundary.
                 # The real Agent call above still verifies authority and routing.
+                count = self.server.chat_count
+                after = args.get("after", 0)
+                cursor = min(count, after + 32)
                 page = {
-                    "enabled": True, "epoch": "fixture-epoch", "cursor": 1,
-                    "more": False, "reset": False, "overrun": False,
-                    "subscription": {"state": "subscribed", "notifications": 1,
+                    "enabled": True, "epoch": "fixture-epoch", "cursor": cursor,
+                    "more": cursor < count, "reset": False, "overrun": False,
+                    "subscription": {"state": "subscribed", "notifications": count,
                                      "duplicates": 0, "dropped": 0, "reconnects": 0, "error": None},
-                    "messages": [] if args.get("after") == 1 else [
-                        {"cursor": 1, "id": "generated-1", "display_name": "fixture", "text": "generated delta"}
+                    "messages": [
+                        {"cursor": i, "id": f"generated-{i}", "display_name": "Wayland fixture",
+                         "text": f"Generated chat message {i}"}
+                        for i in range(after + 1, cursor + 1)
                     ],
                 }
                 body = json.dumps(page).encode()
+            if self.server.preview is not None and command == "preview-small" and code == 200:
+                body = self.server.preview
             if hold:
                 self.server.held.set()
                 self.server.release.wait(8)
@@ -272,16 +280,19 @@ class Studio:
             binary, "--port", str(port), "--agent-port", str(agent_port),
             "--token-file", str(token_path), "--trace-render",
         ], env, self.log)
-        def find_window():
-            assert self.process.poll() is None, self.lines()[-8:]
-            result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^SplitCast Studio$"],
-                                    text=True, env=env, capture_output=True)
-            return result.stdout.strip().splitlines()[-1] if result.returncode == 0 else None
-        self.window = eventually(find_window, "Studio window", 8)
-        self.xdo("windowfocus", "--sync", self.window)
+        self.focus_window()
         self.wait("active=true")
         print(next((line for line in self.lines() if line.startswith("studio-renderer ")),
                    "renderer not reported"), flush=True)
+
+    def focus_window(self):
+        def find_window():
+            assert self.process.poll() is None, self.lines()[-8:]
+            result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^SplitCast Studio$"],
+                                    text=True, env=self.env, capture_output=True)
+            return result.stdout.strip().splitlines()[-1] if result.returncode == 0 else None
+        self.window = eventually(find_window, "Studio window", 8)
+        self.xdo("windowfocus", "--sync", self.window)
 
     def lines(self):
         return self.log.read_text(errors="replace").splitlines()
@@ -349,11 +360,9 @@ def sample_idle(studio, count=20):
     return max(pss) <= 80 and cpu <= 0.5 and renders == 0
 
 
-def verify():
+def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_idle, unfocused=None):
     os.umask(0o077)
-    if len(sys.argv) > 2:
-        raise SystemExit("Usage: gui.py [STUDIO_RELEASE_BINARY]")
-    studio_bin = sys.argv[1] if len(sys.argv) == 2 else build(
+    studio_bin = studio_bin or build(
         ["build", "--release", "--manifest-path", str(MANIFEST)], "splitcast-studio"
     )
     agent_bin = build(["build", "-p", "splitcast-rs-core"], "splitcast-rs-core")
@@ -364,16 +373,16 @@ def verify():
         env = display(stack, root)
         reservations = [stack.enter_context(contextlib.closing(socket.socket())) for _ in keys]
         for sock in reservations:
+            # Keep each ephemeral port assigned until its Agent and workers exit.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("127.0.0.1", 0))
         ports = {key: sock.getsockname()[1] for key, sock in zip(keys, reservations)}
         tokens = {role: secrets.token_hex(24) for role in ("production", "capture")}
         paths = {role: private_file(root / f"{role}.token", token) for role, token in tokens.items()}
-        for sock in reservations:
-            sock.close()
         roles = {role: agent_config(root, role, ports, paths, worker) for role in tokens}
         production_relay = relay(stack, ports["production"])
-        direct = Studio(stack, root, studio_bin, "production", production_relay.server_port,
-                        ports["production"], paths["production"], env)
+        direct = studio_type(stack, root, studio_bin, "production", production_relay.server_port,
+                             ports["production"], paths["production"], env)
         direct.edit("Overlay text", "Private fixture draft")
 
         agents = {}
@@ -391,7 +400,7 @@ def verify():
         eventually(lambda: okay("production", "scene")["draft"]["overlay"]["text"] == "Private fixture draft",
                    "offline draft applied in Idle")
         direct.wait("Agent draft · unsaved")
-        budget = sample_idle(direct)
+        budget = idle(direct)
         assert not production_relay.times("preview-small"), "Idle preview request"
         old_camera = okay("production", "scene")["draft"]["camera"]
         direct.drag("Camera guide", -30, 14)
@@ -410,8 +419,8 @@ def verify():
         private_file(config, json.dumps(production_config))
         agents["production"] = spawn(stack, [agent_bin, "--config", config, "agent"],
                                      agent_env, work / "agent-restart.log")
-        direct = Studio(stack, root, studio_bin, "production-stage", production_relay.server_port,
-                        ports["production"], paths["production"], env)
+        direct = studio_type(stack, root, studio_bin, "production-stage", production_relay.server_port,
+                             ports["production"], paths["production"], env)
         direct.wait("Idle")
         direct.edit("Overlay text", "Private fixture draft")
         direct.click("Apply")
@@ -419,8 +428,8 @@ def verify():
         cleanup(direct.process)
 
         forwarded = relay(stack, ports["capture"])
-        studio = Studio(stack, root, studio_bin, "capture", forwarded.server_port,
-                        ports["capture"], paths["capture"], env)
+        studio = studio_type(stack, root, studio_bin, "capture", forwarded.server_port,
+                             ports["capture"], paths["capture"], env)
         studio.wait("Idle")
         studio.click("Prepare")
         studio.wait("Ready")
@@ -454,13 +463,14 @@ def verify():
         baseline = len(forwarded.times("chat"))
         time.sleep(4.1)
         assert len(forwarded.times("chat")) == baseline, "chat polled while hidden"
-        forwarded.chat_delta = True
+        forwarded.chat_count = 1
         studio.click("Show chat")
         studio.wait("chat=1")
         time.sleep(0.5)
         steady_draws = studio.render_count()
         time.sleep(4.2)
         assert studio.render_count() == steady_draws, "unchanged preview and empty chat deltas redrew the UI"
+        focus_passed = unfocused is None or unfocused(stack, root, studio, forwarded)
 
         studio.edit("Overlay text", "Verified OBS edit")
         other = okay("capture", "scene")
@@ -529,8 +539,8 @@ def verify():
         studio.wait("offline", after=mark)  # The relay drops upstream failures; no stale phase.
         assert okay("production", "scene")["saved"] == saved["saved"]
         cleanup(studio.process)
-        direct = Studio(stack, root, studio_bin, "production-reload", production_relay.server_port,
-                        ports["production"], paths["production"], env)
+        direct = studio_type(stack, root, studio_bin, "production-reload", production_relay.server_port,
+                             ports["production"], paths["production"], env)
         direct.wait("Idle")
         direct.click("Reload saved")
         direct.wait("Draft matches saved layout")
@@ -540,7 +550,10 @@ def verify():
               " apply/readback/save/reload, lost and late replies, independent Status/Stop, and disconnect", flush=True)
         if not budget:
             raise AssertionError("release idle budget exceeded")
+        assert focus_passed, "visible Studio failed to display the unfocused chat delta"
 
 
 if __name__ == "__main__":
-    verify()
+    if len(sys.argv) > 2:
+        raise SystemExit("Usage: gui.py [STUDIO_RELEASE_BINARY]")
+    verify(next(iter(sys.argv[1:]), None))
