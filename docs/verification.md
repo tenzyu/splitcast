@@ -45,6 +45,135 @@ deployment were not run for A. The optional Chromium integration and
 OBS state and screenshot responses. The physical gates in the
 [session state](memory/session-state.md) remain open.
 
+## 2026-11-18 SplitCast Studio Native (B)
+
+Stack base is `feat/studio-control-contract` at
+`8557945d9c8a35732014f2a766c2e45e2fc348cc`, the published head of
+[draft PR #19](https://github.com/tenzyu/splitcast/pull/19) into `main`.
+B was enrolled from contract checkpoint `df0768f3f8076ced0e3214170ea3113d4459c40d`,
+integrated locally, then replayed on the published implementation including
+the valid generated PNG fixture. The checked B code and fixture are
+`0d9f6f0fd935aa9ac1f5b41a246650c4f3298a13`, tree
+`f944c9d94e99b365aa787b1419c947b2c7f519e6`. This evidence entry was added
+after the checks. The comparison against #19 contains the optional Studio
+package, its flake entry points, and this record.
+
+The owner-only worktree contract `splitcast-studio-published-a-b` has
+digest `c94dadfc436c5e18013c3de76ecb5d17be97991c47d9ebfb567a3e00f3db59ad`.
+The clean source snapshot was
+`7124ed3aa27b9bc344d357507640f8b39b9b0377116da51a1edc5a432eaa1dcf`.
+The convergence scope had no violations. A repeated GUI check in the same
+shell reused `attempt-000011` without launching the fixture again.
+Physical functional, gameplay and operational gates are still unverified.
+
+| Exact command | Observed result |
+| --- | --- |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all 10 checks passed. Convergence `attempt-000004`, xtask `artifacts/verification/runs/1794986387669825093`. The earlier run at `1aca148` also passed all 10, in run `1794984782703905050`. |
+| `nix develop .#studio -c cargo fmt --manifest-path packages/splitcast-studio/Cargo.toml -- --check` | Exit 0, `attempt-000003`. |
+| `nix develop .#studio -c cargo clippy --manifest-path packages/splitcast-studio/Cargo.toml --all-targets --locked -- -D warnings` | Exit 0, `attempt-000005`. |
+| `nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked` | Exit 0, 5 passed. Covers current Start ID and Live confirmation, Stop proof, hidden/stale reads, chat bounds, and oversized PNG rejection. `attempt-000006`. |
+| `nix flake check --no-build` and `nix flake check` | Both exited 0. Evaluation emitted the existing `homeManagerModules` output warning. The full check built the native package and validated configurations. Evaluation receipt `attempt-000007`. |
+| `nix develop -c python3 tools/ci/check_docs.py` | Exit 0, `attempt-000008`. |
+| `nix develop -c cargo audit --file packages/splitcast-studio/Cargo.lock` | Exit 0, no vulnerability findings in the database used. Seven unmaintained dependency warnings: `bincode`, `chrono`, `pin-utils`, `ttf-parser`, `zbus_names`, `zvariant`, and `zvariant_derive`. `attempt-000009`. The earlier GPUI lock audit exited 0 with 14 unmaintained warnings. |
+| `nix build .#splitcast-studio --no-link` | Exit 0 for both candidates on their respective source. Slint receipt `attempt-000010`. |
+| `nix run .#splitcast-studio -- --help` | Exit 0, printed `--token-file`, `--port`, and optional `--agent-port` usage. |
+| `nix eval --raw "git+file://$PWD?rev=$base#packages.x86_64-linux.default.drvPath"` and `nix eval --raw .#packages.x86_64-linux.default.drvPath` | With `base` set to A's full published SHA, the Agent's default derivation matched exactly (`vs4s8i1vy2s79pmn2m5h4mx2fn4sr73d`). |
+| `nix develop -c cargo run -p splitcast-xtask -- portability` | Exit 0. |
+| `nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py` | Exit 0 on Slint, `attempt-000011`. Confirmed HTTP 202 Stop admission followed by matching completed Idle and production release. Sampled four preview requests, with minimum gap 1.200 s. |
+| `nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py "$(nix path-info .#splitcast-studio)/bin/splitcast-studio"` | Exit 0 using the Nix package binary. Repeated the GUI workflow, HTTP 202 and matching completion, and the 1.200 s minimum preview gap. |
+
+### Release GUI measurements
+
+The harness ran on Linux 6.18.63 x86_64 with Rust 1.95, one private
+authenticated Xvfb 21.1.24 X11 screen at 1440 × 920 × 24 per run, DejaVu
+fonts, and approximately 1110 × 780 Studio windows. It focused the window
+with `xdotool`, connected through an authenticated loopback relay to a real
+Idle production Agent with a camera draft, and applied a local overlay
+draft before sampling. Each run settled for three seconds and sampled
+`/proc/PID/smaps_rollup` once per second for 20 samples, with process
+user plus system ticks from `/proc/PID/stat` divided by elapsed wall
+time and `SC_CLK_TCK`. CPU is a percentage of one logical core. Renderer
+traces count GPUI root renders or Slint Winit `RedrawRequested` events.
+The idle sample covers a focused window after Apply, with keyboard focus
+out of text editing. The normal platform caret while editing is outside
+that sample. Local build activity was present during the first GPUI and
+Slint runs.
+
+| Artifact and backend | Elapsed | Idle PSS range | Idle CPU | Idle redraws |
+| --- | ---: | ---: | ---: | ---: |
+| Cargo release GPUI 0.2.2, X11 Blade/Vulkan on Mesa 26.1.8 llvmpipe (LLVM 21.1.8, `LP_NUM_THREADS=2`), `1aca148` | 20.073 s | 103.858–134.346 MiB | 0.448% | 0 |
+| First Cargo release Slint 1.19.0, X11 Winit software, `4189edf` | 20.025 s | 20.447–20.494 MiB | 0.100% | 0 |
+| Checked Cargo release Slint 1.19.0, X11 Winit software, `0d9f6f0` | 20.016 s | 20.728–20.761 MiB | 0.100% | 0 |
+| Nix package Slint 1.19.0, X11 Winit software, `0d9f6f0` | 20.020 s | 20.888–20.888 MiB | 0.100% | 0 |
+
+GPUI exceeded the 80 MiB PSS limit in every sample. Slint fits all three
+idle targets in this display fixture and is the sole Studio implementation
+in the final tree. The published GPUI crate enables Blade for the X11 and
+Wayland backends. Slint is explicitly built and selected for Winit software
+rendering. [GPUI 0.2.2 features](https://docs.rs/crate/gpui/0.2.2/features) ·
+[GPUI upstream Linux notes](https://github.com/zed-industries/zed/tree/main/crates/gpui) ·
+[Slint 1.19.0 Cargo features](https://github.com/slint-ui/slint/blob/v1.19.0/api/rs/slint/Cargo.toml) ·
+[Slint attribution terms](https://github.com/slint-ui/slint/blob/v1.19.0/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md)
+
+### GUI evidence and limits
+
+- A direct production connection preserved a draft edited before connection,
+  applied it in Idle, and applied a camera-guide drag in canvas pixels.
+  The two-Agent portion used matching camera-free configurations and stayed
+  on private loopback through local stand-ins. The relay preserved the
+  Agent's original Host and Origin port while using a different local
+  connection port.
+- The client selected Live without dispatch and then started Recording with
+  the current Start ID. The owned OBS stand-in produced a valid generated
+  PNG. Requests stopped with the editor hidden, the preview hidden, and
+  after Stop. The visible chat cursor used the authenticated route and
+  consumed a single injected relay delta. Hidden chat made zero requests.
+  Empty deltas and static snapshots produced zero redraws over a further
+  4.2 s window during Recording.
+- An external generation change produced a conflict and preserved the local
+  edit. An explicit Apply, OBS reconciliation, Save and Reload verified the
+  draft/readback/saved states. A dropped response produced unknown outcome
+  before a fresh observation. A delayed Apply response arrived after Stop
+  and left the earlier operation unconfirmed. Status and a simultaneous
+  second Stop reached the Agent while Apply was pending. The fixture
+  observed matching completed Idle, released remote ownership, inactive
+  owned output, exited stand-ins, and disconnect presentation.
+
+The first checkpoint enrollment rejected noncanonical manual-axis names
+(exit 2). Enrollment with the repository's three axis names succeeded.
+The local integration GUI attempt initially stopped at Python import due to
+an HTTP helper shadowing `http.server`
+(`splitcast-studio-integration-local-a-b/attempt-000001`).
+On the first published-base GUI run, GPUI completed the idle sample and the
+fixture later timed out waiting for Ready with camera configured on
+production only (`splitcast-studio-published-a-b/attempt-000001`).
+The passing Slint run separates the Idle camera draft experiment from the
+matching two-Agent Start configuration (`attempt-000002` at `4189edf`,
+then the tightened `attempt-000011`).
+
+Initial `nix develop .#studio -c cargo build --manifest-path packages/splitcast-studio/Cargo.toml --release --locked -j 6`
+failed because GPUI's `xattr 0.2.3` used the Linux `ENOATTR` alias removed
+from libc 0.2.191. The first
+`nix develop .#studio -c cargo update --manifest-path packages/splitcast-studio/Cargo.toml -p libc --precise 0.2.189`
+also failed because mio 1.2.5 required libc 0.2.190 or later. Pinning mio
+1.2.4 allowed the update. GPUI build retries with `--release --locked -j 8`
+then found GPUI API and a borrowed-label lifetime error before the release
+artifact compiled. Slint's initial
+`nix develop .#studio -c cargo build --manifest-path packages/splitcast-studio/Cargo.toml --release -j 8`
+failed on missing `fontconfig.pc`. The next locked run found the
+`LayoutAlignment.start` name collision. The final build passed after
+adding the build input and qualifying the enum.
+
+The GUI integration covers software rendering with stand-ins and an injected
+chat delta. A real upstream Twitch chat event, real OBS media and recording,
+Wayland window operation, physical devices, real SSH, and host rollout or
+recovery remain unrun. Miri, fuzzing and an independent Studio Cargo Deny
+configuration were not run. Existing Nix runtime gating and service
+activation require separate operator authorization. For rollback, close
+Studio and use the existing CLI, TUI or Web with explicit Stop and
+completion observation when needed. Revert B as a unit to remove Studio's
+optional entry points. Saved layouts and the running session are owned by A.
+
 ## 2026-11-18 convergence harness integration
 
 | Exact command or profile | Observed result |
@@ -212,132 +341,3 @@ confirm clean OBS process exit and repeat the acceptance on a source-bound
 packaged build. [Current gates](memory/session-state.md)
 
 **Provenance:** [ID register](memory/evidence.md) · [real media receipt](evidence/media-plane-20261115.md) · [PR #3 oracle review](evidence/pr3-review-20261117.md) · [PoC convergence](evidence/poc-convergence-20261117.md) · [S26](evidence/dreaming-main-20261117.md) · [archived full log](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/verification.md).
-
-## 2026-11-18 SplitCast Studio Native (B)
-
-Stack base is `feat/studio-control-contract` at
-`8557945d9c8a35732014f2a766c2e45e2fc348cc`, the published head of
-[draft PR #19](https://github.com/tenzyu/splitcast/pull/19) into `main`.
-B was enrolled from contract checkpoint `df0768f3f8076ced0e3214170ea3113d4459c40d`,
-integrated locally, then replayed on the published implementation including
-the valid generated PNG fixture. The checked B code and fixture are
-`0d9f6f0fd935aa9ac1f5b41a246650c4f3298a13`, tree
-`f944c9d94e99b365aa787b1419c947b2c7f519e6`. This evidence entry was added
-after the checks. The comparison against #19 contains the optional Studio
-package, its flake entry points, and this record.
-
-The owner-only worktree contract `splitcast-studio-published-a-b` has
-digest `c94dadfc436c5e18013c3de76ecb5d17be97991c47d9ebfb567a3e00f3db59ad`.
-The clean source snapshot was
-`7124ed3aa27b9bc344d357507640f8b39b9b0377116da51a1edc5a432eaa1dcf`.
-The convergence scope had no violations. A repeated GUI check in the same
-shell reused `attempt-000011` without launching the fixture again.
-Physical functional, gameplay and operational gates are still unverified.
-
-| Exact command | Observed result |
-| --- | --- |
-| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all 10 checks passed. Convergence `attempt-000004`, xtask `artifacts/verification/runs/1794986387669825093`. The earlier run at `1aca148` also passed all 10, in run `1794984782703905050`. |
-| `nix develop .#studio -c cargo fmt --manifest-path packages/splitcast-studio/Cargo.toml -- --check` | Exit 0, `attempt-000003`. |
-| `nix develop .#studio -c cargo clippy --manifest-path packages/splitcast-studio/Cargo.toml --all-targets --locked -- -D warnings` | Exit 0, `attempt-000005`. |
-| `nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked` | Exit 0, 5 passed. Covers current Start ID and Live confirmation, Stop proof, hidden/stale reads, chat bounds, and oversized PNG rejection. `attempt-000006`. |
-| `nix flake check --no-build` and `nix flake check` | Both exited 0. Evaluation emitted the existing `homeManagerModules` output warning. The full check built the native package and validated configurations. Evaluation receipt `attempt-000007`. |
-| `nix develop -c python3 tools/ci/check_docs.py` | Exit 0, `attempt-000008`. |
-| `nix develop -c cargo audit --file packages/splitcast-studio/Cargo.lock` | Exit 0, no vulnerability findings in the database used. Seven unmaintained dependency warnings: `bincode`, `chrono`, `pin-utils`, `ttf-parser`, `zbus_names`, `zvariant`, and `zvariant_derive`. `attempt-000009`. The earlier GPUI lock audit exited 0 with 14 unmaintained warnings. |
-| `nix build .#splitcast-studio --no-link` | Exit 0 for both candidates on their respective source. Slint receipt `attempt-000010`. |
-| `nix run .#splitcast-studio -- --help` | Exit 0, printed `--token-file`, `--port`, and optional `--agent-port` usage. |
-| `nix eval --raw "git+file://$PWD?rev=$base#packages.x86_64-linux.default.drvPath"` and `nix eval --raw .#packages.x86_64-linux.default.drvPath` | With `base` set to A's full published SHA, the Agent's default derivation matched exactly (`vs4s8i1vy2s79pmn2m5h4mx2fn4sr73d`). |
-| `nix develop -c cargo run -p splitcast-xtask -- portability` | Exit 0. |
-| `nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py` | Exit 0 on Slint, `attempt-000011`. Confirmed HTTP 202 Stop admission followed by matching completed Idle and production release. Sampled four preview requests, with minimum gap 1.200 s. |
-| `nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py "$(nix path-info .#splitcast-studio)/bin/splitcast-studio"` | Exit 0 using the Nix package binary. Repeated the GUI workflow, HTTP 202 and matching completion, and the 1.200 s minimum preview gap. |
-
-### Release GUI measurements
-
-The harness ran on Linux 6.18.63 x86_64 with Rust 1.95, one private
-authenticated Xvfb 21.1.24 X11 screen at 1440 × 920 × 24 per run, DejaVu
-fonts, and approximately 1110 × 780 Studio windows. It focused the window
-with `xdotool`, connected through an authenticated loopback relay to a real
-Idle production Agent with a camera draft, and applied a local overlay
-draft before sampling. Each run settled for three seconds and sampled
-`/proc/PID/smaps_rollup` once per second for 20 samples, with process
-user plus system ticks from `/proc/PID/stat` divided by elapsed wall
-time and `SC_CLK_TCK`. CPU is a percentage of one logical core. Renderer
-traces count GPUI root renders or Slint Winit `RedrawRequested` events.
-The idle sample covers a focused window after Apply, with keyboard focus
-out of text editing. The normal platform caret while editing is outside
-that sample. Local build activity was present during the first GPUI and
-Slint runs.
-
-| Artifact and backend | Elapsed | Idle PSS range | Idle CPU | Idle redraws |
-| --- | ---: | ---: | ---: | ---: |
-| Cargo release GPUI 0.2.2, X11 Blade/Vulkan on Mesa 26.1.8 llvmpipe (LLVM 21.1.8, `LP_NUM_THREADS=2`), `1aca148` | 20.073 s | 103.858–134.346 MiB | 0.448% | 0 |
-| First Cargo release Slint 1.19.0, X11 Winit software, `4189edf` | 20.025 s | 20.447–20.494 MiB | 0.100% | 0 |
-| Checked Cargo release Slint 1.19.0, X11 Winit software, `0d9f6f0` | 20.016 s | 20.728–20.761 MiB | 0.100% | 0 |
-| Nix package Slint 1.19.0, X11 Winit software, `0d9f6f0` | 20.020 s | 20.888–20.888 MiB | 0.100% | 0 |
-
-GPUI exceeded the 80 MiB PSS limit in every sample. Slint fits all three
-idle targets in this display fixture and is the sole Studio implementation
-in the final tree. The published GPUI crate enables Blade for the X11 and
-Wayland backends. Slint is explicitly built and selected for Winit software
-rendering. [GPUI 0.2.2 features](https://docs.rs/crate/gpui/0.2.2/features) ·
-[GPUI upstream Linux notes](https://github.com/zed-industries/zed/tree/main/crates/gpui) ·
-[Slint 1.19.0 Cargo features](https://github.com/slint-ui/slint/blob/v1.19.0/api/rs/slint/Cargo.toml) ·
-[Slint attribution terms](https://github.com/slint-ui/slint/blob/v1.19.0/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md)
-
-### GUI evidence and limits
-
-- A direct production connection preserved a draft edited before connection,
-  applied it in Idle, and applied a camera-guide drag in canvas pixels.
-  The two-Agent portion used matching camera-free configurations and stayed
-  on private loopback through local stand-ins. The relay preserved the
-  Agent's original Host and Origin port while using a different local
-  connection port.
-- The client selected Live without dispatch and then started Recording with
-  the current Start ID. The owned OBS stand-in produced a valid generated
-  PNG. Requests stopped with the editor hidden, the preview hidden, and
-  after Stop. The visible chat cursor used the authenticated route and
-  consumed a single injected relay delta. Hidden chat made zero requests.
-  Empty deltas and static snapshots produced zero redraws over a further
-  4.2 s window during Recording.
-- An external generation change produced a conflict and preserved the local
-  edit. An explicit Apply, OBS reconciliation, Save and Reload verified the
-  draft/readback/saved states. A dropped response produced unknown outcome
-  before a fresh observation. A delayed Apply response arrived after Stop
-  and left the earlier operation unconfirmed. Status and a simultaneous
-  second Stop reached the Agent while Apply was pending. The fixture
-  observed matching completed Idle, released remote ownership, inactive
-  owned output, exited stand-ins, and disconnect presentation.
-
-The first checkpoint enrollment rejected noncanonical manual-axis names
-(exit 2). Enrollment with the repository's three axis names succeeded.
-The local integration GUI attempt initially stopped at Python import due to
-an HTTP helper shadowing `http.server`
-(`splitcast-studio-integration-local-a-b/attempt-000001`).
-On the first published-base GUI run, GPUI completed the idle sample and the
-fixture later timed out waiting for Ready with camera configured on
-production only (`splitcast-studio-published-a-b/attempt-000001`).
-The passing Slint run separates the Idle camera draft experiment from the
-matching two-Agent Start configuration (`attempt-000002` at `4189edf`,
-then the tightened `attempt-000011`).
-
-Initial `nix develop .#studio -c cargo build --manifest-path packages/splitcast-studio/Cargo.toml --release --locked -j 6`
-failed because GPUI's `xattr 0.2.3` used the Linux `ENOATTR` alias removed
-from libc 0.2.191. The first
-`nix develop .#studio -c cargo update --manifest-path packages/splitcast-studio/Cargo.toml -p libc --precise 0.2.189`
-also failed because mio 1.2.5 required libc 0.2.190 or later. Pinning mio
-1.2.4 allowed the update. GPUI build retries with `--release --locked -j 8`
-then found GPUI API and a borrowed-label lifetime error before the release
-artifact compiled. Slint's initial
-`nix develop .#studio -c cargo build --manifest-path packages/splitcast-studio/Cargo.toml --release -j 8`
-failed on missing `fontconfig.pc`. The next locked run found the
-`LayoutAlignment.start` name collision. The final build passed after
-adding the build input and qualifying the enum.
-
-The GUI integration covers software rendering with stand-ins and an injected
-chat delta. A real upstream Twitch chat event, real OBS media and recording,
-Wayland window operation, physical devices, real SSH, and host rollout or
-recovery remain unrun. Miri, fuzzing and an independent Studio Cargo Deny
-configuration were not run. Existing Nix runtime gating and service
-activation require separate operator authorization. For rollback, close
-Studio and use the existing CLI, TUI or Web with explicit Stop and
-completion observation when needed. Revert B as a unit to remove Studio's
-optional entry points. Saved layouts and the running session are owned by A.
