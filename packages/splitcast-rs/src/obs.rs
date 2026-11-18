@@ -87,12 +87,47 @@ fn response_data(response: &str) -> io::Result<Value> {
         .map(|_| value["d"]["responseData"].clone())
         .ok_or_else(|| err("OBS response data required"))
 }
-#[derive(Debug, Clone, PartialEq)]
-pub struct OutputStatus {
-    pub active: bool,
-    pub bytes: Option<u64>,
-    pub frames: Option<u64>,
-    pub duration_ms: Option<u64>,
+#[derive(Debug, PartialEq)]
+struct OutputStatus {
+    active: bool,
+    bytes: u64,
+    frames: Option<u64>,
+    duration_ms: Option<u64>,
+}
+
+impl OutputStatus {
+    fn from_response(output: crate::Output, response: &Value) -> io::Result<Self> {
+        let frames = match output {
+            // OBS 32.1.2's GetRecordStatus does not report outputTotalFrames.
+            crate::Output::Recording => None,
+            crate::Output::TwitchTest | crate::Output::TwitchLive => Some(
+                response["outputTotalFrames"]
+                    .as_u64()
+                    .ok_or_else(|| err("OBS stream outputTotalFrames unsigned counter required"))?,
+            ),
+        };
+        Ok(Self {
+            active: response["outputActive"]
+                .as_bool()
+                .ok_or_else(|| err("OBS outputActive boolean required"))?,
+            bytes: response["outputBytes"]
+                .as_u64()
+                .ok_or_else(|| err("OBS outputBytes unsigned counter required"))?,
+            frames,
+            duration_ms: response["outputDuration"].as_u64(),
+        })
+    }
+
+    fn progresses_from(&self, previous: Option<&Self>) -> bool {
+        self.active
+            && self.bytes > previous.map_or(0, |sample| sample.bytes)
+            && match (self.frames, previous.and_then(|sample| sample.frames)) {
+                (None, None) => true,
+                (Some(now), None) if previous.is_none() => now > 0,
+                (Some(now), Some(old)) => now > old,
+                _ => false,
+            }
+    }
 }
 
 // The profile and the requested output have the same lifetime. An attempted
@@ -105,7 +140,11 @@ pub(crate) struct SessionProfile {
 enum OutputPhase {
     Configured,
     Requested(crate::Output),
-    Observed(crate::Output, OutputStatus),
+    Observed {
+        output: crate::Output,
+        sample: OutputStatus,
+        compared: bool,
+    },
 }
 
 impl SessionProfile {
@@ -137,7 +176,7 @@ impl SessionProfile {
     pub(crate) fn requested_output(&self) -> Option<crate::Output> {
         match self.phase {
             OutputPhase::Configured => None,
-            OutputPhase::Requested(output) | OutputPhase::Observed(output, _) => Some(output),
+            OutputPhase::Requested(output) | OutputPhase::Observed { output, .. } => Some(output),
         }
     }
 
@@ -146,35 +185,36 @@ impl SessionProfile {
             .requested_output()
             .ok_or_else(|| err("owned OBS output unavailable"))?;
         let current = obs.observe(output)?;
-        let progressing = match &self.phase {
-            OutputPhase::Observed(_, previous) => {
-                current.active
-                    && current
-                        .bytes
-                        .zip(previous.bytes)
-                        .is_some_and(|(now, old)| now > old)
-                    && current
-                        .frames
-                        .zip(previous.frames)
-                        .is_none_or(|(now, old)| now > old)
-            }
-            _ => {
-                current.active
-                    && current.bytes.is_some_and(|bytes| bytes > 0)
-                    && current.frames.is_none_or(|frames| frames > 0)
-            }
+        let previous = match &self.phase {
+            OutputPhase::Observed { sample, .. } => Some(sample),
+            OutputPhase::Requested(_) | OutputPhase::Configured => None,
         };
-        self.phase = OutputPhase::Observed(output, current);
-        Ok(progressing)
+        if !current.progresses_from(previous) {
+            return Ok(false);
+        }
+        self.phase = OutputPhase::Observed {
+            output,
+            sample: current,
+            compared: previous.is_some(),
+        };
+        Ok(true)
     }
 
     pub(crate) fn progress(&self) -> Option<Value> {
-        let OutputPhase::Observed(_, progress) = &self.phase else {
+        let OutputPhase::Observed {
+            sample, compared, ..
+        } = &self.phase
+        else {
             return None;
         };
+        let frame_health = match (sample.frames, compared) {
+            (None, _) => "unknown",
+            (Some(_), false) => "pending",
+            (Some(_), true) => "progressing",
+        };
         Some(json!({
-            "active": progress.active, "bytes": progress.bytes,
-            "frames": progress.frames, "duration_ms": progress.duration_ms,
+            "active": sample.active, "bytes": sample.bytes, "frames": sample.frames,
+            "frame_health": frame_health, "duration_ms": sample.duration_ms,
         }))
     }
 
@@ -563,16 +603,12 @@ impl Obs {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    pub fn observe(&mut self, output: crate::Output) -> io::Result<OutputStatus> {
+    fn observe(&mut self, output: crate::Output) -> io::Result<OutputStatus> {
         let response = response_data(&self.call(status_request(output), "{}")?)?;
-        Ok(OutputStatus {
-            active: response["outputActive"]
-                .as_bool()
-                .ok_or_else(|| err("OBS outputActive boolean required"))?,
-            bytes: response["outputBytes"].as_u64(),
-            frames: response["outputTotalFrames"].as_u64(),
-            duration_ms: response["outputDuration"].as_u64(),
-        })
+        OutputStatus::from_response(output, &response)
+    }
+    pub(crate) fn output_ready(&mut self, output: crate::Output) -> io::Result<bool> {
+        Ok(self.observe(output)?.progresses_from(None))
     }
     pub fn preview(&mut self) -> io::Result<String> {
         let response = response_data(&self.call("GetSourceScreenshot", "{\"sourceName\":\"SplitCast\",\"imageFormat\":\"png\",\"imageWidth\":960,\"imageHeight\":540}")?)?;
@@ -1165,7 +1201,7 @@ mod tests {
             answer(
                 &mut socket,
                 &request,
-                json!({"outputActive":true,"outputBytes":123,"outputTotalFrames":42,"outputDuration":99}),
+                json!({"outputActive":true,"outputBytes":123,"outputDuration":99}),
             );
         });
         let mut obs = Obs::connect(&fixture.config(port)).unwrap();
@@ -1173,8 +1209,8 @@ mod tests {
             obs.observe(crate::Output::Recording).unwrap(),
             OutputStatus {
                 active: true,
-                bytes: Some(123),
-                frames: Some(42),
+                bytes: 123,
+                frames: None,
                 duration_ms: Some(99)
             }
         );

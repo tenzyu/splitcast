@@ -452,12 +452,8 @@ impl Agent {
                         .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
                         && self
                             .obs()
-                            .and_then(|mut o| o.observe(output))
-                            .is_ok_and(|status| {
-                                status.active
-                                    && status.bytes.is_some_and(|bytes| bytes > 0)
-                                    && status.frames.is_none_or(|frames| frames > 0)
-                            })
+                            .and_then(|mut o| o.output_ready(output))
+                            .unwrap_or(false)
                 })?;
                 self.receive_monitor = Some(monitor);
                 let mut studio = self.obs()?;
@@ -467,7 +463,9 @@ impl Agent {
                     .expect("profile allocated before launching OBS")
                     .observe(&mut studio)?
                 {
-                    return Err(err("OBS output was inactive before confirming Start"));
+                    return Err(err(
+                        "OBS output counters were not ready before confirming Start",
+                    ));
                 }
             }
             Ok(())

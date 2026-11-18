@@ -354,6 +354,14 @@ fi
             cfg["obs"]["websocket_port"] = json!(ports[7]);
             cfg["obs"]["password_file"] = json!(dir.join("password"));
             cfg["obs"]["recording_dir"] = json!(dir.join("recordings"));
+            if role == "production" {
+                let key = dir.join("virtual-stream-key");
+                private_file(&key, "isolated-fixture-key");
+                cfg["twitch"] = json!({
+                    "ingest_host":"apn10.contribute.live-video.net",
+                    "key_file":key,"allow_public":false,
+                });
+            }
             cfg["tts"]["credentials_file"] = json!(dir.join("absent-credentials"));
             cfg["tts"]["voicevox_url"] = json!(format!("http://127.0.0.1:{}", ports[8]));
             if speech {
@@ -414,6 +422,59 @@ fi
 }
 
 #[test]
+fn production_watchdog_requires_stream_frames_as_well_as_bytes() {
+    for fault in ["missing", "wrong-type", "unchanged", "decreasing"] {
+        let mut fixture = Fixture::new();
+        let agent = &fixture.production;
+        agent.ok("prepare", json!({}));
+        agent.ok("start", json!({"output":"twitch-test"}));
+        let baseline = agent.state("running")["output_progress"].clone();
+        let end = Instant::now() + Duration::from_secs(4);
+        loop {
+            let status = agent.state("running");
+            let progress = &status["output_progress"];
+            if progress["bytes"].as_u64() > baseline["bytes"].as_u64() {
+                assert!(
+                    progress["frames"].as_u64().unwrap() > baseline["frames"].as_u64().unwrap()
+                );
+                assert_eq!(progress["frame_health"], "progressing");
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "valid stream counters did not advance: {status}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let pids = fixture.pids();
+        assert!(!pids.is_empty());
+        fs::write(fixture.root.join("production/frame-counter-fault"), fault).unwrap();
+        let end = Instant::now() + Duration::from_secs(4);
+        loop {
+            let status = agent.ok("status", json!({}));
+            if status["state"] == "failed" {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "watchdog accepted {fault} stream frames: {status}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let failed = agent.state("failed");
+        assert_eq!(failed["obs_shutdown"]["output_inactive_confirmed"], true);
+        fixture.released(&pids);
+        let log = fs::read_to_string(fixture.root.join("production/obs-requests.log")).unwrap();
+        assert_eq!(log.lines().filter(|line| *line == "StartStream").count(), 1);
+        assert_eq!(log.lines().filter(|line| *line == "StopStream").count(), 1);
+        agent.ok("stop", json!({}));
+        fixture.production.shutdown();
+        fixture.capture.shutdown();
+    }
+}
+
+#[test]
 fn two_actual_agents_control_failure_and_explicit_recovery() {
     let mut f = Fixture::new();
     f.capture.state("idle");
@@ -431,6 +492,17 @@ fn two_actual_agents_control_failure_and_explicit_recovery() {
         let before = f.capture.state("running");
         let production_before = f.production.state("running");
         assert_eq!(before["output"], "recording");
+        assert_eq!(
+            production_before["output_progress"]["frame_health"],
+            "unknown"
+        );
+        assert!(production_before["output_progress"]["frames"].is_null());
+        assert!(
+            production_before["output_progress"]["bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
         assert_eq!(production_before["output"], "recording");
         f.capture.ok("start", json!({"output":"recording"}));
         assert_eq!(f.capture.state("running"), before);
@@ -834,7 +906,7 @@ fn virtual_obs(dir: &Path) {
         .parse()
         .unwrap();
     let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let state = Arc::new(Mutex::new((false, 0u64)));
+    let state = Arc::new(Mutex::new((None, 0u64)));
     let log = Arc::new(Mutex::new(
         OpenOptions::new()
             .create(true)
@@ -872,11 +944,29 @@ fn virtual_obs(dir: &Path) {
                 "GetSceneItemId" => json!({"sceneItemId":1}),
                 "GetSceneItemTransform" => json!({"sceneItemTransform":{"sourceWidth":1280,"sourceHeight":720}}),
                 "GetInputList" => json!({"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}),
-                "StartRecord" => { assert!(!*active); *active = true; json!({}) },
-                "StopRecord" => { *active = false; json!({}) },
+                "StartRecord" | "StartStream" => {
+                    assert!(active.is_none());
+                    *active = Some(if method == "StartRecord" { "GetRecordStatus" } else { "GetStreamStatus" });
+                    json!({})
+                },
+                "StopRecord" | "StopStream" => { *active = None; json!({}) },
+                "SetStreamServiceSettings" => {
+                    assert_eq!(request["d"]["requestData"]["streamServiceSettings"]["key"], "isolated-fixture-key?bandwidthtest=true");
+                    json!({})
+                },
                 "GetRecordStatus" | "GetStreamStatus" => {
                     *count += 1;
-                    json!({"outputActive":method == "GetRecordStatus" && *active,"outputBytes":*count*1024,"outputTotalFrames":*count*30,"outputDuration":*count*1000})
+                    let mut status = json!({"outputActive":*active == Some(method),"outputBytes":*count*1024,"outputDuration":*count*1000});
+                    if method == "GetStreamStatus" {
+                        match fs::read_to_string(dir.join("frame-counter-fault")).as_deref() {
+                            Ok("missing") => {},
+                            Ok("wrong-type") => status["outputTotalFrames"] = json!("9000"),
+                            Ok("unchanged") => status["outputTotalFrames"] = json!((*count - 1) * 30),
+                            Ok("decreasing") => status["outputTotalFrames"] = json!(0),
+                            _ => status["outputTotalFrames"] = json!(*count * 30),
+                        }
+                    }
+                    status
                 }
                 "SetInputSettings" | "SetInputAudioSyncOffset" | "SetInputAudioMonitorType" | "SetCurrentProgramScene" => json!({}),
                 other => panic!("unexpected OBS request {other}"),
