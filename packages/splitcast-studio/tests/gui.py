@@ -97,6 +97,7 @@ class Relay(http.server.ThreadingHTTPServer):
     def __init__(self, upstream):
         self.upstream = upstream
         self.records = []
+        self.stop_responses = []
         self.hold = None
         self.drop = None
         self.chat_delta = False
@@ -126,6 +127,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             headers = {key: self.headers[key] for key in ("Host", "Origin", "Authorization")}
             code, body = exchange_http(self.server.upstream, headers, command, args)
+            if command == "stop":
+                self.server.stop_responses.append((code, json.loads(body).get("stop_id")))
             if self.server.chat_delta and command == "chat" and code == 200:
                 # Inject one bounded delta at the authenticated relay boundary.
                 # The real Agent call above still verifies authority and routing.
@@ -454,6 +457,10 @@ def verify():
         forwarded.chat_delta = True
         studio.click("Show chat")
         studio.wait("chat=1")
+        time.sleep(0.5)
+        steady_draws = studio.render_count()
+        time.sleep(4.2)
+        assert studio.render_count() == steady_draws, "unchanged preview and empty chat deltas redrew the UI"
 
         studio.edit("Overlay text", "Verified OBS edit")
         other = okay("capture", "scene")
@@ -497,7 +504,12 @@ def verify():
         status, _ = agent("capture", "stop")
         assert status in (200, 202), "concurrent Stop declined"
         studio.wait("Stop completed", after=mark)
-        assert agent("capture")[1]["remote_release_pending"] is False
+        [(admission, stop_id)] = forwarded.stop_responses
+        if admission == 202:
+            studio.wait("Stop admitted", after=mark)
+        stop_proof = agent("capture")[1]
+        assert stop_proof["stop_id"] == stop_id and stop_proof["remote_release_pending"] is False
+        print(f"concurrent Stop: GUI HTTP {admission}; matching completed Idle proof", flush=True)
         assert agent("production")[1]["state"] == "idle"
         assert agent("production")[1]["obs_shutdown"]["output_inactive_confirmed"]
         ended_workers = [
@@ -506,9 +518,9 @@ def verify():
         ]
         assert ended_workers, "fixture recorded no owned worker"
         eventually(lambda: all(not worker.exists() for worker in ended_workers), "owned workers exited")
+        mark = len(studio.lines())
         forwarded.release.set()
-        time.sleep(0.5)
-        assert not any("Applied · unsaved" in line for line in studio.lines()[mark:] if "Stop completed" in line)
+        studio.wait("Stop completed · Agent confirmed cleanup | Outcome unknown", after=mark)
         baseline = len(forwarded.times("preview-small"))
         time.sleep(2.3)
         assert len(forwarded.times("preview-small")) == baseline, "snapshot after Stop"
