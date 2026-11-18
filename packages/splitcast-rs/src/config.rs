@@ -279,7 +279,7 @@ pub struct Config {
     pub(crate) obs_password: PathBuf,
     pub(crate) obs_bitrate: u16,
     pub(crate) separate_audio_tracks: bool,
-    pub(crate) overlay_text: Option<String>,
+    pub(crate) default_scene: crate::scene::SceneLayout,
     pub(crate) recording_dir: PathBuf,
     pub(crate) twitch: Option<Twitch>,
     pub(crate) camera: Option<Camera>,
@@ -289,8 +289,7 @@ pub struct Config {
     pub(crate) tts_max_text: u16,
     pub(crate) tts_queue_limit: u16,
     pub(crate) tts_expiry_seconds: u16,
-    pub(crate) tts_credentials_file: PathBuf,
-    pub(crate) eventsub_enabled: bool,
+    pub(crate) chat_credentials: Option<PathBuf>,
 }
 impl Config {
     pub fn role(&self) -> &str {
@@ -354,6 +353,7 @@ impl Config {
             .map(|text| {
                 if role != "production"
                     || text.trim().is_empty()
+                    || text.chars().count() > 80
                     || text.chars().any(char::is_control)
                 {
                     return Err(error(
@@ -405,10 +405,15 @@ impl Config {
         }
         let gain_db = signed_number(filename, ".audio.gain_db", -30, 20)?;
         let mic_offset = signed_number(filename, ".audio.mic_offset_ms", -2000, 2000)?;
-        if filename["tts"]["eventsub"] == true
-            && (role != "production" || filename["tts"]["enabled"] != true)
-        {
-            return Err(error("EventSub requires production with speech enabled"));
+        let legacy_chat = boolean(filename, ".tts.eventsub")?;
+        let chat_credentials = match (legacy_chat, filename.get("chat")) {
+            (true, Some(_)) => return Err(error("configure one EventSub credential source")),
+            (true, None) => Some(path(get(filename, ".tts.credentials_file")?)),
+            (false, Some(_)) => Some(path(get(filename, ".chat.credentials_file")?)),
+            (false, None) => None,
+        };
+        if chat_credentials.is_some() && role != "production" {
+            return Err(error("EventSub requires production"));
         }
         let twitch = if filename.get("twitch").is_some() {
             if role != "production" {
@@ -455,6 +460,10 @@ impl Config {
         } else {
             None
         };
+        let width = number(filename, ".capture.width", 320, 3840)?;
+        let height = number(filename, ".capture.height", 240, 2160)?;
+        let default_scene =
+            crate::scene::SceneLayout::default_for(width, height, camera.is_some(), overlay_text);
         Ok(Self {
             #[cfg(test)]
             document,
@@ -474,8 +483,8 @@ impl Config {
             rtmp: number(filename, ".capture.rtmp_port", 1024, 65535)?,
             rtsp: number(filename, ".capture.rtsp_port", 1024, 65535)?,
             api: number(filename, ".capture.api_port", 1024, 65535)?,
-            width: number(filename, ".capture.width", 320, 3840)?,
-            height: number(filename, ".capture.height", 240, 2160)?,
+            width,
+            height,
             fps: number(filename, ".capture.fps", 30, 60)?,
             bitrate: number(filename, ".capture.bitrate_kbps", 1000, 50000)?,
             target,
@@ -501,7 +510,7 @@ impl Config {
             obs_password: path(get(filename, ".obs.password_file")?),
             obs_bitrate: number(filename, ".obs.bitrate_kbps", 1000, 10000)?,
             separate_audio_tracks: filename["obs"]["separate_audio_tracks"] == true,
-            overlay_text,
+            default_scene,
             recording_dir: path(get(filename, ".obs.recording_dir")?),
             twitch,
             camera,
@@ -511,8 +520,7 @@ impl Config {
             tts_max_text: number(filename, ".tts.max_text", 1, 500)?,
             tts_queue_limit: number(filename, ".tts.queue_limit", 1, 32)?,
             tts_expiry_seconds: number(filename, ".tts.expiry_seconds", 5, 300)?,
-            tts_credentials_file: path(get(filename, ".tts.credentials_file")?),
-            eventsub_enabled: boolean(filename, ".tts.eventsub")?,
+            chat_credentials,
         })
     }
     pub fn token(&self, remote: bool) -> io::Result<String> {
@@ -532,6 +540,29 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_chat_config_accepts_one_production_credential_source_with_speech_off() {
+        let mut input: Value =
+            serde_json::from_str(include_str!("../tests/agent-example.json")).unwrap();
+        let parse = |input: &Value| Config::parse(input.to_string().as_bytes());
+        input["chat"] = serde_json::json!({"credentials_file":"/private/chat.json"});
+        assert!(parse(&input).is_err());
+        input["role"] = "production".into();
+        let independent = parse(&input).unwrap();
+        assert!(!independent.tts_enabled);
+        assert_eq!(
+            independent.chat_credentials.unwrap(),
+            Path::new("/private/chat.json")
+        );
+        input["tts"]["eventsub"] = true.into();
+        assert!(parse(&input).is_err());
+        input.as_object_mut().unwrap().remove("chat");
+        let legacy_without_speech = parse(&input).unwrap();
+        assert!(legacy_without_speech.chat_credentials.is_some());
+        input["tts"]["enabled"] = true.into();
+        assert!(parse(&input).unwrap().chat_credentials.is_some());
+    }
 
     #[test]
     fn camera_requires_a_stable_device_only_on_its_selected_role() {
