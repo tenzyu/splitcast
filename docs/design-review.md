@@ -30,6 +30,13 @@ describes source changes and outstanding evidence. [Review](https://github.com/t
 | 5. Missing combined physical evidence | Source-bound trials verified the two-host game, camera and SoloCast/RNNoise path, a 302.036 s private Twitch bandwidth test, and independent public archive playback. All 120 matched replay observations preserved Direct Scanout and the selected audio links. Gameplay frame times, camera age, physical A/V alignment and speech playback during the public game window remain open. [Physical and viewer evidence](evidence/pr16-managed-acceptance.md) |
 | 6. Encapsulation and source consistency | The public Config boundary requires validated construction and exposes read-only access. PID identity, the generation fence, and the remote release proof remain part of the contract. Both role examples and the operator runbook describe the revised commands. |
 
+The [additional code review](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950833838) covers two separate contracts.
+
+| Finding | Disposition |
+| --- | --- |
+| F13. OBS watchdog accepts missing stream frames | The pinned OBS WebSocket API reports `outputTotalFrames` for streams. The Agent requires an unsigned streaming frame count and strictly advancing byte and frame counters. Recording uses the byte counter and reports unknown frame health because its API omits the frame field. The authenticated Agent regression injects four frame faults after healthy samples. [Pinned OBS WebSocket protocol](https://github.com/obsproject/obs-websocket/blob/1fcb95b15aa88b1b7e9bda3f9c8650e314377169/docs/generated/protocol.md) |
+| F14. TUI closes during an in-flight command | Quit stays unavailable while the request is pending and the Stop command remains available. EOF reports the pending request and joins it explicitly before closing. The terminal confirms that the Agent keeps its session. Tests hold the OBS acknowledgment, observe Quit and EOF separately, and check the Agent before issuing explicit Stop. |
+
 ## Structural invariants
 
 - `lifecycle.rs` phase encodes authority and output, `OwnerId` validates identity, and `Workers` owns typed process handles. Cleanup evidence comes from the owning process and peer.

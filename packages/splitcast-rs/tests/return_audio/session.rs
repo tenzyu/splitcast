@@ -341,6 +341,62 @@ fn cli_and_tui_speak_and_wait_for_their_own_stop() {
 }
 
 #[test]
+fn tui_quit_keeps_stop_available_while_start_reply_is_held() {
+    tui_closes_without_stopping_an_admitted_start(true);
+}
+
+#[test]
+fn tui_eof_reports_and_joins_a_held_start_without_stopping() {
+    tui_closes_without_stopping_an_admitted_start(false);
+}
+
+fn tui_closes_without_stopping_an_admitted_start(quit: bool) {
+    let mut f = Fixture::new();
+    let dir = f.root.join("capture");
+    let production = f.root.join("production");
+    let hold = production.join("hold-start-ack");
+    f.capture.ok("prepare", json!({}));
+    fs::write(&hold, b"").unwrap();
+    let mut command = control_binary(&dir);
+    command.arg("tui");
+    let mut tui = ClientProcess::spawn(command, &dir, "tui-close", Stdio::piped());
+    tui.send("6\n");
+    wait(|| production.join("start-committed").exists());
+    let pids = f.pids();
+    if quit {
+        tui.send("0\n");
+        wait(|| {
+            tui.text()
+                .contains("Quit is unavailable while a command is pending. Stop is available.")
+        });
+    } else {
+        drop(tui.child.stdin.take().unwrap());
+        wait(|| {
+            tui.text()
+                .contains("Waiting for the pending command before closing this client.")
+        });
+    }
+    assert!(tui.child.try_wait().unwrap().is_none());
+    fs::remove_file(hold).unwrap();
+    wait(|| tui.text().contains("\"state\": \"running\""));
+    if quit {
+        tui.send("0\n");
+    }
+    let (ok, transcript) = tui.finish();
+    assert!(ok);
+    assert!(transcript.contains("Terminal closed. The Agent keeps its session."));
+    f.capture.state("running");
+    f.production.state("running");
+    let log = fs::read_to_string(production.join("obs-requests.log")).unwrap();
+    assert_eq!(log.lines().filter(|line| *line == "StartRecord").count(), 1);
+    assert!(!log.contains("StopRecord"));
+    f.capture.ok("stop", json!({}));
+    f.released(&pids);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
 fn tui_can_stop_while_start_reply_is_held() {
     let mut f = Fixture::new();
     let dir = f.root.join("capture");

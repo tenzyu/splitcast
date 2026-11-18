@@ -71,6 +71,12 @@ fn show(
     }
 }
 
+fn join_command(command: thread::ScopedJoinHandle<'_, io::Result<()>>) -> io::Result<()> {
+    command
+        .join()
+        .map_err(|_| io::Error::other("terminal command panicked"))?
+}
+
 pub(crate) fn run(
     mut input: impl BufRead,
     output: impl Write + Send,
@@ -86,24 +92,27 @@ pub(crate) fn run(
         let mut normal: Option<thread::ScopedJoinHandle<'_, io::Result<()>>> = None;
         while let Some(choice) = prompt(&mut input, &console, MENU)? {
             if normal.as_ref().is_some_and(|task| task.is_finished()) {
-                normal
-                    .take()
-                    .unwrap()
-                    .join()
-                    .map_err(|_| io::Error::other("terminal command panicked"))??;
+                join_command(normal.take().unwrap())?;
             }
-            if normal.is_some() && !matches!(choice.trim(), "0" | "q" | "quit" | "7") {
+            let choice = choice.trim();
+            if normal.is_some() && choice != "7" {
+                let notice = match choice {
+                    "0" | "q" | "quit" => {
+                        "Quit is unavailable while a command is pending. Stop is available."
+                    }
+                    _ => "Command pending. Stop is available.",
+                };
                 writeln!(
                     console
                         .lock()
                         .map_err(|_| io::Error::other("terminal output lock poisoned"))?
                         .0,
-                    "Command pending. Stop is available."
+                    "{notice}"
                 )?;
                 continue;
             }
-            let (command, args) = match choice.trim() {
-                "0" | "q" | "quit" => return Ok(()),
+            let (command, args) = match choice {
+                "0" | "q" | "quit" => break,
                 "1" => ("status", json!({})),
                 "2" => ("devices", json!({})),
                 "3" => ("routes", json!({})),
@@ -117,7 +126,7 @@ pub(crate) fn run(
                 "11" => ("mic", json!({"action":"unmute"})),
                 "12" => match prompt(&mut input, &console, "Speech: ")? {
                     Some(text) => ("say", json!({"text":text})),
-                    None => return Ok(()),
+                    None => break,
                 },
                 "13" => ("start", json!({"output":"twitch-test"})),
                 "14" => {
@@ -127,7 +136,7 @@ pub(crate) fn run(
                         "Maximum public duration in seconds (1–28800): ",
                     )?
                     else {
-                        return Ok(());
+                        break;
                     };
                     let Ok(seconds @ 1..=28_800) = seconds.parse::<u64>() else {
                         writeln!(
@@ -149,7 +158,7 @@ pub(crate) fn run(
                             json!({"output":"twitch-live","duration_seconds":seconds,"confirm_public":true}),
                         ),
                         Some(_) => continue,
-                        None => return Ok(()),
+                        None => break,
                     }
                 }
                 _ => {
@@ -196,6 +205,20 @@ pub(crate) fn run(
                 Ok(())
             }));
         }
-        Ok(())
+        if let Some(command) = normal {
+            if !command.is_finished() {
+                let mut output = console
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal output lock poisoned"))?;
+                writeln!(output.0, "Waiting for the pending command before closing this client. Use Stop from another client if needed.")?;
+                output.0.flush()?;
+            }
+            join_command(command)?;
+        }
+        let mut output = console
+            .lock()
+            .map_err(|_| io::Error::other("terminal output lock poisoned"))?;
+        writeln!(output.0, "Terminal closed. The Agent keeps its session.")?;
+        output.0.flush()
     })
 }

@@ -226,6 +226,12 @@ Use the Web preview to examine the actual OBS composition. Run
 both controls while an ordinary command is in flight. From the CLI, use a
 second invocation when the first is pending.
 
+The terminal menu keeps Quit unavailable while a command is pending. If its
+input reaches EOF, it reports that it is waiting and displays the pending
+command's result or request error before closing. Closing the terminal leaves
+the Agent session active. Use Stop in the terminal or another authenticated
+client to stop an output.
+
 The clients send the current Agent `start_id` as `session_id` with Start.
 The Agent rejects a stale ID if Stop or another transition has invalidated it.
 A new public output requires a prepared media session in `ready`.
@@ -245,6 +251,14 @@ adds the text to the upper-left of the OBS scene during Start. Inspect it in
 Web preview during a private recording before selecting public output.
 
 ### Twitch output
+
+The production watchdog requires both byte and frame counters to advance on
+Twitch output. Missing or invalid frame counters and stalled samples fail the
+output and run cleanup. OBS 32.1.2 reports `outputTotalFrames` for streaming.
+Its recording status reports bytes without a frame counter, so a running
+recording reports `output_progress.frame_health = "unknown"`. A streaming
+baseline reports `"pending"` until a second sample proves counter progression.
+Check decoded content independently for freshness.
 
 Put the channel stream key in a private file owned by the production Agent
 user. Use a runtime path, with mode 0600, outside the Nix store. Configure
