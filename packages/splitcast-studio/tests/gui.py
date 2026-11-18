@@ -128,10 +128,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             headers = {key: self.headers[key] for key in ("Host", "Origin", "Authorization")}
             chat_count = self.server.chat_count if command == "chat" else None
-            # Check authority and forwarding against the Agent without sending
-            # the downstream synthetic cursor to its independent chat history.
-            upstream_args = {} if chat_count is not None else args
-            code, body = exchange_http(self.server.upstream, headers, command, upstream_args)
+            code, body = exchange_http(self.server.upstream, headers, command, args)
             if command == "stop":
                 self.server.stop_responses.append((code, json.loads(body).get("stop_id")))
             if chat_count is not None and code == 200:
@@ -140,7 +137,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 after = args.get("after", 0)
                 cursor = min(chat_count, after + 32)
                 page = {
-                    "enabled": True, "epoch": "fixture-epoch", "cursor": cursor,
+                    "enabled": True, "epoch": "0123456789abcdef0123456789abcdef", "cursor": cursor,
                     "more": cursor < chat_count, "reset": False, "overrun": False,
                     "subscription": {"state": "subscribed", "notifications": chat_count,
                                      "duplicates": 0, "dropped": 0, "reconnects": 0, "error": None},
