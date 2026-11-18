@@ -45,6 +45,31 @@ deployment were not run for A. The optional Chromium integration and
 OBS state and screenshot responses. The physical gates in the
 [session state](memory/session-state.md) remain open.
 
+### Two-Agent Prepare timeout follow-up
+
+[Hosted `verify` job 134632547127](https://github.com/tenzyu/splitcast/actions/runs/44254418762/job/134632547127)
+failed `sigterm_running_capture_releases_both_agents_workers` during Prepare.
+The GitHub merge checkout `badb5010b52d88b0a94b7ecce8fd4256b768b760`
+had tree `7038774c9099c42f187d2cd274c4c66ce5b05162`, identical to PR head
+`8557945d9c8a35732014f2a766c2e45e2fc348cc`. The retained `tests.log` shows
+HTTP 409 with an unknown outcome after transmission began and an operation
+I/O deadline error. The MediaMTX stand-in log was outside the upload allowlist.
+
+| Exact command | Observed result on `8557945d9c8a35732014f2a766c2e45e2fc348cc` |
+| --- | --- |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline --test two_agents sigterm_running_capture_releases_both_agents_workers -- --exact --nocapture` | Exit 0, one passed on the clean checkout. |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline --test two_agents -- --nocapture` | A clean standalone suite passed 16 tests with four ignored. Four concurrent invocations of the same suite produced two passes and two failures. Two fixtures in one test process chose MediaMTX port 40713. One stand-in failed its bind with `EADDRINUSE`; its Agent accepted the other fixture's readiness response. A separate collision failed an OBS Start. |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline --test two_agents -- sigterm_running_capture_releases_both_agents_workers reproduce_prepare_timeout_with_fixture_port_taken --nocapture` | The saved test-only patch retained the old allocator. Its new exclusivity assertion failed because the receiver port was free to bind. A second test took that port with a loopback listener and reproduced the hosted 409 text, confirmed `EADDRINUSE` in the worker, and verified explicit Stop, production Idle, and released workers. The overall invocation exited 101. |
+
+The fixture now keeps each loopback port assigned through both Agents'
+teardown. A bound socket without a listener holds the port out of automatic
+allocation and `SO_REUSEADDR` permits the assigned worker to bind it. The
+SIGTERM regression checks the reservation before Prepare and still checks
+that workers and listeners are gone after shutdown. The captured failure
+establishes this local cause for the same 409; the initial hosted job lacks
+worker evidence to establish its exact cause. Local raw logs, the temporary
+patch, and the original hosted upload are under `artifacts/pr-19-prepare/`.
+
 ## 2026-11-18 SplitCast Studio Native (B)
 
 Stack base is `feat/studio-control-contract` at

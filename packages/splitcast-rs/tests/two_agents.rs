@@ -4,8 +4,9 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self, Read, Write};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -229,6 +230,7 @@ struct Fixture {
     production: Agent,
     root: PathBuf,
     ports: Vec<u16>,
+    _port_reservations: Vec<OwnedFd>,
 }
 
 fn executable(name: &str) -> PathBuf {
@@ -245,6 +247,46 @@ fn quote(path: &Path) -> String {
 fn private_file(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn bind_loopback_port(port: u16, reuse_address: bool) -> io::Result<(OwnedFd, u16)> {
+    // SAFETY: socket takes only integer arguments. On success it gives us a
+    // fresh descriptor, which we transfer to OwnedFd.
+    let socket = unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        OwnedFd::from_raw_fd(fd)
+    };
+    let reuse = libc::c_int::from(reuse_address);
+    let mut address = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t,
+        sin_port: port.to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes(Ipv4Addr::LOCALHOST.octets()),
+        },
+        sin_zero: [0; 8],
+    };
+    let mut size = size_of::<libc::sockaddr_in>() as libc::socklen_t;
+    let fd = socket.as_raw_fd();
+    // SAFETY: socket stays owned. The option points to an initialized c_int.
+    // bind reads, and getsockname writes, at most size bytes in address.
+    unsafe {
+        if libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            (&raw const reuse).cast(),
+            size_of_val(&reuse) as libc::socklen_t,
+        ) < 0
+            || libc::bind(fd, (&raw const address).cast(), size) < 0
+            || libc::getsockname(fd, (&raw mut address).cast(), &mut size) < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok((socket, u16::from_be(address.sin_port)))
 }
 
 fn assert_port_not_listening(port: u16) {
@@ -279,13 +321,12 @@ impl Fixture {
         fs::create_dir_all(root.parent().unwrap()).unwrap();
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let root = root.canonicalize().unwrap();
-        let reservations: Vec<_> = (0..10)
-            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
-            .collect();
-        let ports: Vec<_> = reservations
-            .iter()
-            .map(|l| l.local_addr().unwrap().port())
-            .collect();
+        // Keep the port assignments through both Agents' teardown. A bound
+        // socket prevents automatic allocation by another fixture. With
+        // SO_REUSEADDR and no listen(), the assigned worker can still bind
+        // and own its listener on Linux, including on a later Prepare.
+        let (reservations, ports): (Vec<_>, Vec<_>) =
+            (0..9).map(|_| bind_loopback_port(0, true).unwrap()).unzip();
         for role in ["capture", "production"] {
             let dir = root.join(role);
             fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
@@ -389,7 +430,6 @@ fi
             }
             fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
         }
-        drop(reservations);
         let production = Agent::spawn(&root.join("production"), ports[1], ports[6], ports[7]);
         let capture = Agent::spawn(&root.join("capture"), ports[0], ports[6], ports[7]);
         println!(
@@ -401,6 +441,7 @@ fi
             production,
             root,
             ports,
+            _port_reservations: reservations,
         }
     }
 
@@ -735,6 +776,14 @@ fn bearer_holder_can_use_unowned_emergency_stop_on_peer_owned_session() {
 #[test]
 fn sigterm_running_capture_releases_both_agents_workers() {
     let mut fixture = Fixture::new();
+    let receiver_port = fixture.ports[6];
+    assert_port_not_listening(receiver_port);
+    assert_eq!(
+        bind_loopback_port(receiver_port, false)
+            .expect_err("fixture must reserve the receiver port before Prepare")
+            .kind(),
+        io::ErrorKind::AddrInUse,
+    );
     fixture.capture.ok("prepare", json!({}));
     fixture.capture.ok("start", json!({"output":"recording"}));
     fixture.capture.state("running");
