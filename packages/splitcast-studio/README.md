@@ -59,6 +59,7 @@ not report compositor occlusion on Wayland.
 
 ```sh
 nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked
+mkdir -p artifacts/studio-wayland
 nix develop .#studio-wayland-test -c python3 packages/splitcast-studio/tests/wayland.py --evidence artifacts/studio-wayland/replay
 nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py
 ```

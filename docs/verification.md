@@ -199,6 +199,120 @@ Studio and use the existing CLI, TUI or Web with explicit Stop and
 completion observation when needed. Revert B as a unit to remove Studio's
 optional entry points. Saved layouts and the running session are owned by A.
 
+### Native Wayland focus follow-up
+
+The worktree started clean at `04f60e32a8aaf6103a568000c231da53d35ffe5c`.
+Local merge `6a71b3bf618c0c6668e487c602653fdb7a193954` incorporates #19
+`51bd829d56169b930d60315d2682f0c4c6eec2f9` and preserves both earlier
+verification sections. The checks and GUI harness ran on clean checkout
+`fb847b8bc299aed18a11f0c122eec409a9546d0d`, tree
+`e34b61358bacd5b651e538085427fec588239e57`. The candidate Studio package
+was built from `aab9907d53ddb4be71c63ab66251d938a64580a5`.
+`nix path-info .#splitcast-studio` on the tested checkout selected the
+same package. The release ELF SHA-256 values are
+`09219610af6f2805952dabf657dc8a2350874b51f6073f31fe9059a5ebdde687`
+before and
+`9be436ec41a05aaed4a9e839a57375ae2704a81db4cbae31c32964a597656cc3`
+after. This verification entry follows the measured source.
+
+| Exact command | Observed result |
+| --- | --- |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all ten checks passed. Convergence `attempt-000014`, xtask `artifacts/verification/runs/1794992463672618093`. |
+| `nix develop .#studio -c cargo fmt --manifest-path packages/splitcast-studio/Cargo.toml -- --check` | Exit 0, `attempt-000009`. |
+| `nix develop .#studio -c cargo clippy --manifest-path packages/splitcast-studio/Cargo.toml --all-targets --locked -- -D warnings` | Exit 0, `attempt-000010`. |
+| `nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked` | Exit 0, six passed, including focus loss preserving read revisions and cadence and occlusion invalidating a pending read. `attempt-000011`. |
+| `nix flake check --no-build` | Exit 0, `attempt-000012`. |
+| `nix develop -c python3 tools/ci/check_docs.py` | Exit 0, `attempt-000013`. |
+| `nix eval --raw "git+file://$PWD?rev=$base#packages.x86_64-linux.default.drvPath"` and `nix eval --raw .#packages.x86_64-linux.default.drvPath` | Exit 0 with `base` set to confirmed #19. The default Agent derivations matched exactly at `zwsk90fgmac05rmpzfprdrjcbzipizj2`. |
+
+The convergence contract is `studio-wayland-release`, digest
+`f2a5acb757dd8268e82fbad2eea0f36dff0f1e17a7b8a4175fba49e3521d7040`.
+The exact GUI runs used the following commands and logged stdout and
+stderr in `artifacts/studio-wayland/{before,after}.log`.
+
+```sh
+studio_before=04f60e32a8aaf6103a568000c231da53d35ffe5c
+studio_after=aab9907d53ddb4be71c63ab66251d938a64580a5
+before_package="$(nix build "git+file://$PWD?rev=$studio_before#splitcast-studio" --no-link --print-out-paths)"
+after_package="$(nix build "git+file://$PWD?rev=$studio_after#splitcast-studio" --no-link --print-out-paths)"
+mkdir -p artifacts/studio-wayland
+nix develop .#studio-wayland-test -c python3 packages/splitcast-studio/tests/wayland.py --studio-binary "$before_package/bin/splitcast-studio" --studio-source "$studio_before" --focus-only --evidence artifacts/studio-wayland/before
+nix develop .#studio-wayland-test -c python3 packages/splitcast-studio/tests/wayland.py --studio-binary "$after_package/bin/splitcast-studio" --studio-source "$studio_after" --evidence artifacts/studio-wayland/after
+```
+
+Both Nix builds exited 0. The GUI used unprivileged headless Sway 1.12 at
+1740 × 920 with Pixman and Xwayland disabled, Slint 1.19.0 / Winit 0.30.13
+software rendering, and a separate foot 1.27.0 toplevel. The protocol
+record shows Studio creating an `xdg_toplevel` and `wl_shm` buffers,
+then Studio receiving `wl_keyboard.leave` and foot receiving
+`wl_keyboard.enter`. Sway reports both as visible native windows at
+disjoint rectangles before and after injection. The test forwarded Studio's
+cursor and bearer-authenticated request to the real local Agents before
+substituting the synthetic chat response. Preview loaded a generated
+480 × 270 PNG after an authorized stand-in OBS response.
+
+- **Before, exit 1.** After handoff, the injected row 129 produced zero
+  chat requests and zero preview requests during the six-second observation.
+  The chat crop stayed pixel-identical, with row 128 still first.
+- **After, exit 0.** During the same handoff, one chat request and two
+  preview requests preceded the after capture. Studio rendered row 129
+  first, with 128 rows retained and focus still on foot. Across 53 request
+  intervals the shortest preview gap was 1.1999 s. The hidden preview and
+  editor, hidden chat, and post-Stop intervals each had zero relevant read
+  requests.
+- The candidate completed the full Wayland workflow. Output selection alone
+  sent no Start. Recording required the explicit Start. Camera drag, scene
+  conflict, Apply, OBS readback, Save, Reload, a lost reply and a late reply
+  were observed through two real Agents with stand-in workers. Stop returned
+  HTTP 202 during the held Apply. Studio displayed admission and later
+  observed completed Idle with the same stop ID and
+  `remote_release_pending=false`. Production was Idle and its owned
+  output and workers were gone.
+
+Each resource sample followed three seconds of warmup and covers 20
+one-second PSS readings from `/proc/PID/smaps_rollup`. CPU uses process
+user and system ticks divided by elapsed wall time and clock ticks per
+second. It is the percentage of one logical core attributable to Studio.
+
+| Studio workload | Elapsed | PSS range | CPU | Redraws |
+| --- | ---: | ---: | ---: | ---: |
+| Before, Idle | 20.019 s | 22.119–22.160 MiB | 0.100% | 0 |
+| After, Idle | 20.024 s | 22.151–22.198 MiB | 0.050% | 0 |
+| Before, focused with 128 chat rows and preview | 20.026 s | 24.506–24.581 MiB | 0.250% | 0 |
+| After, focused with 128 chat rows and preview | 20.023 s | 24.510–24.589 MiB | 0.250% | 0 |
+| After, unfocused with 128 chat rows and preview | 20.023 s | 21.499–21.553 MiB | 0.200% | 0 |
+
+The candidate met the 80 MiB PSS and 0.5% one-core Idle targets. Loaded
+samples used static content while reads continued. The PSS of the
+unfocused run includes library sharing with the second native process.
+These samples represent the isolated headless workload.
+
+Raw evidence lives under `artifacts/studio-wayland/`. Each final run
+contains its source manifest, Wayland and renderer traces, compositor
+trees, full screenshots, chat crops, request intervals, and resource
+samples. Earlier nonpassing runs were retained. `baseline-attempt-01`
+lacked the virtual pointer, `baseline-attempt-02` and `-03` typed a
+literal `a` with the virtual keyboard, and `baseline` delivered the
+drag destination after button release. `baseline-native` and
+`baseline-focus` observed an earlier Apply label. `baseline-focus-final`
+and `candidate-focus` stopped at 128-row setup because the initial
+synthetic epoch was invalid upstream. The final fixture forwards a
+protocol-valid 32-hex epoch. An unfiltered offline Cargo metadata probe
+failed on an uncached Android dependency. The initial parallel
+convergence launch encountered the runner lock. Clippy attempt
+`000002` rejected a nested match, which was fixed. The earlier verifier
+and Studio unit test commands exited 0 but their convergence snapshots
+changed during the runs. Attempts `000011` and `000014` establish
+the later stable results.
+
+Pinned Winit provides no compositor-driven occlusion observation on
+Wayland. The client gates on Slint window visibility, explicit panel
+visibility, and occlusion events on backends that report them. Current
+X11, physical gameplay and capture, real OBS/Twitch, and deployment
+remain outside this run. For code rollback, close Studio or revert the
+focus follow-up in a reviewed change. Session control and cleanup remain
+with the Agent.
+
 ## 2026-11-18 convergence harness integration
 
 | Exact command or profile | Observed result |
