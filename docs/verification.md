@@ -171,3 +171,123 @@ confirm clean OBS process exit and repeat the acceptance on a source-bound
 packaged build. [Current gates](memory/session-state.md)
 
 **Provenance:** [ID register](memory/evidence.md) · [real media receipt](evidence/media-plane-20261115.md) · [PR #3 oracle review](evidence/pr3-review-20261117.md) · [PoC convergence](evidence/poc-convergence-20261117.md) · [S26](evidence/dreaming-main-20261117.md) · [archived full log](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/verification.md).
+
+## 2026-11-18 runtime performance and operational acceptance (C)
+
+The worktree started at `e92b5db390835041b33de46618c49d5f98cad9cf`.
+The owner-only convergence contract `runtime-acceptance-c` has SHA-256
+`9a38c679e0a5a523e7c8a8c7eca92cd9992d29b41c1f0a11ece118068cf6d957`.
+The completed measurement implementation is
+`dc730aa2cd3892b16ce97552e874d060a71a82bf`, convergence snapshot
+`a6944958d0dd803719091cd816e3972e11d635bf2dd7db737f2416a40e5acfec`.
+The earlier implementation `9a037b2ccb8e9cacf7f413f185e0651f3036ffe3`
+used snapshot `9eb67ff280ad9244d84a1ebf1b1f2814a79abf808e4d706691ed0214dfbcbf76`.
+The evidence append changes documentation only.
+Private `attempt-*.json` and logs are under the worktree's Git metadata.
+
+| Exact command | Result |
+| --- | --- |
+| `direnv allow` | Exit 0 after reviewing `.envrc`. Checks below used the explicit Nix wrapper. |
+| `nix develop --no-write-lock-file .#media-test -c bwrap --unshare-all --die-with-parent --new-session --ro-bind /nix/store /nix/store --dev /dev --proc /proc --tmpfs /tmp -- bash -c 'test ! -e /dev/dri && test ! -e /dev/snd'` | Exit 0 from the preliminary unprivileged namespace probe. |
+| `nix develop --no-write-lock-file .#media-test -c python3 -c 'from inspect import signature; from websockets.sync.client import connect; print(signature(connect))'` | Exit 0 on the pre-commit media shell. The pinned client is websockets 16.0. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Earlier commit exit 0, 10/10 checks (`attempt-000002`, verifier run `1794983560056512408`). At the completed implementation, first exit 1, 8/10 checks (`attempt-000008`, run `1794984033172964580`). Same-source retry exit 0, 10/10 checks (`attempt-000014`, run `1794984411693602261`). Rust 1.95.0, x86_64 Linux. Exact Cargo commands and exits are in each `artifacts/verification/runs/<run>/summary.tsv`. The ordinary verifier left opt-in integrations ignored. |
+| `nix develop --no-write-lock-file .#media-test -c python3 -m unittest discover -s tools -p test_media_acceptance.py -v` | Exit 0, 20 tests on the earlier implementation and 21 on the completed implementation. Receipts `attempt-000003` and `attempt-000009`. |
+| `bash -n tools/verify-media.sh` | Exit 0 before commit and in receipts `attempt-000004` and `attempt-000010`. |
+| `python3 tools/ci/check_docs.py` | Exit 0 before commit and in receipts `attempt-000005` and `attempt-000011`. 49 Markdown documents, 267 local links, zero broken links and OKF issues at the implementation commit. |
+| `git diff --check` and `git diff --cached --check` | Exit 0 during pre-commit review. |
+| `git diff --check e92b5db390835041b33de46618c49d5f98cad9cf` | Exit 0. Receipts `attempt-000006` and `attempt-000012`. |
+| `nix develop --no-write-lock-file .#media-test -c cargo run -p splitcast-xtask -- verify-media` | Pre-commit exit 0, 20 oracle tests and all seven device-free cases. Receipt `attempt-000001`, media run `20261118T062616Z-mFWYuCDV`. Earlier clean implementation exit 0, 20 tests and seven cases, receipt `attempt-000007`, run `20261118T063501Z-8JI0gF3j`. The identical clean snapshot reused that receipt. Final implementation exit 0, 21 tests and seven cases, receipt `attempt-000013`, run `20261118T064143Z-uQwvIGaN`. Media receipts are under `artifacts/media-plane/runs/`. |
+
+After the evidence append, `python3 tools/ci/check_docs.py` exited 0 with
+49 Markdown documents, 271 local links, zero broken links and OKF issues.
+`git diff --check e92b5db390835041b33de46618c49d5f98cad9cf` exited 0,
+and the worktree scope check found no violations.
+
+At `attempt-000008`, `cargo test --workspace --locked --offline` exited
+101. In `completed_stop_is_not_a_cross_host_prepare_replay_fence`, Prepare
+returned 409 with `external service readiness timeout`. The test-owned
+MediaMTX stand-in logged `AddrInUse` in
+`artifacts/verification/two-agents-165649-0/production/mediamtx.log`.
+`cargo test --workspace --no-default-features --locked --offline` also
+exited 101. The OBS mock test
+`obs::tests::compound_configuration_uses_one_operation_budget` timed out
+at connect with `OBS control deadline exceeded`. The Rust sources match
+the base for both tests. No cause was established for the OBS deadline miss.
+
+### Generated OBS and age observations
+
+Media source manifest `0af9414f5323eb46effea4ab4d7d99b84e7393e51f2926515f23e3d0df55100d`, Agent SHA-256
+`2ac7a71f86c99fb26ea0dd319d18ae24e88c4f62fe4c00ebf90cb85a83147eb0` and OBS closure inventory SHA-256
+`be96d04d6f1e4925dcbd924e9446efdf8e7d33db34b5db1ecaf7bd39abefe712`. The private namespace entered with only
+loopback and no physical media devices. OBS 32.1.2 ran with Xvfb/Mesa
+llvmpipe, x264 and software input decode at 1280×720/30 fps. The launcher
+matched its host source receipts before and after. Each observed recording
+kept ten authenticated snapshots from one OBS instance including a
+Running sample, a warm baseline 2.001–2.009 seconds after the Running
+observation and 7.995–8.002 seconds of steady sampling before Stop or
+injection.
+
+| Case | Late render / attempts | Output skips / attempts | Non-skipped output frames | Scene age max lower–upper, seconds |
+| --- | ---: | ---: | ---: | --- |
+| normal | 38/240 (15.83%) | 0/241 | 241 | 1.997–2.164, WITHIN_LIMIT |
+| camera | 1/240 (0.42%) | 0/240 | 240 | 1.345–1.523, WITHIN_LIMIT |
+| frozen | 5/241 (2.07%) | 0/240 | 240 | 18.553–18.652, STALE |
+| delay | 0/240 (0.00%) | 0/240 | 240 | 4.992–5.145, STALE |
+| disconnect | 17/240 (7.08%) | 0/240 | 240 | 1.142–1.339, WITHIN_LIMIT |
+| stall | 0/240 (0.00%) | 0/240 | 240 | 1.177–1.323, WITHIN_LIMIT |
+| worker-death | 0/240 (0.00%) | 0/240 | 240 | 1.539–1.689, WITHIN_LIMIT |
+| worker-death recovery | 0/240 (0.00%) | 0/240 | 240 | 1.878–2.029, WITHIN_LIMIT |
+
+The frozen game feed's ingress advanced from 197,648 to
+332,482 bytes, and the delay feed from 208,519
+to 396,403 bytes, increasing at all ten observations.
+The independently decoded frozen recording rejected
+`frozen content progression gap` after the cadence check. The delayed
+recording decoded to EOF with 11.8
+seconds of content progression. Both scene-age lower bounds exceeded the
+three-second fixture ceiling. The negative cases pass by detecting stale
+content while the Agent still reports output progress. Its production
+control has no trusted age signal.
+
+The first full run measured 124/240 late renders on the worker-death
+recovery recording with 0/241 output skips. The next clean run measured
+8/240 late renders in the camera case with 0/240 output skips, and 0/240
+late renders on recovery. These are software observations. The earlier
+physical 117/645 render failure, SIGSEGV and Xorg service Stop timeouts
+remain recorded. [PR #16 OBS evidence](evidence/pr16-obs.md) ·
+[Physical and recovery evidence](evidence/pr16-managed-acceptance.md)
+
+The normal and camera recordings independently decoded to EOF and
+confirmed inactive OBS output, exit code 0, and release of the owned OBS
+PID and loopback listener. Across the cases, the fixture recorded no
+cleanup errors or fallback SIGKILL in `cleanup.json`. The worker-death
+case intentionally killed the owned RNNoise process to test recovery.
+Routine fixture teardown terminated the owned Agent and Xvfb. Namespace
+execution returned 0. These receipts cover isolated fixture cleanup.
+Service cgroup release on the intended hosts remains a separate gate.
+
+
+### Gates left open
+
+- NOT RUN on the intended hardware. The fixed osu! replay OFF/ON/OFF
+  gameplay p99 delta, continuous Direct Scanout, local game audio, and
+  input latency need source-bound instrumentation. The historical
+  discrete samples keep their original scope.
+- BLOCKED on hardware preflight. OBS renderer, active NVENC, hardware
+  decode of each input, and the ≤1% post-warmup late-render gate remain
+  unverified on the production host. The failed physical Xorg path was
+  excluded from this work.
+- NOT RUN for physical game/camera frame age, physical A/V marker alignment,
+  and a real on-air EventSub → VOICEVOX → capture-side physical return.
+- NOT RUN for owner-specific Stop, output inactivity, normal OBS exit,
+  process/listener/cgroup release, and fault recovery on the intended
+  hosts with this source.
+- NOT RUN for `verify-virtual`, a standalone Nix package build,
+  `nix flake check`, Miri, and fuzzing in this work unit. The device-free
+  checks above cover the scoped measurement oracle and packaged media
+  path. No deployment or system-generation change was authorized or
+  performed.
+
+Keep the runtime candidate and autostart disabled. See the bounded
+[physical acceptance procedure](operations.md#finite-matched-acceptance)
+and [current gates](memory/session-state.md).

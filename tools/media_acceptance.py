@@ -48,6 +48,7 @@ LIMITS = {
     "backlog_delay_seconds": 4,
     "startup_pipe_seconds": 40,
     "scene_startup_samples": 2,
+    "obs_warmup_seconds": 2,
     "max_progress_gap_seconds": 0.5,
     "cadence_startup_seconds": 1,
     "cadence_tail_seconds": 0.2,
@@ -63,6 +64,122 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+def frame_age_bounds(before, received, generated):
+    first, last = generated
+    require(all(math.isfinite(at) for at in (before, received, first, last))
+            and before <= received and first <= last and first <= received,
+            "invalid scene age clock or marker time")
+    return {"age_lower_seconds": max(0, before - last), "age_upper_seconds": received - first}
+
+
+def assess_scene_age(samples):
+    steady = samples[LIMITS["scene_startup_samples"]:]
+    if not steady:
+        return {"status": "UNMEASURABLE", "reason": "no post-startup scene samples"}
+    lower = max(s["age_lower_seconds"] for s in steady)
+    upper = max(s["age_upper_seconds"] for s in steady)
+    ceiling = LIMITS["max_scene_age_seconds"]
+    status = "INCONCLUSIVE"
+    if lower > ceiling:
+        status = "STALE"
+    elif upper <= ceiling:
+        status = "WITHIN_LIMIT"
+    return {"status": status, "samples": len(steady), "max_lower_seconds": lower, "max_upper_seconds": upper}
+
+
+def obs_counter_delta(samples, total_key, skipped_key):
+    counters = [(s["stats"].get(total_key), s["stats"].get(skipped_key)) for s in samples]
+    for index, (total, skipped) in enumerate(counters):
+        if any(type(value) is not int or not 0 <= value < 2**32 for value in (total, skipped)) or skipped > total:
+            return {"status": "UNMEASURABLE", "reason": "missing or invalid counters", "sample": index}
+    intervals = [(b[0] - a[0], b[1] - a[1]) for a, b in zip(counters, counters[1:])]
+    for index, (total, skipped) in enumerate(intervals, 1):
+        if total < 0 or skipped < 0:
+            return {"status": "UNMEASURABLE", "reason": "counter reset or wrap", "sample": index}
+        if skipped > total:
+            return {"status": "UNMEASURABLE", "reason": "skip delta exceeds total delta", "sample": index}
+
+    # Interval 0 is from the Running observation to the post-warmup baseline.
+    steady = intervals[1:]
+    attempted = sum(total for total, _ in steady)
+    skipped = sum(skipped for _, skipped in steady)
+    if attempted == 0:
+        return {"status": "UNMEASURABLE", "reason": "no post-warmup frame attempts", "attempted": 0}
+    return {"status": "MEASURED", "attempted": attempted, "skipped": skipped,
+            "skipped_percent": 100 * skipped / attempted, "progress_frames": attempted - skipped,
+            "intervals_without_progress": sum(total == skipped for total, skipped in steady)}
+
+
+def assess_obs_stats(samples, warmup_at, expected_samples):
+    def unavailable(reason):
+        outcome = {"status": "UNMEASURABLE", "reason": reason}
+        return {"render": outcome, "encode": outcome}
+
+    if any("error" in sample for sample in samples):
+        return unavailable("OBS statistics or active recording observation failed")
+    if len(samples) != expected_samples or len(samples) <= 2:
+        return unavailable("missing Running, baseline or post-warmup samples")
+    phases = ["running-start", "post-warmup-baseline"] + ["post-warmup"] * (len(samples) - 2)
+    if [sample["phase"] for sample in samples] != phases:
+        return unavailable("missing or out-of-order warmup boundaries")
+    if not samples[0]["received"] < warmup_at <= samples[1]["requested"]:
+        return unavailable("observations do not straddle the warmup deadline")
+    for first, second in zip(samples, samples[1:]):
+        if (first["received"] > second["requested"]
+                or second["output_duration_ms"] <= first["output_duration_ms"]):
+            return unavailable("recording duration reset or observation order invalid")
+    return {"render": obs_counter_delta(samples, "renderTotalFrames", "renderSkippedFrames"),
+            "encode": obs_counter_delta(samples, "outputTotalFrames", "outputSkippedFrames")}
+
+
+class ObsStats:
+    """Observe one private, authenticated OBS connection for one recording."""
+
+    def __init__(self, port, password):
+        from websockets.sync.client import connect
+
+        self.socket = connect(f"ws://127.0.0.1:{port}/", proxy=None, open_timeout=2,
+                              close_timeout=1, max_size=65536, ping_interval=None)
+        self.sequence = 0
+        try:
+            hello = self.receive(0)["authentication"]
+            secret = base64.b64encode(hashlib.sha256((password + hello["salt"]).encode()).digest()).decode()
+            proof = base64.b64encode(hashlib.sha256((secret + hello["challenge"]).encode()).digest()).decode()
+            self.send(1, {"rpcVersion": 1, "authentication": proof, "eventSubscriptions": 0})
+            require(self.receive(2)["negotiatedRpcVersion"] == 1, "OBS RPC version 1 required")
+        except Exception:
+            self.socket.close()
+            raise
+
+    def send(self, opcode, data):
+        self.socket.send(json.dumps({"op": opcode, "d": data}))
+
+    def receive(self, opcode):
+        message = json.loads(self.socket.recv(timeout=2, decode=True))
+        require(message["op"] == opcode, f"unexpected OBS opcode, expected {opcode}")
+        return message["d"]
+
+    def request(self, kind):
+        self.sequence += 1
+        request_id = str(self.sequence)
+        self.send(6, {"requestType": kind, "requestId": request_id})
+        data = self.receive(7)
+        require(data["requestId"] == request_id and data["requestType"] == kind
+                and data["requestStatus"]["result"] is True, f"OBS request failed: {kind}")
+        return data["responseData"]
+
+    def sample(self, phase):
+        status = self.request("GetRecordStatus")
+        duration = status.get("outputDuration")
+        require(status.get("outputActive") is True and status.get("outputPaused") is False
+                and type(duration) is int and duration >= 0, "OBS recording unavailable or inactive")
+        requested = time.monotonic()
+        stats = self.request("GetStats")
+        require(isinstance(stats, dict), "invalid OBS GetStats response")
+        return {"phase": phase, "requested": requested, "received": time.monotonic(),
+                "output_duration_ms": duration, "stats": stats}
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -71,10 +188,15 @@ def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def source_identity():
-    names = subprocess.check_output(
-        ["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=ROOT
-    ).decode().split("\0")
+def source_identity(reference=None):
+    if reference is None:
+        names = subprocess.check_output(
+            ["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=ROOT
+        ).decode().split("\0")
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
+    else:
+        # Linked worktree Git metadata stays outside the media namespace.
+        names, head = reference["files"], reference["head"]
     files = {
         name: digest(ROOT / name)
         for name in sorted(set(names))
@@ -83,7 +205,7 @@ def source_identity():
         and (ROOT / name).is_file()
     }
     return {
-        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip(),
+        "head": head,
         "files": files,
         "tree_sha256": hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest(),
     }
@@ -526,13 +648,57 @@ class Run:
         mark = barcode(raw)
         require(mark is not None and mark[1] == source.epoch, f"invalid scene identity: {mark}")
         with source.lock:
-            stamp = source.ledger.get(mark[0])
-        require(stamp is not None, "scene marker absent from source ledger")
+            generated = source.ledger.get(mark[0])
+        require(generated is not None, "scene marker absent from source ledger")
         return {"tick": mark[0], "epoch": mark[1], "before": before, "received": received,
-                "generated": stamp, "age_upper_seconds": received - stamp}
+                "generation_bounds": generated, **frame_age_bounds(before, received, generated)}
+
+    def sample_recording(self, source):
+        samples, counters, observations = [], [], []
+        started = time.monotonic()
+        warmup = LIMITS["obs_warmup_seconds"]
+        window = LIMITS["record_seconds"]
+        obs = None
+
+        def sample_stats(phase):
+            nonlocal obs
+            if observations and "error" in observations[-1]:
+                return  # A new connection could belong to a different OBS process.
+            try:
+                if obs is None:
+                    obs = ObsStats(self.ports[5], (self.directory / "password").read_text())
+                observations.append(obs.sample(phase))
+            except Exception as error:
+                reason = str(error) if isinstance(error, AssertionError) else type(error).__name__
+                observations.append({"phase": phase, "at": time.monotonic(), "error": reason})
+
+        try:
+            sample_stats("running-start")
+            for elapsed in range(1, window + 1):
+                time.sleep(max(0, started + elapsed - time.monotonic()))
+                if elapsed >= warmup:
+                    sample_stats("post-warmup-baseline" if elapsed == warmup else "post-warmup")
+                samples.append(self.preview(source))
+                counters.append(self.transport())
+                source.observe("recording sample")
+        finally:
+            if obs is not None:
+                obs.socket.close()
+            assessment = assess_obs_stats(observations, started + warmup, window - warmup + 2)
+            write_json(self.directory / f"obs-stats-{source.epoch}.json", {
+                "source_epoch": source.epoch, "running_observed_at": started,
+                "warmup_seconds": warmup, "samples": observations,
+                "assessment": assessment,
+            })
+            write_json(self.directory / f"scene-age-{source.epoch}.json", {
+                "clock": "fixture process monotonic clock", "samples": samples,
+                "assessment": assess_scene_age(samples),
+            })
+            write_json(self.directory / f"transport-{source.epoch}.json", counters)
+        return samples, counters, assessment
 
     def cleanup(self):
-        errors = []
+        errors, signals = [], []
         if self.agent and self.agent.poll() is None:
             for action in (self.observe_resources, self.stop):
                 try:
@@ -543,11 +709,19 @@ class Run:
             if child.poll() is None:
                 try:
                     os.killpg(child.pid, signal.SIGTERM)
+                    signals.append({"name": name, "signal": "SIGTERM"})
                     child.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=5)
                     errors.append(name + " required forced termination")
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        signals.append({"name": name, "signal": "SIGKILL"})
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        errors.append(name + " leader was not reaped after SIGKILL")
                 except ProcessLookupError:
                     child.wait(timeout=5)
         for item in self.inventory.values():
@@ -563,7 +737,7 @@ class Run:
         if list((self.directory / "state/production").glob("obs-session-*")):
             errors.append("private OBS profile survives")
         write_json(self.directory / "commands.json", self.commands)
-        write_json(self.directory / "cleanup.json", {"errors": errors, "children": [
+        write_json(self.directory / "cleanup.json", {"errors": errors, "signals": signals, "children": [
             {"name": name, "pid": child.pid, "returncode": child.poll()} for name, child in self.children]})
         return errors
 
@@ -598,15 +772,24 @@ class Source:
         stream = self.child.stdin
         origin = time.monotonic()
         queue = deque()
+        frozen_pixels = None
         try:
             os.set_blocking(stream.fileno(), False)
             for ordinal in range(FPS * LIMITS["source_seconds"]):
                 if self.cancel.wait(max(0, origin + ordinal / FPS - time.monotonic())):
                     break
                 tick = min(ordinal // 3, 20) if self.frozen else ordinal // 3
-                with self.lock:
-                    self.ledger.setdefault(tick, time.monotonic())
-                queue.append(frame(tick, self.epoch, min(ordinal, 60) if self.frozen else ordinal))
+                if frozen_pixels is None:
+                    before = time.monotonic()
+                    pixels = frame(tick, self.epoch, ordinal)
+                    with self.lock:
+                        first, _ = self.ledger.get(tick, (before, before))
+                        self.ledger[tick] = (first, time.monotonic())
+                    if self.frozen and ordinal == 60:
+                        frozen_pixels = pixels
+                else:
+                    pixels = frozen_pixels
+                queue.append(pixels)
                 queued_bytes = len(queue) * WIDTH * HEIGHT
                 self.peak_queue_bytes = max(self.peak_queue_bytes, queued_bytes)
                 require(queued_bytes <= 128 * 1024 * 1024, "generated backlog exceeded 128 MiB")
@@ -737,6 +920,12 @@ def reject_recording(run, path, epoch, tag, reason):
     raise AssertionError("oracle accepted " + tag)
 
 
+def require_obs_progress(assessment):
+    for stage, outcome in assessment.items():
+        require(outcome["status"] == "MEASURED", f"BLOCKED: OBS {stage} measurement unavailable: {outcome}")
+    require(assessment["encode"]["progress_frames"] > 0, "OBS video output made no progress")
+
+
 def scenario(directory, binary, case, epoch):
     run = Run(directory, binary)
     source = None
@@ -754,16 +943,11 @@ def scenario(directory, binary, case, epoch):
                                  f"rtsp://127.0.0.1:{run.ports[3]}/camera"])
         require(run.control("start", {"output": "recording"})["state"] == "running", "Start did not reach Running")
         run.observe_resources()
-        samples, counters = [], []
-        started = time.monotonic()
-        for _ in range(LIMITS["record_seconds"]):
-            time.sleep(max(0, started + len(samples) + 1 - time.monotonic()))
-            samples.append(run.preview(source))
-            counters.append(run.transport())
-            source.observe("recording sample")
+        samples, counters, stats = run.sample_recording(source)
+        age = assess_scene_age(samples)
+        result["obs_stats"] = stats
         result["scene_samples"] = samples
-        write_json(directory / "scene.json", samples)
-        write_json(directory / "transport.json", counters)
+        result["scene_age"] = age
         if case in ("disconnect", "stall", "worker-death"):
             # The injected failure can make Agent teardown close both publishers.
             source.expect_stop("injected " + case)
@@ -802,10 +986,11 @@ def scenario(directory, binary, case, epoch):
         recordings = list((directory / "recordings").glob("*.mkv"))
         require(len(recordings) == 1, f"expected one new OBS recording: {recordings}")
         if case in ("frozen", "delay"):
-            require(any(s["age_upper_seconds"] > LIMITS["max_scene_age_seconds"] for s in samples),
-                    "bad scene did not violate freshness envelope")
+            require(age["status"] == "STALE", f"stale scene did not exceed the age limit: {age}")
             game_bytes = [next(item["bytesReceived"] for item in c["items"] if item["name"] == "game") for c in counters]
-            require(all(b > a for a, b in zip(game_bytes, game_bytes[1:])), "bad feed did not retain byte progress")
+            require(len(game_bytes) >= 2 and all(b > a for a, b in zip(game_bytes, game_bytes[1:])),
+                    "stale feed did not retain byte progress")
+            result["game_ingress_bytes_received"] = game_bytes
         if case == "frozen":
             try:
                 inspect_recording(run, recordings[0], epoch)
@@ -814,17 +999,14 @@ def scenario(directory, binary, case, epoch):
                 result["expected_rejection"] = str(error)
             else:
                 raise AssertionError("oracle accepted frozen content")
-            result["agent_freshness_enforcement"] = "NOT IMPLEMENTED; byte-progress health admitted stale content"
+            result["agent_freshness_enforcement"] = "UNAVAILABLE; the Agent has no trusted frame-age signal"
         elif case == "delay":
             result["decoded"] = inspect_recording(run, recordings[0], epoch)
-            result["independent_age_gate"] = "FAIL; scene age exceeded envelope despite byte progress"
-            result["agent_freshness_enforcement"] = "NOT IMPLEMENTED; the independent observer detected stale content"
+            result["agent_freshness_enforcement"] = "UNAVAILABLE; the Agent has no trusted frame-age signal"
             result["backlog"] = {"boundary": "generated frame queue before RTMP publication",
                                  "frames": source.backlog_frames, "peak_bytes": source.peak_queue_bytes}
         else:
-            require(all(s["age_upper_seconds"] <= LIMITS["max_scene_age_seconds"]
-                        for s in samples[LIMITS["scene_startup_samples"]:]),
-                    "live scene exceeded freshness envelope")
+            require(age["status"] == "WITHIN_LIMIT", f"live scene did not establish freshness: {age}")
             result["decoded"] = inspect_recording(run, recordings[0], epoch,
                                                    fault_tail=case in ("disconnect", "stall", "worker-death"))
         if case == "camera":
@@ -903,20 +1085,18 @@ def scenario(directory, binary, case, epoch):
             require(run.control("prepare")["state"] == "ready", "explicit recovery Prepare failed")
             source = Source(run, 15)
             require(run.control("start", {"output": "recording"})["state"] == "running", "explicit recovery Start failed")
-            recovered_samples = []
-            recovery_started = time.monotonic()
-            for _ in range(LIMITS["record_seconds"]):
-                time.sleep(max(0, recovery_started + len(recovered_samples) + 1 - time.monotonic()))
-                recovered_samples.append(run.preview(source))
-                source.observe("recovery sample")
+            recovered_samples, _, recovery_stats = run.sample_recording(source)
             source.expect_stop("recovery Stop")
             run.stop()
             fresh = set((directory / "recordings").glob("*.mkv")) - set(recordings)
             require(len(fresh) == 1, "recovery did not produce a distinct recording")
             result["recovery"] = inspect_recording(run, fresh.pop(), 15)
             result["recovery"]["scene_samples"] = recovered_samples
-            require(all(sample["age_upper_seconds"] <= LIMITS["max_scene_age_seconds"]
-                        for sample in recovered_samples[LIMITS["scene_startup_samples"]:]), "stale recovery scene")
+            result["recovery"]["scene_age"] = assess_scene_age(recovered_samples)
+            result["recovery"]["obs_stats"] = recovery_stats
+            require(result["recovery"]["scene_age"]["status"] == "WITHIN_LIMIT",
+                    "recovery scene did not establish freshness")
+            require_obs_progress(recovery_stats)
         if case in ("normal", "camera"):
             shutdown = result["obs_shutdown"]
             status = shutdown["agent_exit_status"] or {}
@@ -926,6 +1106,7 @@ def scenario(directory, binary, case, epoch):
                     f"OBS output inactivity was not verified: {status}")
             require(status.get("normal_exit") is True and status.get("exit_code") == 0
                     and status.get("signal") is None, f"OBS did not exit normally: {status}")
+        require_obs_progress(stats)
         result["result"] = "PASS"
     except Exception as error:
         result["error"] = f"{type(error).__name__}: {error}"
@@ -975,12 +1156,14 @@ def main():
     os.umask(0o077)
     directory = Path(os.environ.get("SPLITCAST_MEDIA_EVIDENCE_DIR", ROOT / "artifacts/media-plane/direct-blocked"))
     directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-    identity = source_identity()
+    in_sandbox = os.environ.get("SPLITCAST_MEDIA_SANDBOX") == "1"
+    reference = json.loads((directory / "build-source.json").read_text()) if in_sandbox else None
+    identity = source_identity(reference)
     write_json(directory / "source-before.json", identity)
     write_json(directory / "limits.json", LIMITS)
     results = []
     try:
-        require(os.environ.get("SPLITCAST_MEDIA_SANDBOX") == "1", "BLOCKED: run tools/verify-media.sh in media-test shell")
+        require(in_sandbox, "BLOCKED: run tools/verify-media.sh in media-test shell")
         require(not any(Path("/dev").glob("dri/*")) and not Path("/dev/snd").exists()
                 and not any(Path("/dev").glob("video*")), "BLOCKED: physical media devices visible")
         interfaces = {line.split(":")[0].strip() for line in Path("/proc/net/dev").read_text().splitlines()[2:]}
@@ -1009,7 +1192,7 @@ def main():
             print(case + ": " + result["result"] + (" " + result["error"] if "error" in result else ""), flush=True)
     except Exception as error:
         results.append({"result": "BLOCKED", "error": str(error)})
-    after = source_identity()
+    after = source_identity(reference)
     write_json(directory / "source-after.json", after)
     complete = not args.case and len(results) == len(CASES)
     passed = complete and all(r["result"] == "PASS" for r in results) and identity == after
