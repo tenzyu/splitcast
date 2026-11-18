@@ -45,7 +45,7 @@ cache hit does not cover those variants. Source builds remain available.
 
 ## Publish a subsequent candidate
 
-Review the exact three custom outputs, dependency changes, source archives,
+Review the native and patched OBS outputs, dependency changes, source archives,
 license notices and codec conditions. Then dispatch from the trusted `main`
 branch with both explicit confirmations:
 
@@ -56,8 +56,10 @@ gh workflow run release-cache.yml --ref main \
 
 The workflow validates and builds in an unprivileged job, signs only that run's
 bundle in a separate job, publishes a unique initially unverified prerelease,
-and tests it on a fresh runner with builds prohibited. Inspect all three job
-conclusions and retained evidence before recording delivery success. Never
+and tests the native output on a fresh runner with builds prohibited. The
+`Verify published Nix cache` workflow checks that exact release attempt before
+marking the title and notes verified. To reconcile a specific successful release
+run, dispatch `verified-cache.yml` with its `run_id`. Never
 replace an existing release's assets or force-move its tag. Failed drafts and
 runs remain separate evidence. Do not rerun the obsolete first failed draft.
 

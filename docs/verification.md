@@ -4,6 +4,28 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 published native Nix cache verification
+
+At `90af1210800c94a2fbc5900eb5ea3337604966e2`, [release run 44304462155](https://github.com/tenzyu/splitcast/actions/runs/44304462155/attempts/1)
+passed `build`, `publish`, and the independent `consume` job. The published
+manifest and `consumed-manifest.json` both hash to
+`98136a91a1c3f7cff456b76460141ded3fac6a953893a8633905098831612547`.
+They name one native root and two custom paths, the native output and patched
+OBS. The consumer's retained output lists one path despite the old log
+message referring to both roots.
+
+The [automatic finalizer](https://github.com/tenzyu/splitcast/actions/runs/44308360085)
+and [manual finalizer](https://github.com/tenzyu/splitcast/actions/runs/44314031162)
+both failed with `published manifest does not describe tested roots`. The
+finalizer still expected three custom paths and a release notice superseded
+by the native publisher's commit-specific notice.
+
+| Exact command | Observed result |
+| --- | --- |
+| `gh run view 44314031162 --log-failed` and `gh run view 44308360085 --log-failed` | Both returned the failing finalizer step with the same manifest error. |
+| `gh run download 44304462155 -n release-consumer-evidence-1 -D "$receipt_dir/consumer"` and `gh release download nix-cache-90af1210800c94a2fbc5900eb5ea3337604966e2-44304462155-1 -p manifest.json -D "$receipt_dir/published"` | Both exited 0. `sha256sum "$receipt_dir/published/manifest.json" "$receipt_dir/consumer/consumed-manifest.json"` printed the matching digests above. |
+| `python3 tools/ci/test_finalize_release.py` | The native publisher fixture and legacy layout were rejected before the fix, exit 1. Convergence receipt `verify-published-nix-cache/attempt-000001`. |
+
 ## 2026-11-18 repository skill verification
 
 [S34](evidence/wiki-context-skill.md) records T3 discovery, matched reader answers, independent scoring, measured cost and the scoped checks.

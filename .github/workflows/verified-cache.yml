@@ -13,6 +13,11 @@ on:
     paths:
       - .github/workflows/verified-cache.yml
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Release Nix cache run ID (leave blank for latest)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -32,9 +37,9 @@ jobs:
       - name: Verify exact run and update only the release title and notes
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_RUN: ${{ github.event.workflow_run.id }}
+          TARGET_RUN: ${{ github.event.workflow_run.id || inputs.run_id }}
         run: |
-          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+          if [[ "${{ github.event_name }}" == workflow_run || -n "$TARGET_RUN" ]]; then
             python3 tools/ci/finalize_release.py --run-id "$TARGET_RUN"
           else
             python3 tools/ci/finalize_release.py --latest
