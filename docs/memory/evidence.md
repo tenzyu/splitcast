@@ -67,6 +67,7 @@ Paths are relative to SC-MONO. Original normalized copies were imported under `d
 | S30 | 2026-11-18 JST | [Authorized two-host VOICEVOX trial](../evidence/real-voicevox-physical-return.md#authorized-two-host-trial) at `6a503e9` | Physical ALSA route and listening, live faults, and timed expiry comparison |
 | S31 | 2026-11-18 JST | [PR #16 mandatory review](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950165310) against `0823165ecb6f5ecfe6d3a1b8df989bc62c80dfb0` | Required fixes and real-host acceptance gates. Prior physical trials are [bound to their own artifacts](session-state.md#historical-physical-trials-through-review-head-0823165). |
 | S32 | 2026-11-18 JST | PR #16 managed-output and speech follow-up | [Review disposition](../design-review.md#pr-16-review-follow-up), [decisions D19–D20](decisions.md#d19-one-owned-watchdog-governs-timed-output), and [verification record](../verification.md). |
+| S33 | 2026-11-18 JST | [Main, three draft heads and detached integration identities](../evidence/dreaming-retrieval-20261118.md#source-snapshot) | [Reconciled Prepare, Wayland and freshness observations](proposed-revisions.md). Source and existing software receipts only. |
 
 Original object inspection uses `git ls-tree -r <EXTRACT> -- <source-path>` and `git cat-file -p <blob>` in SC-MONO. Those commands do not run the historical checks.
 

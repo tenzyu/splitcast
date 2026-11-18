@@ -35,8 +35,7 @@ Anthropic's 2026-11-06 memory work distinguishes **transcripts**, **memory notes
 
 - PR #2 urgent Stop admission merged; no hard release guarantee; PR #6 fixed an overly strict test expectation, not universal cancellation.
 - PR #3 actual **production-only generated** media evidence is narrower than capture-Agent/SSH/physical acceptance. AV01 phase-fit timing was falsified; later decoded-PTS/audio-window controls corrected it.
-- PR #9 finite `poc-play` merged; it is local fixture-only, Agent continues refusing TTS/EventSub/remote mixing.
-- Twitch WSS/necessary Helix/`channel.chat.message` v1 with **existing suitable** OAuth approved; selected account/channel data missing in inspected scope; new OAuth/chat post/public output unauthorized.
+- At [S26/E21](../evidence/dreaming-main-20261117.md), #9 supplied fixture-only `poc-play` and the Agent refused live speech. Later [physical speech](../evidence/real-voicevox-physical-return.md) and [#16 managed trials](../evidence/pr16-managed-acceptance.md) establish a heard EventSub utterance in a separate session. During the public game window only admission was observed. Each trial's grants expired with its scope.
 - Game-side renderer hook caused an observed EGL path crash, **not** a proven Mesa root cause; Direct Scanout and local game audio must be protected.
 - All-frame gameplay OFF/ON/OFF, live freshness and physical event-to-playback are separate acceptance axes.
 
@@ -54,4 +53,4 @@ correction as specified by the [update protocol](update-protocol.md).
 
 Use [the CLI workflow](../convergence.md) to scan locally or explicitly ask
 Codex for a private, source-bound proposal. Decisions about applying a patch
-and recording its review stay with the reviewer.
+and recording its review stay with the reviewer. Keep a measured success or a rejected design when it predicts a future decision. Search the underlying revision when a page cannot settle the question. Use one writer per affected page during reconciliation.

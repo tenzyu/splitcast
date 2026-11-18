@@ -10,8 +10,8 @@ sources:
 
 Follow [the current acceptance record](session-state.md) for observed results
 and open gates. The PoC includes selected game A/V and microphone, optional
-camera, Web and terminal controls, private recording, Twitch broadcast, and
-physical speech return.
+camera, Web and terminal controls, private recording, separately authorized Twitch broadcast, and
+physical speech return. The [optional desktop Studio](proposed-revisions.md) has its own source and test boundary.
 
 ## Why SplitCast exists
 
@@ -69,7 +69,7 @@ Current follow-up changes are identified in [S22's receipt](../evidence/pr3-revi
 | Source fact at that checkpoint | What it means for the goal |
 | --- | --- |
 | At the PR #3 checkpoint, Prepare refused enabled EventSub, TTS or remote TTS mixing. | PRs #13–#15 subsequently established owner-scoped speech delivery and physical playback. The live chat trial validated EventSub with the configured identity. |
-| [`media.rs::game/mic/tunnel`](../../packages/splitcast-rs/src/media.rs) launches GSR H.264/AAC, FFmpeg Opus, and loopback SSH local forwards for control/RTMP/RTSP. | The capture host still encodes; TCP/SSH freshness, overhead and cross-host clocks remain unaccepted. Current forwards are not a returned-audio implementation. |
+| [`media.rs::game/mic/tunnel`](../../packages/splitcast-rs/src/media.rs) launches GSR H.264/AAC, FFmpeg Opus, and loopback SSH local forwards for control/RTMP/RTSP. | The capture host still encodes; TCP/SSH freshness, overhead and cross-host clocks remain unaccepted. S28 later exercised the separate [prepared audio return](../evidence/audio-return.md). |
 | [`obs.rs`](../../packages/splitcast-rs/src/obs.rs) configures OBS input decoding, composition and final encoding; [`media.rs::rnnoise`](../../packages/splitcast-rs/src/media.rs) feeds private production Pulse. | Existing dependencies implement the heavy production path. The software video mode is for the device-free fixture; hardware defaults do not establish competitive non-regression. |
 | [`tools/media_acceptance.py`](../../tools/media_acceptance.py) generates ingress on the production side. | It proves actual production integration only. It bypasses capture Agent, GSR acquisition and SSH. A stronger oracle does not expand that scope. |
 
@@ -78,7 +78,7 @@ Current follow-up changes are identified in [S22's receipt](../evidence/pr3-revi
 | Candidate/inventory | Reason to retain or consider | Missing evidence / cost |
 | --- | --- | --- |
 | Existing GSR → SSH/RTMP/RTSP → MediaMTX → OBS integration | Existing code and production-only receipts; no game injection. | Capture-side encode/load, privilege boundary, TCP head-of-line blocking, redundant stages and real two-host freshness. Not an optimality result. |
-| Configure/reuse a narrower existing capture, transport or audio-return facility | Can keep SplitCast thin; evaluate before custom infrastructure. | Environment inventory and capability/security/failure fit first. No particular protocol or TTS engine approved. |
+| Configure/reuse a narrower existing capture, transport or audio-return facility | Can keep SplitCast thin; evaluate before custom infrastructure. | Compare any replacement against the tested VOICEVOX return, its expiry behavior and the selected physical sink before proposing another protocol or engine. |
 | Secure datagram transport or minimal custom hot-path component | S04 proposed a comparison if TCP or acquisition costs are a proven limiter. | A proposal only; clock, loss, queue, security and resource contracts would need evidence. Do not build before establishing the bottleneck. |
 | Game-side capture hook or silent renderer/portal substitution | Historically considered, then rejected for the working scenario. | S02 records an EGL-export-path crash, not a proven Mesa root cause. Portal may break scanout; neither is a transparent fallback. |
 
@@ -92,7 +92,7 @@ Current follow-up changes are identified in [S22's receipt](../evidence/pr3-revi
   success used neither Agent nor OBS. Keep direction, owner and cleanup attached.
 - S06/D05 retired Python and refused incomplete live speech; this did not retire
   the user's bidirectional requirement. Historical rollout permissions expired
-  with their task. D15 below revisits product scope without enabling anything.
+  with their task. [D15](decisions.md#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return) records that scope correction.
 - S20 disproved software-mode device isolation and phase-fit timing. Current
   review found header FPS and overall audio-presence ratios insufficient. Test
   the observed output, not the control acknowledgement or a nominal setting.

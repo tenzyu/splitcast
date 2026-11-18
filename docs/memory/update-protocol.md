@@ -53,7 +53,7 @@ should update the minimum current index and risk pointers while leaving the
 original evidence ledger and historical snapshots intact.
 
 When a live source contradicts a stale current paragraph, document the dated
-supersession immediately in the cold-start capsule. Never rewrite the historical
+supersession on the affected concept page. Change the cold-start capsule only when a durable constraint or its retrieval route changes. Never rewrite the historical
 observation to imply it had always been correct. For uncertain CI fixes, link
 the specific failing run and candidate PR; upgrade to PASS only after the exact
 amended commit is verified.
@@ -62,3 +62,14 @@ For automated change detection, use the
 [incremental Dreaming workflow](dreaming.md#incremental-proposals).
 Treat a saved proposal as a review input. Add a review baseline only after
 reconciling the exact page and declared sources with the durable evidence.
+
+## When a proposal moves
+
+The [proposal snapshot](proposed-revisions.md) records what was knowable on its date. The local provenance scan compares declared files. A green scan cannot see a PR retarget, closure, force-push or merge on GitHub. On a relevant change, inspect the affected PR and its stack neighbor:
+
+```sh
+gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid,mergeCommit,mergedAt
+git ls-remote origin refs/heads/main 'refs/pull/18/head' 'refs/pull/19/head' 'refs/pull/20/head'
+```
+
+Read the merge commit on main and compare the actual functions/tests with the pinned proposal, including squash merges. A new head invalidates the old head as a description of the live proposal. A change to #19's base, head or merge state also requires checking #20's base and its contract dependency. Preserve the earlier CI run, tested tree and failed observations. Amend the relevant row and source ID, then adjust the affected domain page and its exact local dependencies in [provenance](provenance.json). Once files land, replace proposal-only lookup routes with main paths. Update physical state only with a matching host receipt. If recording a provenance review after a squash, use commits reachable from the new main for both reviewed source and evidence. The scanner verifies their ancestry. Use the [incremental scan and optional proposal](../convergence.md#wiki-maintenance) on the new tree.

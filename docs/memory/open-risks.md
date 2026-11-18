@@ -8,7 +8,7 @@ sources:
 ---
 # Open risks
 
-## Current follow-up on PR #16
+## Remaining physical gates after merged PR #16
 
 R01 and R04 retain whole-frame gameplay and input timing, physical A/V
 alignment, and camera age. The two-host recording and public archive now
@@ -28,10 +28,16 @@ run remain unverified.
 [OBS comparison](../evidence/pr16-obs.md) · [Stop and rollback](../operations.md#stop-and-rollback)
 
 R03 retains full-session physical speech return. The refreshed Twitch trial
-delivered a phrase in speech-only mode. The public game trial observed
-admission without completing synthesis before Stop. R07's current client
+delivered a phrase in speech-only mode. The public game trial recorded
+admission with no observed synthesis completion or confirmed playback before Stop. R07's current client
 regression passed through authenticated CLI, terminal and browser clients.
 [Verification](../verification.md)
+
+**Next discriminating evidence.** Hardware display acceptance first needs a separately approved, recoverable display path. A working Weston NVIDIA renderer and NVENC capability probe coexisted with OBS EGL initialization failure. Replaying the privileged Xorg attempts risks another kernel hang. Use the device-free [generated observer or native Wayland focus fixture](proposed-revisions.md) for questions those tests already answer. For hardware acceptance, identify the actual OBS renderer, active encoder and per-input hardware decode, then measure a valid post-warmup window (≤1% late renders). For gameplay, collect replay-aligned all-frame OFF/ON/OFF p99 (≤1 ms increase) and continuous scanout/audio evidence. For age and phase, require unique decoded game/camera and audio markers on a calibrated reference with uncertainty. Missing instruments or permission leave the corresponding gate open. [NVIDIA diagnosis](../evidence/pr16-obs.md#nvidia-path) · [Failure and recovery](../evidence/pr16-managed-acceptance.md#failures-and-cleanup) · [Proposed finite measurement procedure](https://github.com/tenzyu/splitcast/blob/5485ca89ca44259f10c7c2e1282841c35a7dce0f/docs/operations.md#finite-matched-acceptance)
+
+### Stop admission and release
+
+On main at `e92b5db`, Stop advances the admission generation and fences work already queued. HTTP 202 admits intent. Require completed Idle for that same `stop_id`, matching owner proof and a cleared capture-side `remote_release_pending`. A new Prepare can displace the observation. A lost or superseded proof leaves the prior outcome unknown, even if the new session later reaches Idle. Observe status and coordinate request sources before another mutation. Verify workers, owned output inactivity, OBS wait status and any route, listener or cgroup residue independently. The earlier finalized recording followed by SIGSEGV explains why file integrity alone is insufficient. [Stop and rollback](../operations.md#stop-and-rollback) · [Replay and observability limits](../virtual-control-design.md#ephemeral-observation-and-replay-limits) · [Two-Agent lost-reply and replay tests](https://github.com/tenzyu/splitcast/blob/e92b5db390835041b33de46618c49d5f98cad9cf/packages/splitcast-rs/tests/two_agents.rs#L570-L690)
 
 The dated records below describe their original source and observations.
 Evidence IDs resolve in [the register](evidence.md).
@@ -202,7 +208,7 @@ to reopen completed CI/cache delivery or to describe merged PRs as unmerged.
 [PR #2](https://github.com/tenzyu/splitcast/pull/2) merged at `6349fd6` and
 [PR #3](https://github.com/tenzyu/splitcast/pull/3) merged at `a5e7a22`.
 Their merge changes source availability, **not** the acceptance scope for R01–R09.
-The [Dreaming correction ledger](dreaming.md#current-correction-ledger-2026-11-17)
+The [Dreaming correction ledger](dreaming.md#retained-corrections-that-must-not-be-lost)
 records the current pointers and preserves the original dated observations.
 
 A later [PR #5 CI run](https://github.com/tenzyu/splitcast/actions/runs/44089362405)
