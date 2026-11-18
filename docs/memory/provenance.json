@@ -44,7 +44,7 @@
     },
     "docs/memory/poc-mission.md": {
       "kind": "current",
-      "sources": ["README.md", "docs/design-review.md"]
+      "sources": ["README.md", "docs/design-review.md", "docs/evidence/real-voicevox-physical-return.md", "docs/memory/proposed-revisions.md"]
     },
     "docs/memory/session-state.md": {
       "kind": "current",

@@ -28,8 +28,8 @@ run remain unverified.
 [OBS comparison](../evidence/pr16-obs.md) · [Stop and rollback](../operations.md#stop-and-rollback)
 
 R03 retains full-session physical speech return. The refreshed Twitch trial
-delivered a phrase in speech-only mode. The public game trial observed
-admission without completing synthesis before Stop. R07's current client
+delivered a phrase in speech-only mode. The public game trial recorded
+admission with no observed synthesis completion or confirmed playback before Stop. R07's current client
 regression passed through authenticated CLI, terminal and browser clients.
 [Verification](../verification.md)
 
