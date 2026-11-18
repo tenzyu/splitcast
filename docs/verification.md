@@ -8,6 +8,315 @@ The [audio return receipt](evidence/audio-return.md) records the two-Agent softw
 
 [S33](evidence/dreaming-retrieval-20261118.md) records the source identities, two-reader comparison, documentation checks and their limits. The [question set and scoring criteria](evidence/retrieval-questions.md) are for evaluation outside normal startup.
 
+## 2026-11-18 Studio control contract (A)
+
+The [A-to-B contract](studio-control-contract.md) was pinned at
+`df0768f3f8076ced0e3214170ea3113d4459c40d` over
+`e92b5db390835041b33de46618c49d5f98cad9cf`. The implementation uses real
+local Agent HTTP endpoints, synthetic EventSub notifications, and
+authenticated OBS WebSocket stand-ins. The shared screenshot fixture fix is
+`bb3d5ea103c7510986aecce6278f2d5e51888e93` and makes both PNGs decodable.
+The wire contract is unchanged from the checkpoint.
+
+| Exact command | Observed result |
+| --- | --- |
+| `direnv allow` | Exit 0 after reviewing the existing bounded devShell entrypoint. Checks below used explicit Nix wrappers. |
+| `nix develop -c python3 tools/ci/convergence.py init "$contract" --accept "$reviewed_sha256"` | First enrollment blocked with exit 2 because the manual gate keys differed from the three required acceptance axes. Corrected the unregistered JSON and enrolled the owner-only work unit `studio-control-contract-a` with digest `ba0dba0fd88288b8654410c958a0c6cd247daabce71bcda6b915319334f8c146`. |
+| `nix develop -c cargo fmt --all` | Initial formatting attempts failed on a misplaced EventSub module comment (E0753) and a malformed scene reload edit. Both were corrected. Subsequent formatting and verifier fmt checks exited 0. |
+| `nix develop -c cargo check --workspace --all-targets --locked --offline` | Exit 0 on intermediate source, with an unused synthetic source warning before the regression tests were connected. |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline studio_ -- --nocapture` | First completed run passed four tests. The next passed five, including the capture-to-production forwarding and withheld OBS acknowledgment Stop case. Earlier compound fmt/test commands short-circuited on fmt failures, so tests did not run in those attempts. |
+| `nix develop -c ffmpeg -nostdin -v error -xerror -i "$fixture_dir/studio-fixture-1.png" -i "$fixture_dir/studio-fixture-481.png" -map 0:v -map 1:v -f null -` | Exit 0 decoding both exact generated PNG byte sequences from the owner-only temporary fixture directory. The 1×1 and 481×1 RGBA scanlines inflate to 5 and 1,925 bytes, respectively. |
+| `nix develop -c cargo run -p splitcast-rs-core -- validate --config packages/splitcast-rs/example.toml` | Exit 0, `valid:true` for capture. |
+| `nix develop -c cargo run -p splitcast-rs-core -- validate --config packages/splitcast-rs/example-production.toml` | Exit 0, `valid:true` for production. |
+| `python3 tools/ci/check_docs.py` | Exit 0 on the implementation checkout, with 50 Markdown files, 260 local links, zero broken links and zero OKF issues. |
+| `git diff --exit-code e92b5db390835041b33de46618c49d5f98cad9cf -- flake.nix nix/modules` | Exit 0. The migration gate and manual service definitions match the pinned base. This is a source comparison. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Initial exit 1 at `d3829cb6dcb375f34227f7a12cb381f63cc5a14b`. Clippy exited 101 on `clippy::question_mark`. The other nine checks passed. Worktree receipt `attempt-000001`, artifact `artifacts/verification/runs/1794983956294301680/`. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all 10 checks passed at `231ad1154a7628b6f8c8e2cab8f483e2c1cec405` with the decodable screenshot fixture. Workspace tests and no-default-features each included the five A regressions and the existing CLI, TUI and Web control fixtures. Worktree receipt `attempt-000002`, artifact `artifacts/verification/runs/1794984271591672491/`. |
+
+The targeted cases cover chat with speech off, independent fan-out, unchanged
+speech text and expiry, duplicate handling, UTF-8 limits, history gaps and
+Stop under concurrent reads. Scene cases cover bearer and owner rejection,
+generation races, the observed canvas and source geometry, legacy and small
+preview, OBS reply loss and partial effects, readback, save failure, reload
+and Agent restart. The forwarding case measured Stop admission within the
+500 ms fixture assertion and separately observed completion and cleanup.
+
+Live Twitch, physical devices and A/V, production OBS rendering and frame
+age, matched gameplay and hardware render performance, real two-host
+recovery, package builds, post-rename directory sync fault injection, and
+deployment were not run for A. The optional Chromium integration and
+`verify-virtual` and `verify-media` were not run. The test worker simulates
+OBS state and screenshot responses. The physical gates in the
+[session state](memory/session-state.md) remain open.
+
+### Two-Agent Prepare timeout follow-up
+
+[Hosted `verify` job 134632547127](https://github.com/tenzyu/splitcast/actions/runs/44254418762/job/134632547127)
+failed `sigterm_running_capture_releases_both_agents_workers` during Prepare.
+The GitHub merge checkout `badb5010b52d88b0a94b7ecce8fd4256b768b760`
+had tree `7038774c9099c42f187d2cd274c4c66ce5b05162`, identical to PR head
+`8557945d9c8a35732014f2a766c2e45e2fc348cc`. The retained `tests.log` shows
+HTTP 409 with an unknown outcome after transmission began and an operation
+I/O deadline error. The MediaMTX stand-in log was outside the upload allowlist.
+
+| Exact command | Observed result on `8557945d9c8a35732014f2a766c2e45e2fc348cc` |
+| --- | --- |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline --test two_agents sigterm_running_capture_releases_both_agents_workers -- --exact --nocapture` | Exit 0, one passed on the clean checkout. |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline --test two_agents -- --nocapture` | A clean standalone suite passed 16 tests with four ignored. Four concurrent invocations of the same suite produced two passes and two failures. Two fixtures in one test process chose MediaMTX port 40713. One stand-in failed its bind with `EADDRINUSE`; its Agent accepted the other fixture's readiness response. A separate collision failed an OBS Start. |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline --test two_agents -- sigterm_running_capture_releases_both_agents_workers reproduce_prepare_timeout_with_fixture_port_taken --nocapture` | The saved test-only patch retained the old allocator. Its new exclusivity assertion failed because the receiver port was free to bind. A second test took that port with a loopback listener and reproduced the hosted 409 text, confirmed `EADDRINUSE` in the worker, and verified explicit Stop, production Idle, and released workers. The overall invocation exited 101. |
+
+The fixture now keeps each loopback port assigned through both Agents'
+teardown. A bound socket without a listener holds the port out of automatic
+allocation and `SO_REUSEADDR` permits the assigned worker to bind it. The
+SIGTERM regression checks the reservation before Prepare and still checks
+that workers and listeners are gone after shutdown. The captured failure
+establishes this local cause for the same 409; the initial hosted job lacks
+worker evidence to establish its exact cause. Local raw logs, the temporary
+patch, and the original hosted upload are under `artifacts/pr-19-prepare/`.
+
+## 2026-11-18 SplitCast Studio Native (B)
+
+Stack base is `feat/studio-control-contract` at
+`8557945d9c8a35732014f2a766c2e45e2fc348cc`, the published head of
+[draft PR #19](https://github.com/tenzyu/splitcast/pull/19) into `main`.
+B was enrolled from contract checkpoint `df0768f3f8076ced0e3214170ea3113d4459c40d`,
+integrated locally, then replayed on the published implementation including
+the valid generated PNG fixture. The checked B code and fixture are
+`0d9f6f0fd935aa9ac1f5b41a246650c4f3298a13`, tree
+`f944c9d94e99b365aa787b1419c947b2c7f519e6`. This evidence entry was added
+after the checks. The comparison against #19 contains the optional Studio
+package, its flake entry points, and this record.
+
+The owner-only worktree contract `splitcast-studio-published-a-b` has
+digest `c94dadfc436c5e18013c3de76ecb5d17be97991c47d9ebfb567a3e00f3db59ad`.
+The clean source snapshot was
+`7124ed3aa27b9bc344d357507640f8b39b9b0377116da51a1edc5a432eaa1dcf`.
+The convergence scope had no violations. A repeated GUI check in the same
+shell reused `attempt-000011` without launching the fixture again.
+Physical functional, gameplay and operational gates are still unverified.
+
+| Exact command | Observed result |
+| --- | --- |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all 10 checks passed. Convergence `attempt-000004`, xtask `artifacts/verification/runs/1794986387669825093`. The earlier run at `1aca148` also passed all 10, in run `1794984782703905050`. |
+| `nix develop .#studio -c cargo fmt --manifest-path packages/splitcast-studio/Cargo.toml -- --check` | Exit 0, `attempt-000003`. |
+| `nix develop .#studio -c cargo clippy --manifest-path packages/splitcast-studio/Cargo.toml --all-targets --locked -- -D warnings` | Exit 0, `attempt-000005`. |
+| `nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked` | Exit 0, 5 passed. Covers current Start ID and Live confirmation, Stop proof, hidden/stale reads, chat bounds, and oversized PNG rejection. `attempt-000006`. |
+| `nix flake check --no-build` and `nix flake check` | Both exited 0. Evaluation emitted the existing `homeManagerModules` output warning. The full check built the native package and validated configurations. Evaluation receipt `attempt-000007`. |
+| `nix develop -c python3 tools/ci/check_docs.py` | Exit 0, `attempt-000008`. |
+| `nix develop -c cargo audit --file packages/splitcast-studio/Cargo.lock` | Exit 0, no vulnerability findings in the database used. Seven unmaintained dependency warnings: `bincode`, `chrono`, `pin-utils`, `ttf-parser`, `zbus_names`, `zvariant`, and `zvariant_derive`. `attempt-000009`. The earlier GPUI lock audit exited 0 with 14 unmaintained warnings. |
+| `nix build .#splitcast-studio --no-link` | Exit 0 for both candidates on their respective source. Slint receipt `attempt-000010`. |
+| `nix run .#splitcast-studio -- --help` | Exit 0, printed `--token-file`, `--port`, and optional `--agent-port` usage. |
+| `nix eval --raw "git+file://$PWD?rev=$base#packages.x86_64-linux.default.drvPath"` and `nix eval --raw .#packages.x86_64-linux.default.drvPath` | With `base` set to A's full published SHA, the Agent's default derivation matched exactly (`vs4s8i1vy2s79pmn2m5h4mx2fn4sr73d`). |
+| `nix develop -c cargo run -p splitcast-xtask -- portability` | Exit 0. |
+| `nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py` | Exit 0 on Slint, `attempt-000011`. Confirmed HTTP 202 Stop admission followed by matching completed Idle and production release. Sampled four preview requests, with minimum gap 1.200 s. |
+| `nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py "$(nix path-info .#splitcast-studio)/bin/splitcast-studio"` | Exit 0 using the Nix package binary. Repeated the GUI workflow, HTTP 202 and matching completion, and the 1.200 s minimum preview gap. |
+
+### Release GUI measurements
+
+The harness ran on Linux 6.18.63 x86_64 with Rust 1.95, one private
+authenticated Xvfb 21.1.24 X11 screen at 1440 × 920 × 24 per run, DejaVu
+fonts, and approximately 1110 × 780 Studio windows. It focused the window
+with `xdotool`, connected through an authenticated loopback relay to a real
+Idle production Agent with a camera draft, and applied a local overlay
+draft before sampling. Each run settled for three seconds and sampled
+`/proc/PID/smaps_rollup` once per second for 20 samples, with process
+user plus system ticks from `/proc/PID/stat` divided by elapsed wall
+time and `SC_CLK_TCK`. CPU is a percentage of one logical core. Renderer
+traces count GPUI root renders or Slint Winit `RedrawRequested` events.
+The idle sample covers a focused window after Apply, with keyboard focus
+out of text editing. The normal platform caret while editing is outside
+that sample. Local build activity was present during the first GPUI and
+Slint runs.
+
+| Artifact and backend | Elapsed | Idle PSS range | Idle CPU | Idle redraws |
+| --- | ---: | ---: | ---: | ---: |
+| Cargo release GPUI 0.2.2, X11 Blade/Vulkan on Mesa 26.1.8 llvmpipe (LLVM 21.1.8, `LP_NUM_THREADS=2`), `1aca148` | 20.073 s | 103.858–134.346 MiB | 0.448% | 0 |
+| First Cargo release Slint 1.19.0, X11 Winit software, `4189edf` | 20.025 s | 20.447–20.494 MiB | 0.100% | 0 |
+| Checked Cargo release Slint 1.19.0, X11 Winit software, `0d9f6f0` | 20.016 s | 20.728–20.761 MiB | 0.100% | 0 |
+| Nix package Slint 1.19.0, X11 Winit software, `0d9f6f0` | 20.020 s | 20.888–20.888 MiB | 0.100% | 0 |
+
+GPUI exceeded the 80 MiB PSS limit in every sample. Slint fits all three
+idle targets in this display fixture and is the sole Studio implementation
+in the final tree. The published GPUI crate enables Blade for the X11 and
+Wayland backends. Slint is explicitly built and selected for Winit software
+rendering. [GPUI 0.2.2 features](https://docs.rs/crate/gpui/0.2.2/features) ·
+[GPUI upstream Linux notes](https://github.com/zed-industries/zed/tree/main/crates/gpui) ·
+[Slint 1.19.0 Cargo features](https://github.com/slint-ui/slint/blob/v1.19.0/api/rs/slint/Cargo.toml) ·
+[Slint attribution terms](https://github.com/slint-ui/slint/blob/v1.19.0/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md)
+
+### GUI evidence and limits
+
+- A direct production connection preserved a draft edited before connection,
+  applied it in Idle, and applied a camera-guide drag in canvas pixels.
+  The two-Agent portion used matching camera-free configurations and stayed
+  on private loopback through local stand-ins. The relay preserved the
+  Agent's original Host and Origin port while using a different local
+  connection port.
+- The client selected Live without dispatch and then started Recording with
+  the current Start ID. The owned OBS stand-in produced a valid generated
+  PNG. Requests stopped with the editor hidden, the preview hidden, and
+  after Stop. The visible chat cursor used the authenticated route and
+  consumed a single injected relay delta. Hidden chat made zero requests.
+  Empty deltas and static snapshots produced zero redraws over a further
+  4.2 s window during Recording.
+- An external generation change produced a conflict and preserved the local
+  edit. An explicit Apply, OBS reconciliation, Save and Reload verified the
+  draft/readback/saved states. A dropped response produced unknown outcome
+  before a fresh observation. A delayed Apply response arrived after Stop
+  and left the earlier operation unconfirmed. Status and a simultaneous
+  second Stop reached the Agent while Apply was pending. The fixture
+  observed matching completed Idle, released remote ownership, inactive
+  owned output, exited stand-ins, and disconnect presentation.
+
+The first checkpoint enrollment rejected noncanonical manual-axis names
+(exit 2). Enrollment with the repository's three axis names succeeded.
+The local integration GUI attempt initially stopped at Python import due to
+an HTTP helper shadowing `http.server`
+(`splitcast-studio-integration-local-a-b/attempt-000001`).
+On the first published-base GUI run, GPUI completed the idle sample and the
+fixture later timed out waiting for Ready with camera configured on
+production only (`splitcast-studio-published-a-b/attempt-000001`).
+The passing Slint run separates the Idle camera draft experiment from the
+matching two-Agent Start configuration (`attempt-000002` at `4189edf`,
+then the tightened `attempt-000011`).
+
+Initial `nix develop .#studio -c cargo build --manifest-path packages/splitcast-studio/Cargo.toml --release --locked -j 6`
+failed because GPUI's `xattr 0.2.3` used the Linux `ENOATTR` alias removed
+from libc 0.2.191. The first
+`nix develop .#studio -c cargo update --manifest-path packages/splitcast-studio/Cargo.toml -p libc --precise 0.2.189`
+also failed because mio 1.2.5 required libc 0.2.190 or later. Pinning mio
+1.2.4 allowed the update. GPUI build retries with `--release --locked -j 8`
+then found GPUI API and a borrowed-label lifetime error before the release
+artifact compiled. Slint's initial
+`nix develop .#studio -c cargo build --manifest-path packages/splitcast-studio/Cargo.toml --release -j 8`
+failed on missing `fontconfig.pc`. The next locked run found the
+`LayoutAlignment.start` name collision. The final build passed after
+adding the build input and qualifying the enum.
+
+The GUI integration covers software rendering with stand-ins and an injected
+chat delta. A real upstream Twitch chat event, real OBS media and recording,
+Wayland window operation, physical devices, real SSH, and host rollout or
+recovery remain unrun. Miri, fuzzing and an independent Studio Cargo Deny
+configuration were not run. Existing Nix runtime gating and service
+activation require separate operator authorization. For rollback, close
+Studio and use the existing CLI, TUI or Web with explicit Stop and
+completion observation when needed. Revert B as a unit to remove Studio's
+optional entry points. Saved layouts and the running session are owned by A.
+
+### Native Wayland focus follow-up
+
+The worktree started clean at `04f60e32a8aaf6103a568000c231da53d35ffe5c`.
+Local merge `6a71b3bf618c0c6668e487c602653fdb7a193954` incorporates #19
+`51bd829d56169b930d60315d2682f0c4c6eec2f9` and preserves both earlier
+verification sections. The checks and GUI harness ran on clean checkout
+`fb847b8bc299aed18a11f0c122eec409a9546d0d`, tree
+`e34b61358bacd5b651e538085427fec588239e57`. The candidate Studio package
+was built from `aab9907d53ddb4be71c63ab66251d938a64580a5`.
+`nix path-info .#splitcast-studio` on the tested checkout selected the
+same package. The release ELF SHA-256 values are
+`09219610af6f2805952dabf657dc8a2350874b51f6073f31fe9059a5ebdde687`
+before and
+`9be436ec41a05aaed4a9e839a57375ae2704a81db4cbae31c32964a597656cc3`
+after. This verification entry follows the measured source.
+
+| Exact command | Observed result |
+| --- | --- |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all ten checks passed. Convergence `attempt-000014`, xtask `artifacts/verification/runs/1794992463672618093`. |
+| `nix develop .#studio -c cargo fmt --manifest-path packages/splitcast-studio/Cargo.toml -- --check` | Exit 0, `attempt-000009`. |
+| `nix develop .#studio -c cargo clippy --manifest-path packages/splitcast-studio/Cargo.toml --all-targets --locked -- -D warnings` | Exit 0, `attempt-000010`. |
+| `nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked` | Exit 0, six passed, including focus loss preserving read revisions and cadence and occlusion invalidating a pending read. `attempt-000011`. |
+| `nix flake check --no-build` | Exit 0, `attempt-000012`. |
+| `nix develop -c python3 tools/ci/check_docs.py` | Exit 0, `attempt-000013`. |
+| `nix eval --raw "git+file://$PWD?rev=$base#packages.x86_64-linux.default.drvPath"` and `nix eval --raw .#packages.x86_64-linux.default.drvPath` | Exit 0 with `base` set to confirmed #19. The default Agent derivations matched exactly at `zwsk90fgmac05rmpzfprdrjcbzipizj2`. |
+
+The convergence contract is `studio-wayland-release`, digest
+`f2a5acb757dd8268e82fbad2eea0f36dff0f1e17a7b8a4175fba49e3521d7040`.
+The exact GUI runs used the following commands and logged stdout and
+stderr in `artifacts/studio-wayland/{before,after}.log`.
+
+```sh
+studio_before=04f60e32a8aaf6103a568000c231da53d35ffe5c
+studio_after=aab9907d53ddb4be71c63ab66251d938a64580a5
+before_package="$(nix build "git+file://$PWD?rev=$studio_before#splitcast-studio" --no-link --print-out-paths)"
+after_package="$(nix build "git+file://$PWD?rev=$studio_after#splitcast-studio" --no-link --print-out-paths)"
+mkdir -p artifacts/studio-wayland
+nix develop .#studio-wayland-test -c python3 packages/splitcast-studio/tests/wayland.py --studio-binary "$before_package/bin/splitcast-studio" --studio-source "$studio_before" --focus-only --evidence artifacts/studio-wayland/before
+nix develop .#studio-wayland-test -c python3 packages/splitcast-studio/tests/wayland.py --studio-binary "$after_package/bin/splitcast-studio" --studio-source "$studio_after" --evidence artifacts/studio-wayland/after
+```
+
+Both Nix builds exited 0. The GUI used unprivileged headless Sway 1.12 at
+1740 × 920 with Pixman and Xwayland disabled, Slint 1.19.0 / Winit 0.30.13
+software rendering, and a separate foot 1.27.0 toplevel. The protocol
+record shows Studio creating an `xdg_toplevel` and `wl_shm` buffers,
+then Studio receiving `wl_keyboard.leave` and foot receiving
+`wl_keyboard.enter`. Sway reports both as visible native windows at
+disjoint rectangles before and after injection. The test forwarded Studio's
+cursor and bearer-authenticated request to the real local Agents before
+substituting the synthetic chat response. Preview loaded a generated
+480 × 270 PNG after an authorized stand-in OBS response.
+
+- **Before, exit 1.** After handoff, the injected row 129 produced zero
+  chat requests and zero preview requests during the six-second observation.
+  The chat crop stayed pixel-identical, with row 128 still first.
+- **After, exit 0.** During the same handoff, one chat request and two
+  preview requests preceded the after capture. Studio rendered row 129
+  first, with 128 rows retained and focus still on foot. Across 53 request
+  intervals the shortest preview gap was 1.1999 s. The hidden preview and
+  editor, hidden chat, and post-Stop intervals each had zero relevant read
+  requests.
+- The candidate completed the full Wayland workflow. Output selection alone
+  sent no Start. Recording required the explicit Start. Camera drag, scene
+  conflict, Apply, OBS readback, Save, Reload, a lost reply and a late reply
+  were observed through two real Agents with stand-in workers. Stop returned
+  HTTP 202 during the held Apply. Studio displayed admission and later
+  observed completed Idle with the same stop ID and
+  `remote_release_pending=false`. Production was Idle and its owned
+  output and workers were gone.
+
+Each resource sample followed three seconds of warmup and covers 20
+one-second PSS readings from `/proc/PID/smaps_rollup`. CPU uses process
+user and system ticks divided by elapsed wall time and clock ticks per
+second. It is the percentage of one logical core attributable to Studio.
+
+| Studio workload | Elapsed | PSS range | CPU | Redraws |
+| --- | ---: | ---: | ---: | ---: |
+| Before, Idle | 20.019 s | 22.119–22.160 MiB | 0.100% | 0 |
+| After, Idle | 20.024 s | 22.151–22.198 MiB | 0.050% | 0 |
+| Before, focused with 128 chat rows and preview | 20.026 s | 24.506–24.581 MiB | 0.250% | 0 |
+| After, focused with 128 chat rows and preview | 20.023 s | 24.510–24.589 MiB | 0.250% | 0 |
+| After, unfocused with 128 chat rows and preview | 20.023 s | 21.499–21.553 MiB | 0.200% | 0 |
+
+The candidate met the 80 MiB PSS and 0.5% one-core Idle targets. Loaded
+samples used static content while reads continued. The PSS of the
+unfocused run includes library sharing with the second native process.
+These samples represent the isolated headless workload.
+
+Raw evidence lives under `artifacts/studio-wayland/`. Each final run
+contains its source manifest, Wayland and renderer traces, compositor
+trees, full screenshots, chat crops, request intervals, and resource
+samples. Earlier nonpassing runs were retained. `baseline-attempt-01`
+lacked the virtual pointer, `baseline-attempt-02` and `-03` typed a
+literal `a` with the virtual keyboard, and `baseline` delivered the
+drag destination after button release. `baseline-native` and
+`baseline-focus` observed an earlier Apply label. `baseline-focus-final`
+and `candidate-focus` stopped at 128-row setup because the initial
+synthetic epoch was invalid upstream. The final fixture forwards a
+protocol-valid 32-hex epoch. An unfiltered offline Cargo metadata probe
+failed on an uncached Android dependency. The initial parallel
+convergence launch encountered the runner lock. Clippy attempt
+`000002` rejected a nested match, which was fixed. The earlier verifier
+and Studio unit test commands exited 0 but their convergence snapshots
+changed during the runs. Attempts `000011` and `000014` establish
+the later stable results.
+
+Pinned Winit provides no compositor-driven occlusion observation on
+Wayland. The client gates on Slint window visibility, explicit panel
+visibility, and occlusion events on backends that report them. Current
+X11, physical gameplay and capture, real OBS/Twitch, and deployment
+remain outside this run. For code rollback, close Studio or revert the
+focus follow-up in a reviewed change. Session control and cleanup remain
+with the Agent.
+
 ## 2026-11-18 convergence harness integration
 
 | Exact command or profile | Observed result |
@@ -173,3 +482,123 @@ display. Bound a live decoded freshness envelope and independently align the
 physical mic and game stream. The managed private and public trials at `d9b0948` already observed OBS exit 0. Real-capture fault recovery and equivalent packaged-build evidence retain their own gates. [Current gates](memory/session-state.md)
 
 **Provenance:** [ID register](memory/evidence.md) · [real media receipt](evidence/media-plane-20261115.md) · [PR #3 oracle review](evidence/pr3-review-20261117.md) · [PoC convergence](evidence/poc-convergence-20261117.md) · [S26](evidence/dreaming-main-20261117.md) · [archived full log](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/verification.md).
+
+## 2026-11-18 runtime performance and operational acceptance (C)
+
+The worktree started at `e92b5db390835041b33de46618c49d5f98cad9cf`.
+The owner-only convergence contract `runtime-acceptance-c` has SHA-256
+`9a38c679e0a5a523e7c8a8c7eca92cd9992d29b41c1f0a11ece118068cf6d957`.
+The completed measurement implementation is
+`dc730aa2cd3892b16ce97552e874d060a71a82bf`, convergence snapshot
+`a6944958d0dd803719091cd816e3972e11d635bf2dd7db737f2416a40e5acfec`.
+The earlier implementation `9a037b2ccb8e9cacf7f413f185e0651f3036ffe3`
+used snapshot `9eb67ff280ad9244d84a1ebf1b1f2814a79abf808e4d706691ed0214dfbcbf76`.
+The evidence append changes documentation only.
+Private `attempt-*.json` and logs are under the worktree's Git metadata.
+
+| Exact command | Result |
+| --- | --- |
+| `direnv allow` | Exit 0 after reviewing `.envrc`. Checks below used the explicit Nix wrapper. |
+| `nix develop --no-write-lock-file .#media-test -c bwrap --unshare-all --die-with-parent --new-session --ro-bind /nix/store /nix/store --dev /dev --proc /proc --tmpfs /tmp -- bash -c 'test ! -e /dev/dri && test ! -e /dev/snd'` | Exit 0 from the preliminary unprivileged namespace probe. |
+| `nix develop --no-write-lock-file .#media-test -c python3 -c 'from inspect import signature; from websockets.sync.client import connect; print(signature(connect))'` | Exit 0 on the pre-commit media shell. The pinned client is websockets 16.0. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Earlier commit exit 0, 10/10 checks (`attempt-000002`, verifier run `1794983560056512408`). At the completed implementation, first exit 1, 8/10 checks (`attempt-000008`, run `1794984033172964580`). Same-source retry exit 0, 10/10 checks (`attempt-000014`, run `1794984411693602261`). Rust 1.95.0, x86_64 Linux. Exact Cargo commands and exits are in each `artifacts/verification/runs/<run>/summary.tsv`. The ordinary verifier left opt-in integrations ignored. |
+| `nix develop --no-write-lock-file .#media-test -c python3 -m unittest discover -s tools -p test_media_acceptance.py -v` | Exit 0, 20 tests on the earlier implementation and 21 on the completed implementation. Receipts `attempt-000003` and `attempt-000009`. |
+| `bash -n tools/verify-media.sh` | Exit 0 before commit and in receipts `attempt-000004` and `attempt-000010`. |
+| `python3 tools/ci/check_docs.py` | Exit 0 before commit and in receipts `attempt-000005` and `attempt-000011`. 49 Markdown documents, 267 local links, zero broken links and OKF issues at the implementation commit. |
+| `git diff --check` and `git diff --cached --check` | Exit 0 during pre-commit review. |
+| `git diff --check e92b5db390835041b33de46618c49d5f98cad9cf` | Exit 0. Receipts `attempt-000006` and `attempt-000012`. |
+| `nix develop --no-write-lock-file .#media-test -c cargo run -p splitcast-xtask -- verify-media` | Pre-commit exit 0, 20 oracle tests and all seven device-free cases. Receipt `attempt-000001`, media run `20261118T062616Z-mFWYuCDV`. Earlier clean implementation exit 0, 20 tests and seven cases, receipt `attempt-000007`, run `20261118T063501Z-8JI0gF3j`. The identical clean snapshot reused that receipt. Final implementation exit 0, 21 tests and seven cases, receipt `attempt-000013`, run `20261118T064143Z-uQwvIGaN`. Media receipts are under `artifacts/media-plane/runs/`. |
+
+After the evidence append, `python3 tools/ci/check_docs.py` exited 0 with
+49 Markdown documents, 271 local links, zero broken links and OKF issues.
+`git diff --check e92b5db390835041b33de46618c49d5f98cad9cf` exited 0,
+and the worktree scope check found no violations.
+
+At `attempt-000008`, `cargo test --workspace --locked --offline` exited
+101. In `completed_stop_is_not_a_cross_host_prepare_replay_fence`, Prepare
+returned 409 with `external service readiness timeout`. The test-owned
+MediaMTX stand-in logged `AddrInUse` in
+`artifacts/verification/two-agents-165649-0/production/mediamtx.log`.
+`cargo test --workspace --no-default-features --locked --offline` also
+exited 101. The OBS mock test
+`obs::tests::compound_configuration_uses_one_operation_budget` timed out
+at connect with `OBS control deadline exceeded`. The Rust sources match
+the base for both tests. No cause was established for the OBS deadline miss.
+
+### Generated OBS and age observations
+
+Media source manifest `0af9414f5323eb46effea4ab4d7d99b84e7393e51f2926515f23e3d0df55100d`, Agent SHA-256
+`2ac7a71f86c99fb26ea0dd319d18ae24e88c4f62fe4c00ebf90cb85a83147eb0` and OBS closure inventory SHA-256
+`be96d04d6f1e4925dcbd924e9446efdf8e7d33db34b5db1ecaf7bd39abefe712`. The private namespace entered with only
+loopback and no physical media devices. OBS 32.1.2 ran with Xvfb/Mesa
+llvmpipe, x264 and software input decode at 1280×720/30 fps. The launcher
+matched its host source receipts before and after. Each observed recording
+kept ten authenticated snapshots from one OBS instance including a
+Running sample, a warm baseline 2.001–2.009 seconds after the Running
+observation and 7.995–8.002 seconds of steady sampling before Stop or
+injection.
+
+| Case | Late render / attempts | Output skips / attempts | Non-skipped output frames | Scene age max lower–upper, seconds |
+| --- | ---: | ---: | ---: | --- |
+| normal | 38/240 (15.83%) | 0/241 | 241 | 1.997–2.164, WITHIN_LIMIT |
+| camera | 1/240 (0.42%) | 0/240 | 240 | 1.345–1.523, WITHIN_LIMIT |
+| frozen | 5/241 (2.07%) | 0/240 | 240 | 18.553–18.652, STALE |
+| delay | 0/240 (0.00%) | 0/240 | 240 | 4.992–5.145, STALE |
+| disconnect | 17/240 (7.08%) | 0/240 | 240 | 1.142–1.339, WITHIN_LIMIT |
+| stall | 0/240 (0.00%) | 0/240 | 240 | 1.177–1.323, WITHIN_LIMIT |
+| worker-death | 0/240 (0.00%) | 0/240 | 240 | 1.539–1.689, WITHIN_LIMIT |
+| worker-death recovery | 0/240 (0.00%) | 0/240 | 240 | 1.878–2.029, WITHIN_LIMIT |
+
+The frozen game feed's ingress advanced from 197,648 to
+332,482 bytes, and the delay feed from 208,519
+to 396,403 bytes, increasing at all ten observations.
+The independently decoded frozen recording rejected
+`frozen content progression gap` after the cadence check. The delayed
+recording decoded to EOF with 11.8
+seconds of content progression. Both scene-age lower bounds exceeded the
+three-second fixture ceiling. The negative cases pass by detecting stale
+content while the Agent still reports output progress. Its production
+control has no trusted age signal.
+
+The first full run measured 124/240 late renders on the worker-death
+recovery recording with 0/241 output skips. The next clean run measured
+8/240 late renders in the camera case with 0/240 output skips, and 0/240
+late renders on recovery. These are software observations. The earlier
+physical 117/645 render failure, SIGSEGV and Xorg service Stop timeouts
+remain recorded. [PR #16 OBS evidence](evidence/pr16-obs.md) ·
+[Physical and recovery evidence](evidence/pr16-managed-acceptance.md)
+
+The normal and camera recordings independently decoded to EOF and
+confirmed inactive OBS output, exit code 0, and release of the owned OBS
+PID and loopback listener. Across the cases, the fixture recorded no
+cleanup errors or fallback SIGKILL in `cleanup.json`. The worker-death
+case intentionally killed the owned RNNoise process to test recovery.
+Routine fixture teardown terminated the owned Agent and Xvfb. Namespace
+execution returned 0. These receipts cover isolated fixture cleanup.
+Service cgroup release on the intended hosts remains a separate gate.
+
+
+### Gates left open
+
+- NOT RUN on the intended hardware. The fixed osu! replay OFF/ON/OFF
+  gameplay p99 delta, continuous Direct Scanout, local game audio, and
+  input latency need source-bound instrumentation. The historical
+  discrete samples keep their original scope.
+- BLOCKED on hardware preflight. OBS renderer, active NVENC, hardware
+  decode of each input, and the ≤1% post-warmup late-render gate remain
+  unverified on the production host. The failed physical Xorg path was
+  excluded from this work.
+- NOT RUN for physical game/camera frame age, physical A/V marker alignment,
+  and a real on-air EventSub → VOICEVOX → capture-side physical return.
+- NOT RUN for owner-specific Stop, output inactivity, normal OBS exit,
+  process/listener/cgroup release, and fault recovery on the intended
+  hosts with this source.
+- NOT RUN for `verify-virtual`, a standalone Nix package build,
+  `nix flake check`, Miri, and fuzzing in this work unit. The device-free
+  checks above cover the scoped measurement oracle and packaged media
+  path. No deployment or system-generation change was authorized or
+  performed.
+
+Keep the runtime candidate and autostart disabled. See the bounded
+[physical acceptance procedure](operations.md#finite-matched-acceptance)
+and [current gates](memory/session-state.md).

@@ -1,5 +1,6 @@
 pub mod agent;
 mod audio;
+mod chat;
 pub mod config;
 pub mod control;
 pub mod http;
@@ -9,6 +10,7 @@ mod obs;
 pub mod poc_speech;
 pub mod process;
 pub mod protocol;
+mod scene;
 pub mod state;
 mod tts;
 mod workers;

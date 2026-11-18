@@ -6,6 +6,7 @@
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
     splitcast = pkgs.callPackage ./packages/splitcast-rs {};
+    studio = pkgs.callPackage ./packages/splitcast-studio {};
     voicevoxPkgs = import nixpkgs {
       inherit system;
       config.allowUnfreePredicate = package: pkgs.lib.getName package == "voicevox-onnxruntime";
@@ -25,6 +26,7 @@
       splitcast-obs = splitcast.obs;
       splitcast-obs-stock-candidate = pkgs.obs-studio.override {browserSupport = false;};
       splitcast-voicevox = voicevoxPkgs.voicevox-engine;
+      splitcast-studio = studio;
     };
     devShells.${system} = {
       default = pkgs.mkShell {
@@ -32,11 +34,34 @@
       };
       media-test = pkgs.mkShell {
         inputsFrom = [self.devShells.${system}.default];
-        packages = with pkgs; [mediamtx splitcast.obs rnnoise-plugin.ladspa xorg-server xauth mesa python3 bubblewrap git];
+        packages = with pkgs; [
+          mediamtx splitcast.obs rnnoise-plugin.ladspa xorg-server xauth mesa bubblewrap git
+          (python3.withPackages (ps: [ps.websockets]))
+        ];
         SPLITCAST_RNNOISE_PLUGIN = "${pkgs.rnnoise-plugin.ladspa}/lib/ladspa/librnnoise_ladspa.so";
         LIBGL_DRIVERS_PATH = "${pkgs.mesa}/lib/dri";
         __EGL_VENDOR_LIBRARY_FILENAMES = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
         SPLITCAST_XKB_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
+      };
+      studio = pkgs.mkShell {
+        inputsFrom = [studio];
+        packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config];
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath studio.runtimeLibraries;
+      };
+      studio-test = pkgs.mkShell {
+        inputsFrom = [self.devShells.${system}.studio];
+        packages = with pkgs; [cargo rustc gcc python3 xorg-server xdotool mesa fontconfig dejavu_fonts];
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath studio.runtimeLibraries;
+        SPLITCAST_TEST_MESA_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
+        SPLITCAST_TEST_XKB_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
+        SPLITCAST_TEST_FONTS = "${pkgs.dejavu_fonts}/share/fonts";
+      };
+      studio-wayland-test = pkgs.mkShell {
+        inputsFrom = [self.devShells.${system}.studio];
+        packages = with pkgs; [cargo rustc gcc (python3.withPackages (ps: [ps.pillow])) sway-unwrapped foot grim wtype];
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath studio.runtimeLibraries;
+        SPLITCAST_TEST_XKB_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
+        SPLITCAST_TEST_FONTS = "${pkgs.dejavu_fonts}/share/fonts";
       };
     };
     checks.${system} = {

@@ -46,6 +46,27 @@ pub fn private_directory(path: &Path) -> io::Result<fs::File> {
 }
 
 pub fn atomic_file(path: &Path, contents: impl AsRef<[u8]>) -> io::Result<()> {
+    atomic_file_checked(path, contents, || Ok(())).map_err(|error| match error {
+        AtomicFileError::BeforeRename(error) | AtomicFileError::AfterRename(error) => error,
+    })
+}
+
+pub(crate) enum AtomicFileError {
+    BeforeRename(io::Error),
+    AfterRename(io::Error),
+}
+
+impl From<io::Error> for AtomicFileError {
+    fn from(error: io::Error) -> Self {
+        Self::BeforeRename(error)
+    }
+}
+
+pub(crate) fn atomic_file_checked(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+    check: impl FnOnce() -> io::Result<()>,
+) -> Result<(), AtomicFileError> {
     let directory = private_directory(path.parent().ok_or_else(|| invalid("invalid state path"))?)?;
     let anchored = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
     let target = anchored.join(
@@ -53,10 +74,10 @@ pub fn atomic_file(path: &Path, contents: impl AsRef<[u8]>) -> io::Result<()> {
             .ok_or_else(|| invalid("invalid state filename"))?,
     );
     match fs::symlink_metadata(&target) {
-        Ok(m) if !m.is_file() => return Err(invalid("state target must be a regular file")),
+        Ok(m) if !m.is_file() => return Err(invalid("state target must be a regular file").into()),
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     }
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
@@ -76,11 +97,13 @@ pub fn atomic_file(path: &Path, contents: impl AsRef<[u8]>) -> io::Result<()> {
     let result = (|| {
         file.write_all(contents.as_ref())?;
         file.sync_all()?;
+        check()?;
         fs::rename(&part, &target)?;
-        directory.sync_all()
+        Ok::<_, io::Error>(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&part);
     }
-    result
+    result?;
+    directory.sync_all().map_err(AtomicFileError::AfterRename)
 }

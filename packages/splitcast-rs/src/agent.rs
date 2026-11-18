@@ -1,5 +1,6 @@
 use crate::protocol::{Command, Invocation, MicAction, OwnerId, Start};
 use crate::request::rejected;
+use crate::scene::{ResultState as SceneResult, Scene};
 use crate::workers::{Worker, Workers};
 use crate::{config, control, media, obs, return_audio};
 use crate::{Lifecycle, Output, Role, Session};
@@ -125,6 +126,8 @@ struct Agent {
     media_prepared: bool,
     obs_profile: Option<obs::SessionProfile>,
     obs_shutdown: Option<ObsShutdown>,
+    eventsub: Option<crate::eventsub::EventSub>,
+    scene: Scene,
     speech_source: Option<return_audio::Source>,
     speech_receiver: Option<return_audio::Receiver>,
 }
@@ -155,10 +158,12 @@ impl Agent {
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(err("an agent already owns this role state directory"));
         }
+        let instance = rand_hex()?;
+        let scene = Scene::new(instance.clone(), &cfg);
         Ok(Self {
             operation: None,
             cfg,
-            session: Session::for_agent(role, rand_hex()?),
+            session: Session::for_agent(role, instance),
             children: Workers::default(),
             error: String::new(),
             warnings: vec![],
@@ -170,6 +175,8 @@ impl Agent {
             media_prepared: false,
             obs_profile: None,
             obs_shutdown: None,
+            eventsub: None,
+            scene,
             speech_source: None,
             speech_receiver: None,
         })
@@ -274,9 +281,12 @@ impl Agent {
         if self.session.state() != Lifecycle::Idle {
             return Err(err("stop before preparing another session"));
         }
-        if !media && !self.cfg.tts_enabled {
-            return Err(err("speech-only Prepare requires speech return"));
+        if !media && !self.cfg.tts_enabled && self.cfg.chat_credentials.is_none() {
+            return Err(err(
+                "media-free Prepare requires speech return or production chat",
+            ));
         }
+        self.scene.reset()?;
         self.media_prepared = media;
         self.session
             .prepare(owner.cloned(), Instant::now(), self.lease_duration())
@@ -306,6 +316,14 @@ impl Agent {
                         return Err(err("speech return requires capture-owned Prepare"));
                     }
                     self.speech_source = Some(return_audio::Source::new(&self.cfg, rand_hex()?)?);
+                }
+                if let Some(path) = &self.cfg.chat_credentials {
+                    let queue = self
+                        .cfg
+                        .tts_enabled
+                        .then_some(self.cfg.tts_queue_limit.into());
+                    self.eventsub =
+                        Some(crate::eventsub::EventSub::start(path, rand_hex()?, queue)?);
                 }
                 if media {
                     self.spawn(Worker::Receiver, media::receiver(&self.cfg)?)?;
@@ -379,6 +397,7 @@ impl Agent {
                 "stop the speech-only session before starting media",
             ));
         }
+        self.scene.reset()?;
         let outcome = (|| -> io::Result<()> {
             if !media::missing_tools(&self.cfg, true, true).is_empty() {
                 return Err(err("required native media executables are missing"));
@@ -433,12 +452,18 @@ impl Agent {
                         .unwrap_or(false)
                 })?;
                 let mut o = self.obs()?;
-                o.configure(&self.cfg)?;
+                o.configure(&self.cfg, &self.scene.draft)?;
                 self.wait_ready(|| {
                     self.obs()
                         .and_then(|mut o| o.source_geometry_ready(&self.cfg))
                         .unwrap_or(false)
                 })?;
+                o.finish_start_layout(&self.scene.draft)?;
+                let layout = o.read_layout(&self.cfg)?;
+                if layout.layout != self.scene.draft {
+                    return Err(err("owned OBS Start layout did not match the draft"));
+                }
+                self.scene.live = Some(layout);
                 o.configure_output(&self.cfg, output)?;
                 self.session
                     .arm_output_limit(start.limit())
@@ -495,8 +520,10 @@ impl Agent {
     }
     fn cleanup_owned(&mut self) -> io::Result<()> {
         self.receive_monitor = None;
+        let scene_reset = self.scene.reset();
+        self.eventsub.take(); // cancels and joins the session subscription
         self.speech_source.take(); // cancels and joins any synthesis worker
-        let mut failed = false;
+        let mut failed = scene_reset.is_err();
         if let Some(receiver) = &mut self.speech_receiver {
             match receiver.stop() {
                 Ok(()) => self.speech_receiver = None,
@@ -675,7 +702,7 @@ impl Agent {
     }
     fn poll_speech(&mut self) -> io::Result<()> {
         if let Some(source) = &mut self.speech_source {
-            source.tick();
+            source.tick(self.eventsub.as_ref());
         }
         let Some(receiver) = &mut self.speech_receiver else {
             return Ok(());
@@ -750,6 +777,21 @@ impl Agent {
         if owner.is_some() {
             self.guard_lease(owner)?;
         }
+        if owner.is_some()
+            && self.session.state() == Lifecycle::Idle
+            && matches!(
+                invocation.command,
+                Command::Chat(_)
+                    | Command::Scene
+                    | Command::SceneApply { .. }
+                    | Command::SceneReconcile(_)
+                    | Command::SceneSave(_)
+                    | Command::SceneReload(_)
+                    | Command::PreviewSmall
+            )
+        {
+            return Err(rejected("no current production owner"));
+        }
         match invocation.command {
             Command::Status=>Ok(self.status()),
             Command::Heartbeat=>{self.renew_lease(owner.ok_or_else(||err("production owner required"))?)?;Ok(self.status())},
@@ -763,6 +805,16 @@ impl Agent {
             Command::TtsNext => {
                 if owner.is_none() { return Err(err("speech pull requires the production session owner")); }
                 Ok(self.speech_source.as_mut().ok_or_else(||err("no active speech source"))?.take())
+            }
+            Command::Chat(cursor) if self.cfg.role == "production" => {
+                Ok(match &self.eventsub {
+                    Some(eventsub) => eventsub.page(cursor.as_ref()),
+                    None => crate::chat::inactive(self.cfg.chat_credentials.is_some(), cursor.as_ref()),
+                })
+            }
+            command @ (Command::Scene | Command::SceneApply { .. } | Command::SceneReconcile(_)
+                        | Command::SceneSave(_) | Command::SceneReload(_) | Command::PreviewSmall) => {
+                self.studio_command(command, owner)
             }
             command=>{
                 if !matches!(self.session.state(),Lifecycle::Ready|Lifecycle::Running|Lifecycle::Degraded){return Err(rejected("prepare the session first"));}
@@ -781,7 +833,7 @@ impl Agent {
                     },
                     Command::Preview => self.obs()?.preview(),
                     Command::TtsStatus => self.speech_source.as_mut()
-                        .ok_or_else(||rejected("speech return is disabled"))?.status(),
+                        .ok_or_else(||rejected("speech return is disabled"))?.status(self.eventsub.as_ref()),
                     Command::Say {text, id} => self.speech_source.as_mut()
                         .ok_or_else(||rejected("speech return is disabled"))?.say(&text, &id),
                     _=>Err(err("command is not a prepared-session control"))
@@ -789,6 +841,115 @@ impl Agent {
             }
         }
     }
+    fn studio_obs(&self) -> io::Result<obs::Obs> {
+        self.checkpoint()?;
+        let operation = self
+            .operation
+            .clone()
+            .map(|operation| operation.capped(Duration::from_secs(5)));
+        obs::Obs::connect_operation(&self.cfg, operation)
+    }
+
+    fn studio_command(&mut self, command: Command, owner: Option<&OwnerId>) -> io::Result<String> {
+        let lifecycle = self.session.state();
+        let running = lifecycle == Lifecycle::Running;
+        if self.cfg.role == "capture" {
+            if !matches!(lifecycle, Lifecycle::Ready | Lifecycle::Running) {
+                return Err(rejected(
+                    "prepare the capture session before forwarding Studio controls",
+                ));
+            }
+            return self.peer_command(&command);
+        }
+        if !matches!(
+            lifecycle,
+            Lifecycle::Idle | Lifecycle::Ready | Lifecycle::Running
+        ) {
+            return Err(rejected(
+                "scene controls require idle, ready or running production",
+            ));
+        }
+        let generation = self.session.control().generation();
+        if command == Command::Scene {
+            return Ok(self.scene.snapshot(&self.cfg, generation, running));
+        }
+        let owned = running && self.obs_profile.is_some() && self.children.contains(Worker::Obs);
+        if command == Command::PreviewSmall {
+            if !owned {
+                return Err(rejected("Studio preview requires running owned OBS"));
+            }
+            return self.studio_obs()?.preview_small();
+        }
+        self.guard_lease(owner)?;
+        if running && !owned {
+            return Err(rejected("no owned running OBS session"));
+        }
+        let state = match command {
+            Command::SceneApply { edit, layout } => {
+                let canvas = self.scene.canvas(&self.cfg);
+                layout.validate(canvas, self.cfg.camera.is_some())?;
+                self.checkpoint()?;
+                self.scene.begin(edit, generation)?;
+                self.scene.draft = layout;
+                if !running {
+                    SceneResult::Draft
+                } else {
+                    self.scene.live = None;
+                    let mut obs = self.studio_obs()?;
+                    obs.apply_layout(canvas, &self.scene.draft)?;
+                    self.scene.live = Some(obs.read_layout(&self.cfg)?);
+                    if !self.scene.matches_draft() {
+                        self.scene.live = None;
+                        return Err(err("owned OBS layout did not match the requested draft"));
+                    }
+                    SceneResult::Applied
+                }
+            }
+            Command::SceneReconcile(edit) => {
+                if !owned {
+                    return Err(rejected("scene reconciliation requires running owned OBS"));
+                }
+                self.checkpoint()?;
+                self.scene.begin(edit, generation)?;
+                self.scene.live = None;
+                self.scene.live = Some(self.studio_obs()?.read_layout(&self.cfg)?);
+                SceneResult::Reconciled
+            }
+            Command::SceneSave(edit) => {
+                if !owned || !self.scene.matches_draft() {
+                    return Err(rejected(
+                        "scene save requires current matching OBS readback",
+                    ));
+                }
+                self.checkpoint()?;
+                self.scene.begin(edit, generation)?;
+                self.scene.live = None;
+                self.scene.live = Some(self.studio_obs()?.read_layout(&self.cfg)?);
+                if !self.scene.matches_draft() {
+                    self.scene.result(SceneResult::Failed);
+                    return Err(rejected("OBS layout changed; read scene before saving"));
+                }
+                let operation = self.operation.clone();
+                self.scene.save(&self.cfg.state_dir, || {
+                    operation.as_ref().map_or(Ok(()), |op| op.check())
+                })?;
+                SceneResult::Saved
+            }
+            Command::SceneReload(edit) => {
+                self.checkpoint()?;
+                self.scene.begin(edit, generation)?;
+                if let Err(error) = self.scene.reload(&self.cfg) {
+                    self.scene.result(SceneResult::Failed);
+                    return Err(error);
+                }
+                SceneResult::Reloaded
+            }
+            _ => return Err(rejected("unknown Studio scene command")),
+        };
+        self.scene.result(state);
+        Ok(self.scene.snapshot(&self.cfg, generation, running))
+    }
+
     fn execute_work(
         &mut self,
         work: crate::server::Work,
@@ -948,7 +1109,16 @@ fn serve_bound(
     shutdown: Arc<AtomicBool>,
     limits: crate::server::Limits,
 ) -> io::Result<()> {
-    let mut agent = Agent::new(cfg)?;
+    serve_agent(Agent::new(cfg)?, listener, token, shutdown, limits)
+}
+
+fn serve_agent(
+    mut agent: Agent,
+    listener: std::net::TcpListener,
+    token: String,
+    shutdown: Arc<AtomicBool>,
+    limits: crate::server::Limits,
+) -> io::Result<()> {
     let (listener, pending) = crate::server::ListenerOwner::start(
         listener,
         token,

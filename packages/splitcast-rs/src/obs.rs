@@ -1,5 +1,6 @@
 //! Authenticated OBS WebSocket v5 control over loopback TCP only.
 use crate::config::{secret, Config, ObsVideoMode};
+use crate::scene::{CameraBox, Observation, Overlay, SceneLayout, Size, OVERLAY_ORIGIN};
 use crate::state::{atomic_file, private_directory};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
@@ -448,29 +449,21 @@ impl Obs {
                 },
         )
     }
-    pub fn configure(&mut self, cfg: &Config) -> io::Result<()> {
+    pub(crate) fn configure(&mut self, cfg: &Config, layout: &SceneLayout) -> io::Result<()> {
         self.call("GetVersion", "{}")?;
         if !self.has("GetSceneList", "scenes", "sceneName", "SplitCast")? {
             self.call("CreateScene", "{\"sceneName\":\"SplitCast\"}")?;
         }
         let feed = |name| json!({"is_local_file":false,"input":format!("rtsp://127.0.0.1:{}/{name}",cfg.rtsp),"input_format":"rtsp","ffmpeg_options":"rtsp_transport=tcp","hw_decode":cfg.obs_video_mode == ObsVideoMode::Hardware,"buffering_mb":1});
         self.input("GameFeed", "ffmpeg_source", feed("game"))?;
-        if cfg.camera.is_some() {
-            self.input("CameraFeed", "ffmpeg_source", feed("camera"))?;
+        if let Some(camera) = layout.camera() {
+            let mut settings = feed("camera");
+            // A visibility edit must not restart or close the RTSP decoder.
+            settings["restart_on_activate"] = false.into();
+            settings["close_when_inactive"] = false.into();
+            self.input("CameraFeed", "ffmpeg_source", settings)?;
             let id = self.scene_item("CameraFeed")?;
-            self.call(
-                "SetSceneItemTransform",
-                &json!({
-                    "sceneName":"SplitCast","sceneItemId":id,
-                    "sceneItemTransform":{
-                        "alignment":5,"positionX":cfg.width - cfg.width / 4 - 8,
-                    "positionY":8,
-                        "boundsType":"OBS_BOUNDS_SCALE_INNER","boundsAlignment":0,
-                        "boundsWidth":cfg.width / 4,"boundsHeight":cfg.height / 4
-                    }
-                })
-                .to_string(),
-            )?;
+            self.camera_transform(id, camera)?;
         }
         self.input(
             "MicProcessed",
@@ -498,33 +491,153 @@ impl Obs {
             "SetInputAudioMonitorType",
             "{\"inputName\":\"MicProcessed\",\"monitorType\":\"OBS_MONITORING_TYPE_NONE\"}",
         )?;
-        if let Some(text) = &cfg.overlay_text {
-            self.input(
-                "SplitCastOverlay",
-                "text_ft2_source_v2",
-                json!({
-                    "text": text, "from_file": false,
-                    "font": {"face": "Noto Sans CJK JP", "style": "Bold", "size": 32, "flags": 1},
-                    "outline": true, "drop_shadow": true,
-                }),
-            )?;
-            let id = self.scene_item("SplitCastOverlay")?;
-            self.call(
-                "SetSceneItemTransform",
-                &json!({
-                    "sceneName":"SplitCast","sceneItemId":id,"sceneItemTransform":{
-                        "alignment":5,"positionX":16,"positionY":16,
-                        "boundsType":"OBS_BOUNDS_SCALE_INNER","boundsAlignment":5,
-                        "boundsWidth": cfg.width.saturating_mul(3)/4 - 32,
-                        "boundsHeight": 64
-                    }
-                })
-                .to_string(),
-            )?;
+        if let Some(text) = &layout.overlay().text {
+            self.overlay(cfg.width, layout.overlay(), text)?;
         }
         self.call("SetCurrentProgramScene", "{\"sceneName\":\"SplitCast\"}")?;
         Ok(())
     }
+    fn set_item(&mut self, method: &str, id: i64, field: &str, value: Value) -> io::Result<()> {
+        let mut args = json!({"sceneName":"SplitCast","sceneItemId":id});
+        args[field] = value;
+        self.call(method, &args.to_string())?;
+        Ok(())
+    }
+
+    fn camera_transform(&mut self, id: i64, camera: &CameraBox) -> io::Result<()> {
+        self.set_item(
+            "SetSceneItemTransform",
+            id,
+            "sceneItemTransform",
+            fit_box(camera.x, camera.y, camera.size, 0),
+        )
+    }
+
+    fn set_camera_visible(&mut self, id: i64, visible: bool) -> io::Result<()> {
+        self.set_item(
+            "SetSceneItemEnabled",
+            id,
+            "sceneItemEnabled",
+            json!(visible),
+        )
+    }
+
+    pub(crate) fn finish_start_layout(&mut self, layout: &SceneLayout) -> io::Result<()> {
+        if layout.camera().is_some_and(|camera| !camera.visible) {
+            // Let the configured source decode before hiding the scene item.
+            let id = self.scene_item("CameraFeed")?;
+            self.set_camera_visible(id, false)?;
+        }
+        Ok(())
+    }
+
+    fn overlay(&mut self, width: u16, overlay: &Overlay, text: &str) -> io::Result<()> {
+        self.input(
+            "SplitCastOverlay",
+            "text_ft2_source_v2",
+            json!({
+                "text": text, "from_file": false,
+                "font": {"face":"Noto Sans CJK JP","style":"Bold","size":32,"flags":1},
+                "outline":true,"drop_shadow":true
+            }),
+        )?;
+        let id = self.scene_item("SplitCastOverlay")?;
+        self.set_item(
+            "SetSceneItemTransform",
+            id,
+            "sceneItemTransform",
+            fit_box(overlay.x, overlay.y, overlay_bounds(width), 5),
+        )
+    }
+
+    fn scene_items(&mut self) -> io::Result<Vec<Value>> {
+        let response =
+            response_data(&self.call("GetSceneItemList", "{\"sceneName\":\"SplitCast\"}")?)?;
+        match response {
+            Value::Object(mut data) => match data.remove("sceneItems") {
+                Some(Value::Array(items)) if items.len() <= 32 => Ok(items),
+                _ => Err(err("invalid OBS scene item list")),
+            },
+            _ => Err(err("invalid OBS scene item list")),
+        }
+    }
+
+    pub(crate) fn apply_layout(&mut self, canvas: Size, layout: &SceneLayout) -> io::Result<()> {
+        if let Some(camera) = layout.camera() {
+            let id = self.scene_item("CameraFeed")?;
+            self.camera_transform(id, camera)?;
+            self.set_camera_visible(id, camera.visible)?;
+        }
+        match &layout.overlay().text {
+            Some(text) => self.overlay(canvas.width, layout.overlay(), text)?,
+            None => {
+                let items = self.scene_items()?;
+                if scene_source(&items, "SplitCastOverlay")?.is_some() {
+                    self.call("RemoveInput", "{\"inputName\":\"SplitCastOverlay\"}")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_layout(&mut self, cfg: &Config) -> io::Result<Observation> {
+        let video = response_data(&self.call("GetVideoSettings", "{}")?)?;
+        let canvas = dimensions(&video, "baseWidth", "baseHeight")?;
+        // The Agent-created profile is also the validation boundary of saved
+        // drafts. An externally changed canvas cannot be persisted as ours.
+        if canvas.width != cfg.width || canvas.height != cfg.height {
+            return Err(err("owned OBS canvas differs from its configured profile"));
+        }
+        let items = self.scene_items()?;
+        let game =
+            scene_source(&items, "GameFeed")?.ok_or_else(|| err("owned OBS game item missing"))?;
+        let game = dimensions(&game["sceneItemTransform"], "sourceWidth", "sourceHeight")?;
+        let camera_item = scene_source(&items, "CameraFeed")?;
+        let (camera, camera_layout) = if let Some(item) = camera_item {
+            let transform = &item["sceneItemTransform"];
+            let size = dimensions(transform, "boundsWidth", "boundsHeight")?;
+            require_fit_box(transform, size, 0)?;
+            (
+                Some(dimensions(transform, "sourceWidth", "sourceHeight")?),
+                json!({
+                    "x":pixel(&transform["positionX"])?,"y":pixel(&transform["positionY"])?,
+                    "width":size.width,"height":size.height,
+                    "visible":item["sceneItemEnabled"].as_bool().ok_or_else(|| err("OBS camera visibility missing"))?
+                }),
+            )
+        } else {
+            (None, Value::Null)
+        };
+        let overlay = if let Some(item) = scene_source(&items, "SplitCastOverlay")? {
+            let transform = &item["sceneItemTransform"];
+            require_fit_box(transform, overlay_bounds(canvas.width), 5)?;
+            if item["sceneItemEnabled"] != true {
+                return Err(err("owned OBS overlay is not visible"));
+            }
+            let settings = response_data(
+                &self.call("GetInputSettings", "{\"inputName\":\"SplitCastOverlay\"}")?,
+            )?;
+            let text = settings["inputSettings"]["text"]
+                .as_str()
+                .ok_or_else(|| err("OBS overlay text missing"))?;
+            json!({"text":text,"x":pixel(&transform["positionX"])?,"y":pixel(&transform["positionY"])?})
+        } else {
+            json!({"text":null,"x":OVERLAY_ORIGIN,"y":OVERLAY_ORIGIN})
+        };
+        let layout = SceneLayout::parse(&json!({"camera":camera_layout,"overlay":overlay}))
+            .and_then(|layout| {
+                layout.validate(canvas, cfg.camera.is_some())?;
+                Ok(layout)
+            })
+            .map_err(|_| err("OBS readback is outside the Studio layout contract"))?;
+        Ok(Observation {
+            canvas,
+            game,
+            camera,
+            layout,
+        })
+    }
+
     pub(crate) fn configure_output(
         &mut self,
         cfg: &Config,
@@ -611,13 +724,103 @@ impl Obs {
         Ok(self.observe(output)?.progresses_from(None))
     }
     pub fn preview(&mut self) -> io::Result<String> {
-        let response = response_data(&self.call("GetSourceScreenshot", "{\"sourceName\":\"SplitCast\",\"imageFormat\":\"png\",\"imageWidth\":960,\"imageHeight\":540}")?)?;
-        let image = response["imageData"]
-            .as_str()
-            .filter(|image| image.starts_with("data:image/png;base64,"))
-            .ok_or_else(|| err("OBS returned an invalid scene screenshot"))?;
+        let image = self.screenshot(960, 540)?;
         Ok(json!({"image":image}).to_string())
     }
+
+    pub(crate) fn preview_small(&mut self) -> io::Result<String> {
+        const WIDTH: u32 = 480;
+        const HEIGHT: u32 = 270;
+        let image = self.screenshot(WIDTH, HEIGHT)?;
+        let png = image
+            .strip_prefix("data:image/png;base64,")
+            .filter(|_| image.len() <= 768 * 1024)
+            .and_then(|encoded| STANDARD.decode(encoded).ok())
+            .ok_or_else(|| err("invalid or oversized Studio preview"))?;
+        if !png.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR") || png.len() < 33 {
+            return Err(err("invalid Studio preview PNG header"));
+        }
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        if !(1..=WIDTH).contains(&width) || !(1..=HEIGHT).contains(&height) {
+            return Err(err("Studio preview dimensions exceed the requested bounds"));
+        }
+        Ok(json!({"image":image}).to_string())
+    }
+
+    fn screenshot(&mut self, width: u32, height: u32) -> io::Result<String> {
+        let response = response_data(&self.call("GetSourceScreenshot", &json!({
+            "sourceName":"SplitCast","imageFormat":"png","imageWidth":width,"imageHeight":height
+        }).to_string())?)?;
+        response["imageData"]
+            .as_str()
+            .filter(|image| image.starts_with("data:image/png;base64,"))
+            .map(str::to_owned)
+            .ok_or_else(|| err("OBS returned an invalid scene screenshot"))
+    }
+}
+
+fn fit_box(x: u16, y: u16, size: Size, alignment: u16) -> Value {
+    json!({
+        "alignment":5,"positionX":x,"positionY":y,
+        "boundsType":"OBS_BOUNDS_SCALE_INNER","boundsAlignment":alignment,
+        "boundsWidth":size.width,"boundsHeight":size.height,
+        "rotation":0,"scaleX":1.0,"scaleY":1.0,
+        "cropTop":0,"cropBottom":0,"cropLeft":0,"cropRight":0,"cropToBounds":false
+    })
+}
+
+fn overlay_bounds(width: u16) -> Size {
+    Size {
+        width: (width * 3) / 4 - 32,
+        height: 64,
+    }
+}
+
+fn scene_source<'a>(items: &'a [Value], source: &str) -> io::Result<Option<&'a Value>> {
+    let mut matches = items.iter().filter(|item| item["sourceName"] == source);
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(err("owned OBS source has duplicate scene items"));
+    }
+    Ok(first)
+}
+
+fn pixel(value: &Value) -> io::Result<u16> {
+    value
+        .as_f64()
+        .filter(|number| (0.0..=f64::from(u16::MAX)).contains(number) && number.fract() == 0.0)
+        .map(|number| number as u16)
+        .ok_or_else(|| err("OBS geometry is missing or not an integer pixel value"))
+}
+
+fn dimensions(value: &Value, width: &str, height: &str) -> io::Result<Size> {
+    let size = Size {
+        width: pixel(&value[width])?,
+        height: pixel(&value[height])?,
+    };
+    if size.width == 0 || size.height == 0 {
+        return Err(err("OBS source geometry is unavailable"));
+    }
+    Ok(size)
+}
+
+fn require_fit_box(transform: &Value, size: Size, alignment: u16) -> io::Result<()> {
+    if transform["alignment"] != 5
+        || transform["boundsAlignment"] != alignment
+        || (transform["boundsType"] != "OBS_BOUNDS_SCALE_INNER" && transform["boundsType"] != 2)
+        || dimensions(transform, "boundsWidth", "boundsHeight")? != size
+        || transform["rotation"].as_f64() != Some(0.0)
+        || ["cropLeft", "cropRight", "cropTop", "cropBottom"]
+            .iter()
+            .any(|field| transform[*field] != 0)
+        || transform["cropToBounds"] == true
+    {
+        return Err(err(
+            "owned OBS item transform is outside the Studio layout contract",
+        ));
+    }
+    Ok(())
 }
 
 fn status_request(output: crate::Output) -> &'static str {
@@ -841,7 +1044,10 @@ mod tests {
             });
             let mut cfg = fixture.config(port);
             cfg.obs_video_mode = mode;
-            Obs::connect(&cfg).unwrap().configure(&cfg).unwrap();
+            Obs::connect(&cfg)
+                .unwrap()
+                .configure(&cfg, &cfg.default_scene)
+                .unwrap();
             thread.join().unwrap();
         }
     }
@@ -898,7 +1104,7 @@ mod tests {
         );
         let mut obs = Obs::connect_operation(&cfg, Some(operation)).unwrap();
         assert_eq!(
-            obs.configure(&cfg).unwrap_err().kind(),
+            obs.configure(&cfg, &cfg.default_scene).unwrap_err().kind(),
             io::ErrorKind::TimedOut
         );
         drop(obs);
@@ -923,7 +1129,7 @@ mod tests {
         let operation = crate::request::Operation::new(cancel, None, Duration::from_secs(2));
         let mut obs = Obs::connect_operation(&cfg, Some(operation)).unwrap();
         assert_eq!(
-            obs.configure(&cfg).unwrap_err().kind(),
+            obs.configure(&cfg, &cfg.default_scene).unwrap_err().kind(),
             io::ErrorKind::Interrupted
         );
         drop(obs);

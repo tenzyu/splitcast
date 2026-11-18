@@ -1,5 +1,6 @@
 //! Production-only Twitch chat input. A prepared session owns the socket and
-//! its bounded handoff to the existing speech queue.
+//! its bounded history and optional handoff to the existing speech queue.
+use crate::chat::{Cursor, History};
 use crate::{config, request::Operation};
 use serde_json::{json, Value};
 use std::collections::{HashSet, VecDeque};
@@ -203,41 +204,127 @@ impl Replay {
 pub(crate) struct EventSub {
     cancel: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
-    pub(crate) chat: Receiver<Chat>,
+    pub(crate) speech: Option<Receiver<Chat>>,
     receipt: Arc<Mutex<Receipt>>,
+    history: Arc<Mutex<History>>,
+}
+
+// The session has one producer. Replay admission gates both independent sinks.
+struct Feed {
+    receipt: Arc<Mutex<Receipt>>,
+    history: Arc<Mutex<History>>,
+    speech: Option<SyncSender<Chat>>,
+    replay: Replay,
+}
+
+impl Feed {
+    fn notify(&mut self, id: &str, name: &str, text: &str, received: Instant) -> io::Result<()> {
+        let mut status = self.receipt.lock().unwrap_or_else(|e| e.into_inner());
+        status.notifications = status.notifications.saturating_add(1);
+        if !self.replay.admit(id, received) {
+            status.duplicate = status.duplicate.saturating_add(1);
+            return Ok(());
+        }
+        self.history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(id, name, text)?;
+        if self.speech.as_ref().is_some_and(|send| {
+            send.try_send(Chat {
+                received,
+                text: text.to_owned(),
+            })
+            .is_err()
+        }) {
+            status.dropped = status.dropped.saturating_add(1);
+        }
+        Ok(())
+    }
 }
 
 impl EventSub {
-    pub(crate) fn start(path: &Path, queue: usize) -> io::Result<Self> {
-        let creds = Credentials::load(path)?;
-        let (send, chat) = mpsc::sync_channel(queue);
-        let cancel = Arc::new(AtomicBool::new(false));
+    fn channel(epoch: String, queue: Option<usize>) -> (Self, Feed) {
+        let (send, speech) = match queue {
+            Some(queue) => {
+                let (send, receive) = mpsc::sync_channel(queue);
+                (Some(send), Some(receive))
+            }
+            None => (None, None),
+        };
         let receipt = Arc::new(Mutex::new(Receipt {
             state: "connecting",
             ..Receipt::default()
         }));
-        let worker_cancel = Arc::clone(&cancel);
-        let worker_receipt = Arc::clone(&receipt);
-        let worker = thread::Builder::new()
-            .name("splitcast-eventsub".into())
-            .spawn(move || run(&creds, send, &worker_cancel, &worker_receipt))?;
-        Ok(Self {
-            cancel,
-            worker: Some(worker),
-            chat,
-            receipt,
+        let history = Arc::new(Mutex::new(History::new(epoch)));
+        let feed = Feed {
+            receipt: Arc::clone(&receipt),
+            history: Arc::clone(&history),
+            speech: send,
+            replay: Replay::default(),
+        };
+        (
+            Self {
+                cancel: Arc::new(AtomicBool::new(false)),
+                worker: None,
+                speech,
+                receipt,
+                history,
+            },
+            feed,
+        )
+    }
+
+    pub(crate) fn start(path: &Path, epoch: String, queue: Option<usize>) -> io::Result<Self> {
+        let creds = Credentials::load(path)?;
+        let (mut subscription, feed) = Self::channel(epoch, queue);
+        let cancel = Arc::clone(&subscription.cancel);
+        subscription.worker = Some(
+            thread::Builder::new()
+                .name("splitcast-eventsub".into())
+                .spawn(move || run(&creds, feed, &cancel))?,
+        );
+        Ok(subscription)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn synthetic(
+        epoch: String,
+        queue: Option<usize>,
+    ) -> (Self, impl FnMut(&str, &str, &str, Instant)) {
+        let (subscription, mut feed) = Self::channel(epoch, queue);
+        (subscription, move |id, name, text, received| {
+            feed.notify(id, name, text, received).unwrap()
         })
     }
 
     pub(crate) fn status(&self) -> Value {
-        let receipt = self.receipt.lock().unwrap_or_else(|e| e.into_inner());
+        self.receipt
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .value()
+    }
+
+    pub(crate) fn page(&self, cursor: Option<&Cursor>) -> String {
+        let status = self.receipt.lock().unwrap_or_else(|e| e.into_inner());
+        let page = self
+            .history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .page(cursor, status.value());
+        drop(status);
+        page.to_string()
+    }
+}
+
+impl Receipt {
+    fn value(&self) -> Value {
         json!({
-            "state":receipt.state,
-            "notifications":receipt.notifications,
-            "duplicates":receipt.duplicate,
-            "dropped":receipt.dropped,
-            "reconnects":receipt.reconnects,
-            "error":receipt.error
+            "state":self.state,
+            "notifications":self.notifications,
+            "duplicates":self.duplicate,
+            "dropped":self.dropped,
+            "reconnects":self.reconnects,
+            "error":self.error
         })
     }
 }
@@ -412,7 +499,7 @@ fn chat<'a>(
     message: &'a Value,
     subscription: &str,
     creds: &Credentials,
-) -> Option<(&'a str, &'a str)> {
+) -> Option<(&'a str, &'a str, &'a str)> {
     let metadata = &message["metadata"];
     let sub = &message["payload"]["subscription"];
     let event = &message["payload"]["event"];
@@ -432,16 +519,12 @@ fn chat<'a>(
     }
     Some((
         identifier(&event["message_id"]).ok()?,
+        event["chatter_user_name"].as_str().unwrap_or(""),
         event["message"]["text"].as_str()?,
     ))
 }
 
-fn run(
-    creds: &Credentials,
-    send: SyncSender<Chat>,
-    cancel: &Arc<AtomicBool>,
-    receipt: &Mutex<Receipt>,
-) {
+fn run(creds: &Credentials, mut feed: Feed, cancel: &Arc<AtomicBool>) {
     let http: ureq::Agent = ureq::Agent::config_builder()
         .proxy(None)
         .max_redirects(0)
@@ -452,10 +535,10 @@ fn run(
         .https_only(true)
         .build()
         .into();
-    let mut replay = Replay::default();
+    let receipt = Arc::clone(&feed.receipt);
     reconnect(
         cancel,
-        receipt,
+        &receipt,
         |subscribed| {
             creds.validate(&http)?;
             let mut validated = Instant::now();
@@ -494,23 +577,8 @@ fn run(
                     }
                     Some("notification") => {
                         until = received + keepalive;
-                        let Some((id, text)) = chat(&message, &subscription, creds) else {
-                            continue;
-                        };
-                        let mut status = receipt.lock().unwrap_or_else(|e| e.into_inner());
-                        status.notifications += 1;
-                        if !replay.admit(id, received) {
-                            status.duplicate += 1;
-                            continue;
-                        }
-                        if send
-                            .try_send(Chat {
-                                received,
-                                text: text.to_owned(),
-                            })
-                            .is_err()
-                        {
-                            status.dropped += 1;
+                        if let Some((id, name, text)) = chat(&message, &subscription, creds) {
+                            feed.notify(id, name, text, received)?;
                         }
                     }
                     _ => {}
@@ -574,6 +642,37 @@ fn reconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_chat_fans_out_independently_of_speech_capacity_and_expiry() {
+        let epoch = "12345678901234567890123456789012".to_owned();
+        let (sub, mut deliver) = EventSub::synthetic(epoch, Some(1));
+        let mut cfg = config::Config::parse(include_bytes!("../tests/agent-example.json")).unwrap();
+        cfg.tts_expiry_seconds = 5;
+        let mut source = crate::return_audio::Source::new(&cfg, "speech-epoch".into()).unwrap();
+        let old = Instant::now() - Duration::from_secs(6);
+        let first = "あ".repeat(180);
+        deliver("one", "viewer", &first, old);
+        deliver("two", "viewer", "independent", old);
+        deliver("one", "viewer", "duplicate", old);
+        source.tick(Some(&sub));
+        let speech: Value = serde_json::from_str(&source.status(Some(&sub)).unwrap()).unwrap();
+        assert_eq!(speech["eventsub"]["dropped"], 1);
+        assert_eq!(speech["eventsub"]["duplicates"], 1);
+        assert_eq!(speech["eventsub"]["rejected"], 1);
+        assert_eq!(speech["eventsub"]["admitted"], 0);
+        assert_eq!(source.take(), "null");
+        let page: Value = serde_json::from_str(&sub.page(None)).unwrap();
+        assert_eq!(page["messages"][0]["text"].as_str().unwrap().len(), 510);
+        assert_eq!(page["messages"][1]["text"], "independent");
+        assert_eq!(page["cursor"], 2);
+
+        let now = Instant::now();
+        deliver("three", "viewer", &first, now);
+        let handed_off = sub.speech.as_ref().unwrap().try_recv().unwrap();
+        assert_eq!(handed_off.text, first);
+        assert_eq!(handed_off.received, now);
+    }
 
     #[test]
     fn keeps_ingesting_after_capacity_and_bounds_replay_by_age_and_count() {
@@ -658,7 +757,7 @@ mod tests {
         });
         assert_eq!(
             chat(&input, "correct", &creds),
-            Some(("message-1", "こんにちは"))
+            Some(("message-1", "", "こんにちは"))
         );
         assert!(chat(&input, "old", &creds).is_none());
         for (path, value) in [

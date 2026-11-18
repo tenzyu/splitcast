@@ -1,0 +1,477 @@
+import { AboutSlint, LineEdit, ListView } from "std-widgets.slint";
+
+export struct ChatRow { name: string, message: string }
+
+export global Diagnostics {
+    callback target(string, length, length);
+}
+
+component Action inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> selected;
+    in property <bool> emergency;
+    callback clicked();
+    public function report() {
+        if root.enabled && root.visible {
+            Diagnostics.target(root.text, root.absolute-position.x + root.width / 2, root.absolute-position.y + root.height / 2);
+        }
+    }
+
+    height: 32px;
+    min-width: caption.preferred-width + 22px;
+    border-radius: 5px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: #6de7d5;
+    background: root.emergency ? (hit.has-hover ? #b63e52 : #9e3544) :
+        !root.enabled ? #202b37 : root.selected ? #22534f : hit.has-hover ? #354f65 : #293b4d;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    caption := Text {
+        text: root.text;
+        font-size: 13px;
+        font-weight: 600;
+        color: !root.enabled ? #8c9bac : root.selected ? #6de7d5 : #e6eef5;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.clicked();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
+    hit := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+}
+
+component Field inherits LineEdit {
+    in property <string> diagnostic-name;
+    public function report() {
+        if root.visible {
+            Diagnostics.target(root.diagnostic-name, root.absolute-position.x + root.width / 2,
+                root.absolute-position.y + root.height / 2);
+        }
+    }
+    height: 32px;
+    font-size: 13px;
+}
+
+component Panel inherits Rectangle {
+    background: #19222e;
+    border-width: 1px;
+    border-color: #2c3948;
+    border-radius: 9px;
+}
+
+component Title inherits Text {
+    color: #e6eef5;
+    font-size: 16px;
+    font-weight: 650;
+}
+
+component Detail inherits Text {
+    color: #a2b1c2;
+    font-size: 12px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+component Guide inherits Rectangle {
+    in property <string> text;
+    in property <color> tint;
+    border-color: root.tint;
+    border-width: 1px;
+    border-radius: 4px;
+    Rectangle {
+        width: caption.preferred-width + 8px;
+        height: 18px;
+        background: #172732;
+        border-radius: 3px;
+        caption := Text {
+            text: root.text;
+            color: root.tint;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component StudioWindow inherits Window {
+    title: "SplitCast Studio";
+    background: #10151d;
+    min-width: 960px;
+    min-height: 775px;
+    preferred-width: 1110px;
+    preferred-height: 780px;
+
+    in property <string> agent-status: "Connecting to Agent";
+    in property <string> command-status;
+    in property <bool> stop-pending;
+    in property <bool> production;
+    in property <bool> can-prepare;
+    in property <bool> can-arm;
+    in property <bool> can-start;
+    in property <int> armed;
+    in-out property <string> seconds <=> duration.text;
+    in-out property <string> confirmation <=> live-proof.text;
+
+    in property <string> preview-status;
+    in property <image> snapshot;
+    in property <bool> has-snapshot;
+    in-out property <bool> preview-open: true;
+    in-out property <bool> editor-open: true;
+    in-out property <bool> chat-open: true;
+    in property <bool> preview-guide;
+    in property <float> guide-x;
+    in property <float> guide-y;
+    in property <float> guide-w;
+    in property <float> guide-h;
+    in property <bool> overlay-guide;
+    in property <float> overlay-guide-x;
+    in property <float> overlay-guide-y;
+    in property <[ChatRow]> chat-messages;
+    in property <string> chat-status;
+
+    in property <bool> camera;
+    in property <bool> camera-visible: true;
+    in property <bool> fields-enabled: true;
+    in property <string> game-info: "Fixed";
+    in property <string> camera-info;
+    in property <string> overlay-info;
+    in property <string> scene-status: "Offline draft";
+    in property <string> scene-notice;
+    in-out property <string> camera-x <=> camera-x-input.text;
+    in-out property <string> camera-y <=> camera-y-input.text;
+    in-out property <string> camera-width <=> camera-w-input.text;
+    in-out property <string> camera-height <=> camera-h-input.text;
+    in-out property <string> overlay-text <=> overlay-input.text;
+    in-out property <string> overlay-x <=> overlay-x-input.text;
+    in-out property <string> overlay-y <=> overlay-y-input.text;
+    in property <bool> can-read;
+    in property <bool> can-apply;
+    in property <bool> can-reconcile;
+    in property <bool> can-save;
+    in property <bool> can-reload;
+    in property <bool> can-use-agent;
+    in property <bool> can-keep-draft;
+    private property <bool> about-open;
+
+    callback status();
+    callback stop();
+    callback prepare(bool);
+    callback arm(int);
+    callback start();
+    callback start-fields-edited();
+    callback scene-edit();
+    callback read-scene();
+    callback apply();
+    callback reconcile();
+    callback save();
+    callback reload();
+    callback use-agent();
+    callback keep-draft();
+    callback visibility-changed();
+    callback camera-toggle();
+    callback drag-begin(float, float);
+    callback drag-move(float, float);
+    callback drag-end();
+
+    public function report-targets() {
+        status-button.report(); stop-button.report(); prepare-button.report(); prepare-chat.report();
+        record-mode.report(); test-mode.report(); live-mode.report(); start-output.report();
+        duration.report(); live-proof.report();
+        toggle-preview.report(); toggle-editor.report(); toggle-chat.report();
+        read.report(); apply-button.report(); readback.report(); save-button.report();
+        reload-button.report(); use-draft.report(); keep.report();
+        overlay-input.report();
+        if root.preview-guide {
+            Diagnostics.target("Camera guide",
+                preview-surface.absolute-position.x + (root.guide-x + root.guide-w / 2) * 1px,
+                preview-surface.absolute-position.y + (root.guide-y + root.guide-h / 2) * 1px);
+        }
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+        Panel {
+            height: 130px;
+            VerticalLayout {
+                padding: 13px;
+                spacing: 7px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 3px;
+                        Title { text: "SplitCast Studio"; font-size: 23px; }
+                        Detail { text: root.agent-status; color: #6de7d5; font-size: 14px; }
+                    }
+                    Action { text: "About"; clicked => { root.about-open = !root.about-open; } }
+                    status-button := Action { text: "Status"; clicked => { root.status(); } }
+                    stop-button := Action { text: "Stop"; min-width: 82px; emergency: true; clicked => { root.stop(); } }
+                }
+                HorizontalLayout {
+                    spacing: 7px;
+                    alignment: LayoutAlignment.start;
+                    prepare-button := Action { text: "Prepare"; enabled: root.can-prepare; clicked => { root.prepare(true); } }
+                    prepare-chat := Action {
+                        visible: root.production;
+                        text: "Prepare chat / speech";
+                        enabled: root.can-prepare;
+                        clicked => { root.prepare(false); }
+                    }
+                    record-mode := Action { text: "Recording"; enabled: root.can-arm; selected: root.armed == 1; clicked => { root.arm(1); } }
+                    test-mode := Action { text: "Test"; enabled: root.can-arm; selected: root.armed == 2; clicked => { root.arm(2); } }
+                    live-mode := Action { text: "Live"; enabled: root.can-arm; selected: root.armed == 3; clicked => { root.arm(3); } }
+                    duration := Field {
+                        diagnostic-name: "Duration";
+                        visible: root.armed != 0;
+                        width: 106px;
+                        placeholder-text: root.armed == 3 ? "Duration (sec)" : "Optional sec";
+                        edited => { root.start-fields-edited(); }
+                    }
+                    live-proof := Field {
+                        diagnostic-name: "Type LIVE";
+                        visible: root.armed == 3;
+                        width: 94px;
+                        placeholder-text: "Type LIVE";
+                        edited => { root.start-fields-edited(); }
+                    }
+                    start-output := Action { text: "Start"; enabled: root.can-start; clicked => { root.start(); } }
+                }
+                Detail { text: root.command-status; color: root.stop-pending ? #f5c77b : #a2b1c2; }
+            }
+        }
+        HorizontalLayout {
+            height: 335px;
+            spacing: 12px;
+            Panel {
+                width: 508px;
+                VerticalLayout {
+                    padding: 13px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        Title { text: "OBS Preview"; horizontal-stretch: 1; vertical-alignment: center; }
+                        toggle-preview := Action {
+                            text: root.preview-open ? "Hide preview" : "Show preview";
+                            clicked => { root.preview-open = !root.preview-open; root.visibility-changed(); }
+                        }
+                    }
+                    preview-surface := Rectangle {
+                        width: 480px; height: 270px;
+                        background: #0e151e;
+                        border-radius: 6px;
+                        clip: true;
+                        Image {
+                            visible: root.has-snapshot;
+                            source: root.snapshot;
+                            image-fit: contain;
+                            width: parent.width;
+                            height: parent.height;
+                        }
+                        Detail { visible: !root.has-snapshot; text: root.preview-status; horizontal-alignment: center; }
+                        Guide {
+                            visible: root.preview-guide;
+                            x: root.guide-x * 1px; y: root.guide-y * 1px;
+                            width: root.guide-w * 1px; height: root.guide-h * 1px;
+                            text: "CameraFeed"; tint: #6de7d5;
+                        }
+                        Guide {
+                            visible: root.overlay-guide;
+                            x: root.overlay-guide-x * 1px; y: root.overlay-guide-y * 1px;
+                            width: 38px; height: 20px;
+                            text: "Text"; tint: #f5c77b;
+                        }
+                        TouchArea {
+                            enabled: root.preview-open && root.editor-open && root.fields-enabled;
+                            pointer-event(event) => {
+                                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                    root.drag-begin(self.mouse-x / 1px, self.mouse-y / 1px);
+                                } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                                    root.drag-end();
+                                }
+                            }
+                            moved => {
+                                if self.pressed {
+                                    root.drag-move(self.mouse-x / 1px, self.mouse-y / 1px);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Panel {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 13px;
+                    spacing: 7px;
+                    HorizontalLayout {
+                        Title { text: "Twitch Chat"; horizontal-stretch: 1; vertical-alignment: center; }
+                        toggle-chat := Action {
+                            text: root.chat-open ? "Hide chat" : "Show chat";
+                            clicked => { root.chat-open = !root.chat-open; root.visibility-changed(); }
+                        }
+                    }
+                    Detail { text: root.chat-status; height: 16px; }
+                    ListView {
+                        visible: root.chat-open;
+                        vertical-stretch: 1;
+                        for entry in root.chat-messages: Rectangle {
+                            height: 50px;
+                            VerticalLayout {
+                                padding: 4px;
+                                spacing: 3px;
+                                Text { text: entry.name; font-size: 13px; font-weight: 650; color: #6de7d5; overflow: elide; }
+                                Text { text: entry.message; font-size: 13px; color: #e6eef5; overflow: elide; }
+                                Rectangle { height: 1px; background: #2c3948; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Panel {
+            height: root.editor-open ? 244px : 62px;
+            VerticalLayout {
+                padding: 13px;
+                spacing: 8px;
+                HorizontalLayout {
+                    Title { text: "Scene Editor"; horizontal-stretch: 1; vertical-alignment: center; }
+                    toggle-editor := Action {
+                        text: root.editor-open ? "Hide editor" : "Show editor";
+                        clicked => { root.editor-open = !root.editor-open; root.visibility-changed(); }
+                    }
+                }
+                HorizontalLayout {
+                    visible: root.editor-open;
+                    height: 98px;
+                    spacing: 14px;
+                    VerticalLayout {
+                        width: 155px;
+                        alignment: LayoutAlignment.start;
+                        spacing: 5px;
+                        Title { text: "GameFeed"; font-size: 14px; }
+                        Detail { text: root.game-info; }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: LayoutAlignment.start;
+                        spacing: 5px;
+                        Title { text: "CameraFeed"; font-size: 14px; }
+                        Detail { visible: !root.camera; text: root.camera-info; }
+                        HorizontalLayout {
+                            visible: root.camera;
+                            spacing: 5px;
+                            alignment: LayoutAlignment.start;
+                            VerticalLayout {
+                                width: 65px;
+                                Detail { text: "X"; }
+                                camera-x-input := Field { enabled: root.fields-enabled; edited => { root.scene-edit(); } }
+                            }
+                            VerticalLayout {
+                                width: 65px;
+                                Detail { text: "Y"; }
+                                camera-y-input := Field { enabled: root.fields-enabled; edited => { root.scene-edit(); } }
+                            }
+                            VerticalLayout {
+                                width: 65px;
+                                Detail { text: "W"; }
+                                camera-w-input := Field { enabled: root.fields-enabled; edited => { root.scene-edit(); } }
+                            }
+                            VerticalLayout {
+                                width: 65px;
+                                Detail { text: "H"; }
+                                camera-h-input := Field { enabled: root.fields-enabled; edited => { root.scene-edit(); } }
+                            }
+                        }
+                        HorizontalLayout {
+                            visible: root.camera;
+                            spacing: 7px;
+                            alignment: LayoutAlignment.start;
+                            Action {
+                                text: root.camera-visible ? "Visible" : "Hidden";
+                                enabled: root.fields-enabled;
+                                clicked => { root.camera-toggle(); }
+                            }
+                            Detail { text: root.camera-info; horizontal-stretch: 1; }
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 5px;
+                        alignment: LayoutAlignment.start;
+                        Title { text: "Text Overlay"; font-size: 14px; }
+                        overlay-input := Field {
+                            diagnostic-name: "Overlay text";
+                            enabled: root.fields-enabled;
+                            placeholder-text: "Overlay text";
+                            edited => { root.scene-edit(); }
+                        }
+                        HorizontalLayout {
+                            spacing: 5px;
+                            alignment: LayoutAlignment.start;
+                            VerticalLayout {
+                                width: 65px;
+                                Detail { text: "X"; }
+                                overlay-x-input := Field { enabled: root.fields-enabled; edited => { root.scene-edit(); } }
+                            }
+                            VerticalLayout {
+                                width: 65px;
+                                Detail { text: "Y"; }
+                                overlay-y-input := Field { enabled: root.fields-enabled; edited => { root.scene-edit(); } }
+                            }
+                            Detail { text: root.overlay-info; horizontal-stretch: 1; }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    visible: root.editor-open;
+                    spacing: 6px;
+                    alignment: LayoutAlignment.start;
+                    read := Action { text: "Read Agent draft"; enabled: root.can-read; clicked => { root.read-scene(); } }
+                    apply-button := Action { text: "Apply"; enabled: root.can-apply; clicked => { root.apply(); } }
+                    readback := Action { text: "OBS readback"; enabled: root.can-reconcile; clicked => { root.reconcile(); } }
+                    save-button := Action { text: "Save"; enabled: root.can-save; clicked => { root.save(); } }
+                    reload-button := Action { text: "Reload saved"; enabled: root.can-reload; clicked => { root.reload(); } }
+                    use-draft := Action { text: "Use Agent draft"; visible: root.can-use-agent; clicked => { root.use-agent(); } }
+                    keep := Action { text: "Keep local draft"; visible: root.can-keep-draft; clicked => { root.keep-draft(); } }
+                }
+                Detail { visible: root.editor-open; text: root.scene-status; }
+                Detail { visible: root.editor-open; text: root.scene-notice; color: #f5c77b; }
+            }
+        }
+    }
+
+    if root.about-open: Rectangle {
+        x: root.width - self.width - 14px;
+        y: 150px;
+        width: 245px;
+        height: 135px;
+        background: #19222e;
+        border-width: 1px;
+        border-color: #2c3948;
+        border-radius: 9px;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+            Title { text: "SplitCast Studio"; }
+            AboutSlint {}
+            Action { text: "Close"; clicked => { root.about-open = false; } }
+        }
+    }
+}

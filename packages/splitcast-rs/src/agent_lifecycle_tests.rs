@@ -962,3 +962,106 @@ fn delayed_prepare_control_case(command: &str, test_name: &str) {
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     drop(Agent::new(fixture.0.clone()).unwrap());
 }
+
+#[test]
+fn studio_chat_delta_is_bounded_and_yields_to_stop_without_speech() {
+    let mut fixture = Fixture::new();
+    fixture.0.chat_credentials = Some(fixture.0.state_dir.join("fixture-credentials"));
+    let mut agent = Agent::new(fixture.0.clone()).unwrap();
+    let epoch = rand_hex().unwrap();
+    let (subscription, mut deliver) = crate::eventsub::EventSub::synthetic(epoch.clone(), None);
+    agent
+        .session
+        .prepare(None, Instant::now(), Duration::from_secs(30))
+        .unwrap();
+    agent.session.prepared().unwrap();
+    agent.eventsub = Some(subscription);
+    let payload = "😀".repeat(140);
+    let name = "あ".repeat(44);
+    let now = Instant::now();
+    for n in 1..=140 {
+        deliver(&format!("chat-{n}"), &name, &payload, now);
+    }
+    deliver("chat-140", "duplicate", "duplicate", now);
+
+    let socket = listener();
+    let port = socket.local_addr().unwrap().port();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let shutdown = Arc::clone(&cancel);
+    let server = Running {
+        cancel,
+        thread: Some(thread::spawn(move || {
+            serve_agent(agent, socket, TOKEN.into(), shutdown, Limits::default())
+        })),
+    };
+    assert!(response(send_as(port, "chat", json!({}), "invalid-bearer"))["messages"].is_null());
+    let read = |args| response(send(port, "chat", args));
+    let initial = read(json!({}));
+    assert_eq!(initial["enabled"], true);
+    assert_eq!(initial["epoch"], epoch);
+    assert_eq!(initial["more"], true);
+    assert_eq!(initial["overrun"], false);
+    assert_eq!(initial["subscription"]["notifications"], 141);
+    assert_eq!(initial["subscription"]["duplicates"], 1);
+    assert_eq!(initial["subscription"]["dropped"], 0);
+    assert_eq!(initial["messages"].as_array().unwrap().len(), 32);
+    assert_eq!(initial["messages"][0]["cursor"], 13);
+    assert_eq!(
+        initial["messages"][0]["display_name"]
+            .as_str()
+            .unwrap()
+            .len(),
+        126
+    );
+    assert_eq!(initial["messages"][0]["text"].as_str().unwrap().len(), 512);
+    let gap = read(json!({"epoch":epoch,"after":0}));
+    assert_eq!(gap["overrun"], true);
+    assert_eq!(gap["reset"], false);
+    assert_eq!(gap["messages"], initial["messages"]);
+    let new = read(json!({"epoch":"11111111111111111111111111111111","after":0}));
+    assert_eq!(new["reset"], true);
+    let future = read(json!({"epoch":epoch,"after":141}));
+    assert_eq!(future["reset"], true);
+    let mut tail = initial;
+    for _ in 0..3 {
+        tail = read(json!({"epoch":epoch,"after":tail["cursor"]}));
+    }
+    assert_eq!(tail["cursor"], 140);
+    assert_eq!(tail["more"], false);
+    assert_eq!(tail["messages"][31]["id"], "chat-140");
+    let empty = read(json!({"epoch":epoch,"after":140}));
+    assert_eq!(empty["cursor"], 140);
+    assert_eq!(empty["messages"], json!([]));
+    assert_eq!(
+        response(send(port, "tts", json!({})))["outcome"],
+        "not_executed"
+    );
+
+    let calls: Vec<_> = (0..5)
+        .map(|_| send(port, "chat", json!({"epoch":epoch,"after":0})))
+        .collect();
+    let stop = response(send(port, "stop", json!({})));
+    let id = stop["stop_id"].as_str().unwrap();
+    assert!(matches!(
+        stop["stop"].as_str(),
+        Some("requested" | "completed")
+    ));
+    for call in calls {
+        let _ = response(call);
+    }
+    let until = Instant::now() + Duration::from_secs(2);
+    loop {
+        let observed = response(get_status(port));
+        if observed["stop"] == "completed" {
+            assert_eq!(observed["stop_id"], id);
+            assert_eq!(observed["state"], "idle");
+            break;
+        }
+        assert!(Instant::now() < until, "Stop did not complete: {observed}");
+    }
+    let cleared = read(json!({"epoch":epoch,"after":140}));
+    assert_eq!(cleared["reset"], true);
+    assert_eq!(cleared["epoch"], Value::Null);
+    assert_eq!(cleared["messages"], json!([]));
+    server.join();
+}

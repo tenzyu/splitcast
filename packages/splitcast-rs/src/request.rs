@@ -222,6 +222,10 @@ impl Operation {
         self.remote_prepare = Some(owner);
         self
     }
+    pub(crate) fn capped(mut self, cap: Duration) -> Self {
+        self.deadline = self.deadline.min(Instant::now() + cap);
+        self
+    }
     pub(crate) fn deadline(&self, cap: Duration) -> io::Result<Instant> {
         self.check()?;
         Ok(self.deadline.min(Instant::now() + cap))

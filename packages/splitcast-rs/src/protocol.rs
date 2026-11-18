@@ -1,3 +1,7 @@
+pub use crate::{
+    chat::Cursor as ChatCursor,
+    scene::{Edit as SceneEdit, SceneLayout},
+};
 use serde_json::{json, Map, Value};
 use std::io;
 use std::time::Duration;
@@ -99,16 +103,35 @@ pub enum Command {
     Status,
     Heartbeat,
     Doctor,
-    Devices { remote: bool },
-    Prepare { media: bool },
+    Devices {
+        remote: bool,
+    },
+    Prepare {
+        media: bool,
+    },
     Start(Start),
     Stop,
-    Routes { media: bool },
+    Routes {
+        media: bool,
+    },
     Mic(MicAction),
     TtsStatus,
-    Say { text: String, id: String },
+    Say {
+        text: String,
+        id: String,
+    },
     Diagnostics,
     Preview,
+    PreviewSmall,
+    Chat(Option<ChatCursor>),
+    Scene,
+    SceneApply {
+        edit: SceneEdit,
+        layout: SceneLayout,
+    },
+    SceneReconcile(SceneEdit),
+    SceneSave(SceneEdit),
+    SceneReload(SceneEdit),
     TtsNext,
 }
 
@@ -173,14 +196,16 @@ impl Invocation {
     pub fn parse(name: &str, args: &Value, max_text: usize) -> io::Result<Self> {
         let args = args.as_object().ok_or_else(invalid)?;
         let allowed: &[&str] = match name {
-            "status" | "heartbeat" | "doctor" | "stop" | "diagnostics" | "tts-next" | "preview" => {
-                &[]
-            }
+            "status" | "heartbeat" | "doctor" | "stop" | "diagnostics" | "tts-next" | "preview"
+            | "preview-small" | "scene" => &[],
             "devices" => &["remote"],
             "start" => &["output", "confirm_public", "duration_seconds", "session_id"],
             "prepare" | "routes" => &["media"],
             "mic" | "tts" => &["action"],
             "say" => &["text", "id"],
+            "chat" => &["epoch", "after"],
+            "scene-apply" => &["generation", "operation", "layout"],
+            "scene-reconcile" | "scene-save" | "scene-reload" => &["generation", "operation"],
             _ => return Err(invalid()),
         };
         if args
@@ -245,6 +270,16 @@ impl Invocation {
             },
             "diagnostics" => Command::Diagnostics,
             "preview" => Command::Preview,
+            "preview-small" => Command::PreviewSmall,
+            "chat" => Command::Chat(ChatCursor::parse(args)?),
+            "scene" => Command::Scene,
+            "scene-apply" => Command::SceneApply {
+                edit: SceneEdit::parse(args)?,
+                layout: SceneLayout::parse(args.get("layout").ok_or_else(invalid)?)?,
+            },
+            "scene-reconcile" => Command::SceneReconcile(SceneEdit::parse(args)?),
+            "scene-save" => Command::SceneSave(SceneEdit::parse(args)?),
+            "scene-reload" => Command::SceneReload(SceneEdit::parse(args)?),
             "tts-next" => Command::TtsNext,
             _ => return Err(invalid()),
         };
@@ -292,6 +327,20 @@ impl Command {
             Self::Say { text, id } => ("say", json!({"text":text, "id":id})),
             Self::Diagnostics => ("diagnostics", json!({})),
             Self::Preview => ("preview", json!({})),
+            Self::PreviewSmall => ("preview-small", json!({})),
+            Self::Chat(cursor) => (
+                "chat",
+                cursor.as_ref().map_or_else(|| json!({}), ChatCursor::args),
+            ),
+            Self::Scene => ("scene", json!({})),
+            Self::SceneApply { edit, layout } => {
+                let mut args = edit.args();
+                args["layout"] = layout.value();
+                ("scene-apply", args)
+            }
+            Self::SceneReconcile(edit) => ("scene-reconcile", edit.args()),
+            Self::SceneSave(edit) => ("scene-save", edit.args()),
+            Self::SceneReload(edit) => ("scene-reload", edit.args()),
             Self::TtsNext => ("tts-next", json!({})),
         }
     }
