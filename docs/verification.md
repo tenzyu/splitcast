@@ -4,6 +4,18 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 additional PR #16 review
+
+| Exact command or profile | Observed result |
+| --- | --- |
+| `direnv exec . cargo test -p splitcast-rs-core --locked --offline --test two_agents -- production_watchdog_ tui_quit_ tui_eof_ --nocapture` | On `e8d9427` with the new fixtures, the watchdog kept a missing-frame Twitch stream Running. Both terminal cases lacked the expected notices. Three regressions failed. Private log `artifacts/mission/pr16-managed/review-f13-f14-red.log`. |
+| `direnv exec . cargo test -p splitcast-rs-core --locked --offline --test two_agents -- production_watchdog_ tui_quit_ tui_eof_ tui_can_stop_ --nocapture` | Four passed on the source committed as `eb0d4ac`. The authenticated production Agent accepted advancing counters and stopped on missing, wrong-type, unchanged and decreasing stream frame counters. It confirmed output inactivity, and the fixture observed released workers and listeners. The terminal tests held the Start response and checked Quit, EOF and urgent Stop. An intermediate run retained a failed fixture assertion that used the wrong cleanup field name. Private log `artifacts/mission/pr16-managed/review-f13-f14-focused-final.log`. |
+| `direnv exec . cargo run -p splitcast-xtask -- verify-virtual` | All 14 checks passed on `eb0d4acd6369cadacb22aee7bd0cc159a69ca754`. Receipt `artifacts/verification/runs/1794976855239153906`. |
+| Hosted CI on `e8d9427` before F13 and F14 | Four checks passed, including Native package. The package receipt binds the GitHub test merge `205a44e`. [Hosted run](https://github.com/tenzyu/splitcast/actions/runs/44236505311) |
+
+The review follow-up used isolated OBS WebSocket responses for counter faults.
+The physical observations below remain bound to the earlier executable.
+
 ## 2026-11-18 managed broadcast follow-up on PR #16
 
 The [integrated physical and viewer receipts](evidence/pr16-managed-acceptance.md)
