@@ -80,7 +80,7 @@ def validate_release(release, ref, manifest, run, sha, attempt):
     if (document.get("version") != 1
             or document.get("revision", {}).get("sha") != sha
             or document.get("revision", {}).get("system") != "x86_64-linux"
-            or set(document.get("roots", {})) != {"native", "web"}
+            or set(document.get("roots", {})) != {"native"}
             or len(document.get("custom", [])) != 3
             or not set(document["roots"].values()) <= set(document.get("closure", {}))):
         raise ValueError("published manifest does not describe tested roots")

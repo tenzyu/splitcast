@@ -430,8 +430,7 @@ class Run:
         config["audio"]["rnnoise_control"] = "0|200|0|0|0"
         config["obs"].update({"binary": "obs", "websocket_port": ports[5], "video_mode": "software",
                               "password_file": str(self.directory / "password"),
-                              "recording_dir": str(self.directory / "recordings"),
-                              "twitch_key_file": str(self.directory / "absent-stream-key")})
+                              "recording_dir": str(self.directory / "recordings")})
         self.config = config
         write_json(self.directory / "config.json", config)
         self.agent = self.spawn("agent", [str(self.binary), "--config", str(self.directory / "config.json"), "agent"])
@@ -824,9 +823,11 @@ def scenario(directory, binary, case, epoch):
                       "-c:v", "copy", "-af", f"aeval=exprs='{expressions}':c=stereo,aformat=channel_layouts=stereo",
                       "-c:a", "aac", "-b:a", "160k", str(tail)])
             result["audio_tail_negative_control"] = reject_recording(run, tail, epoch, "audio-tail", "A/V audio source identity")
+            # At 9 seconds, a 1.5-second notch leaves ample margin above the 70%
+            # identity floor while exceeding the three-window continuity limit.
             dropout = directory / "bad-mic-dropout.mkv"
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
-                      "-c:v", "copy", "-af", "bandreject=f=180:t=h:w=100:enable='between(t,3,6.5)'",
+                      "-c:v", "copy", "-af", "bandreject=f=180:t=h:w=100:enable='between(t,3,4.5)'",
                       "-c:a", "aac", "-b:a", "160k", str(dropout)])
             result["mic_dropout_negative_control"] = reject_recording(run, dropout, epoch, "mic-dropout", "mic audio consecutive dropout")
         if case == "worker-death":

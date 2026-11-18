@@ -2,7 +2,6 @@ use crate::{
     control,
     protocol::{Command, Invocation},
     request::{error_response, RequestTicket},
-    web::Assets,
 };
 use std::io;
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -84,7 +83,6 @@ struct ConnectionConfig {
     port: u16,
     token: String,
     max_text: usize,
-    assets: Arc<Assets>,
     limits: Limits,
     control: crate::lifecycle::SessionControl,
     normal_waiters: AtomicUsize,
@@ -98,7 +96,6 @@ impl ListenerOwner {
         listener: TcpListener,
         token: String,
         max_text: usize,
-        assets: Arc<Assets>,
         shutdown: Arc<AtomicBool>,
         limits: Limits,
         control: crate::lifecycle::SessionControl,
@@ -108,7 +105,6 @@ impl ListenerOwner {
             port,
             token,
             max_text,
-            assets,
             limits,
             control,
             normal_waiters: AtomicUsize::new(0),
@@ -201,16 +197,6 @@ fn connection(
             return;
         }
     };
-    if request.method == "GET" {
-        if let Some((mime, body)) = config.assets.get(&request.path) {
-            let _ = control::reply_bytes(stream, 200, mime, body);
-            return;
-        }
-        if request.path == "/" {
-            let _ = control::reply(stream, 503, "{\"error\":\"Rust WASM assets unavailable; use the TUI or build the web package\"}");
-            return;
-        }
-    }
     let invocation = if request.method == "GET" && request.path == "/api/status" {
         Ok(Invocation {
             command: Command::Status,

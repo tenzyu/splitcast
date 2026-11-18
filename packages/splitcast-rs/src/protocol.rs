@@ -4,14 +4,12 @@ use std::io;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Output {
     Recording,
-    Twitch,
 }
 
 impl Output {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Recording => "recording",
-            Self::Twitch => "twitch",
         }
     }
 }
@@ -23,36 +21,22 @@ pub enum MicAction {
     Unmute,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TtsAction {
-    Status,
-    On,
-    Off,
-    Mute,
-    Unmute,
-    Skip,
-    Clear,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Status,
     Heartbeat,
     Doctor,
     Devices { remote: bool },
-    Prepare,
+    Prepare { media: bool },
     Start(Output),
     Stop,
-    Routes { settings: Option<Value> },
+    Routes { media: bool },
     Mic(MicAction),
-    Tts(TtsAction),
+    TtsStatus,
     Say { text: String, id: Option<String> },
-    Overlay { text: String },
-    Preview,
     Diagnostics,
+    Preview,
     TtsNext,
-    TtsAck { id: String },
-    TtsFinished { id: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,15 +100,14 @@ impl Invocation {
     pub fn parse(name: &str, args: &Value, max_text: usize) -> io::Result<Self> {
         let args = args.as_object().ok_or_else(invalid)?;
         let allowed: &[&str] = match name {
-            "status" | "heartbeat" | "doctor" | "prepare" | "stop" | "preview" | "diagnostics"
-            | "tts-next" => &[],
+            "status" | "heartbeat" | "doctor" | "stop" | "diagnostics" | "tts-next" | "preview" => {
+                &[]
+            }
             "devices" => &["remote"],
             "start" => &["output"],
-            "routes" => &["settings"],
+            "prepare" | "routes" => &["media"],
             "mic" | "tts" => &["action"],
             "say" => &["text", "id"],
-            "overlay" => &["text"],
-            "tts-ack" | "tts-finished" => &["id"],
             _ => return Err(invalid()),
         };
         if args
@@ -135,9 +118,6 @@ impl Invocation {
         }
         let owner = if args.contains_key("_owner") {
             let owner = string(args, "_owner")?;
-            if owner.is_empty() || owner.len() > 128 || owner.chars().any(char::is_control) {
-                return Err(invalid());
-            }
             Some(OwnerId::parse(owner)?)
         } else {
             None
@@ -161,6 +141,10 @@ impl Invocation {
             }
             Ok(id.to_owned())
         };
+        let media = || match args.get("media") {
+            Some(value) => value.as_bool().ok_or_else(invalid),
+            None => Ok(true),
+        };
         let command = match name {
             "status" => Command::Status,
             "heartbeat" => Command::Heartbeat,
@@ -171,7 +155,7 @@ impl Invocation {
                     None => true,
                 },
             },
-            "prepare" => Command::Prepare,
+            "prepare" => Command::Prepare { media: media()? },
             "stop" => Command::Stop,
             "start" => Command::Start(
                 match args
@@ -181,33 +165,17 @@ impl Invocation {
                     .unwrap_or("recording")
                 {
                     "recording" => Output::Recording,
-                    "twitch" => Output::Twitch,
                     _ => return Err(invalid()),
                 },
             ),
-            "routes" => Command::Routes {
-                settings: match args.get("settings") {
-                    Some(v) if v.is_object() => Some(v.clone()),
-                    Some(_) => return Err(invalid()),
-                    None => None,
-                },
-            },
+            "routes" => Command::Routes { media: media()? },
             "mic" => Command::Mic(match action(args)? {
                 "status" => MicAction::Status,
                 "mute" => MicAction::Mute,
                 "unmute" => MicAction::Unmute,
                 _ => return Err(invalid()),
             }),
-            "tts" => Command::Tts(match action(args)? {
-                "status" => TtsAction::Status,
-                "on" => TtsAction::On,
-                "off" => TtsAction::Off,
-                "mute" => TtsAction::Mute,
-                "unmute" => TtsAction::Unmute,
-                "skip" => TtsAction::Skip,
-                "clear" => TtsAction::Clear,
-                _ => return Err(invalid()),
-            }),
+            "tts" if action(args)? == "status" => Command::TtsStatus,
             "say" => Command::Say {
                 text: text(max_text, false)?,
                 id: if args.contains_key("id") {
@@ -216,14 +184,9 @@ impl Invocation {
                     None
                 },
             },
-            "overlay" => Command::Overlay {
-                text: text(1000, true)?,
-            },
-            "preview" => Command::Preview,
             "diagnostics" => Command::Diagnostics,
+            "preview" => Command::Preview,
             "tts-next" => Command::TtsNext,
-            "tts-ack" => Command::TtsAck { id: id()? },
-            "tts-finished" => Command::TtsFinished { id: id()? },
             _ => return Err(invalid()),
         };
         Ok(Self { command, owner })
@@ -246,24 +209,15 @@ impl Command {
             Self::Heartbeat => ("heartbeat", json!({})),
             Self::Doctor => ("doctor", json!({})),
             Self::Devices { remote } => ("devices", json!({"remote":remote})),
-            Self::Prepare => ("prepare", json!({})),
+            Self::Prepare { media } => ("prepare", json!({"media":media})),
             Self::Start(output) => ("start", json!({"output":output.as_str()})),
             Self::Stop => ("stop", json!({})),
-            Self::Routes { settings } => (
-                "routes",
-                settings
-                    .as_ref()
-                    .map(|s| json!({"settings":s}))
-                    .unwrap_or_else(|| json!({})),
-            ),
+            Self::Routes { media } => ("routes", json!({"media":media})),
             Self::Mic(action) => (
                 "mic",
                 json!({"action":match action{MicAction::Status=>"status",MicAction::Mute=>"mute",MicAction::Unmute=>"unmute"}}),
             ),
-            Self::Tts(action) => (
-                "tts",
-                json!({"action":match action{TtsAction::Status=>"status",TtsAction::On=>"on",TtsAction::Off=>"off",TtsAction::Mute=>"mute",TtsAction::Unmute=>"unmute",TtsAction::Skip=>"skip",TtsAction::Clear=>"clear"}}),
-            ),
+            Self::TtsStatus => ("tts", json!({"action":"status"})),
             Self::Say { text, id } => ("say", {
                 let mut v = json!({"text":text});
                 if let Some(id) = id {
@@ -271,12 +225,9 @@ impl Command {
                 }
                 v
             }),
-            Self::Overlay { text } => ("overlay", json!({"text":text})),
-            Self::Preview => ("preview", json!({})),
             Self::Diagnostics => ("diagnostics", json!({})),
+            Self::Preview => ("preview", json!({})),
             Self::TtsNext => ("tts-next", json!({})),
-            Self::TtsAck { id } => ("tts-ack", json!({"id":id})),
-            Self::TtsFinished { id } => ("tts-finished", json!({"id":id})),
         }
     }
 }
@@ -306,8 +257,9 @@ mod tests {
     #[test]
     fn text_roundtrips_without_losing_quotes_or_whitespace() {
         let original = Invocation {
-            command: Command::Overlay {
+            command: Command::Say {
                 text: " \"quoted\"\n日本語 ".into(),
+                id: None,
             },
             owner: None,
         };

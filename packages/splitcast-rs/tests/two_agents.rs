@@ -27,6 +27,41 @@ struct Agent {
 }
 
 impl Agent {
+    fn spawn(dir: &Path, port: u16, api: u16, obs: u16) -> Self {
+        let role = dir.file_name().unwrap().to_str().unwrap();
+        let mut agent = Self {
+            child: Command::new(env!("CARGO_BIN_EXE_splitcast-rs-core"))
+                .args([
+                    "--config",
+                    dir.join("config.json").to_str().unwrap(),
+                    "agent",
+                ])
+                .env("PATH", dir.join("tools"))
+                .env("SPLITCAST_VIRTUAL_DIR", dir)
+                .env("SPLITCAST_VIRTUAL_API", api.to_string())
+                .env("SPLITCAST_VIRTUAL_OBS", obs.to_string())
+                .stdin(Stdio::null())
+                .stdout(File::create(dir.join("stdout.log")).unwrap())
+                .stderr(File::create(dir.join("stderr.log")).unwrap())
+                .spawn()
+                .unwrap(),
+            port,
+            token: format!("virtual-{role}-private-token"),
+            evidence: dir.to_path_buf(),
+        };
+        let end = Instant::now() + LIMIT;
+        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                agent.child.try_wait().unwrap().is_none(),
+                "{role} exited: {}",
+                fs::read_to_string(dir.join("stderr.log")).unwrap()
+            );
+            assert!(Instant::now() < end, "{role} did not listen");
+            thread::sleep(Duration::from_millis(20));
+        }
+        agent
+    }
+
     fn trace(&self, event: Value) {
         // Fixture-only private diagnostics; never record the bearer or password.
         let mut log = OpenOptions::new()
@@ -239,6 +274,7 @@ impl Fixture {
             let tools = dir.join("tools");
             fs::create_dir(&tools).unwrap();
             std::os::unix::fs::symlink(executable("env"), tools.join("env")).unwrap();
+            std::os::unix::fs::symlink(executable("timeout"), tools.join("timeout")).unwrap();
             for name in [
                 "ssh",
                 "ffmpeg",
@@ -251,7 +287,15 @@ impl Fixture {
             ] {
                 let text = if name == "pactl" {
                     format!(
-                        "#!{}\nprintf '%s\\n' '[{{\"name\":\"splitcast_mic\"}}]'\n",
+                        r#"#!{}
+if [ "$4" = sources ]; then
+    printf '%s\n' '[{{"name":"virtual_microphone","properties":{{"device.api":"alsa","device.class":"sound"}}}}]'
+elif [ "$4" = sink-inputs ]; then
+    printf '%s\n' '[{{"corked":false,"properties":{{"media.name":"SplitCast processed microphone"}}}}]'
+else
+    printf '%s\n' '[{{"name":"splitcast_mic"}}]'
+fi
+"#,
                         executable("sh").display()
                     )
                 } else {
@@ -295,7 +339,6 @@ impl Fixture {
             cfg["obs"]["websocket_port"] = json!(ports[7]);
             cfg["obs"]["password_file"] = json!(dir.join("password"));
             cfg["obs"]["recording_dir"] = json!(dir.join("recordings"));
-            cfg["obs"]["twitch_key_file"] = json!(dir.join("absent-twitch-key"));
             cfg["tts"]["credentials_file"] = json!(dir.join("absent-credentials"));
             cfg["tts"]["voicevox_url"] = json!(format!("http://127.0.0.1:{}", ports[8]));
             if speech {
@@ -304,49 +347,17 @@ impl Fixture {
                 cfg["tts"]["expiry_seconds"] = json!(5);
                 if role == "capture" {
                     cfg["audio"]["tts_sink"] = json!("return.selected");
+                    if native_lab.is_none() {
+                        cfg["audio"]["tts_volume_percent"] = json!(60);
+                    }
                     return_tests::install_player(&dir, native_lab);
                 }
             }
             fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
         }
         drop(reservations);
-        let spawn = |role: &str, port| {
-            let dir = root.join(role);
-            let mut agent = Agent {
-                child: Command::new(env!("CARGO_BIN_EXE_splitcast-rs-core"))
-                    .args([
-                        "--config",
-                        dir.join("config.json").to_str().unwrap(),
-                        "agent",
-                    ])
-                    .env("PATH", dir.join("tools"))
-                    .env("SPLITCAST_VIRTUAL_DIR", &dir)
-                    .env("SPLITCAST_VIRTUAL_API", ports[6].to_string())
-                    .env("SPLITCAST_VIRTUAL_OBS", ports[7].to_string())
-                    .env_remove("SPLITCAST_WEB_ASSETS")
-                    .stdin(Stdio::null())
-                    .stdout(File::create(dir.join("stdout.log")).unwrap())
-                    .stderr(File::create(dir.join("stderr.log")).unwrap())
-                    .spawn()
-                    .unwrap(),
-                port,
-                token: format!("virtual-{role}-private-token"),
-                evidence: dir.clone(),
-            };
-            let end = Instant::now() + LIMIT;
-            while TcpStream::connect(("127.0.0.1", port)).is_err() {
-                assert!(
-                    agent.child.try_wait().unwrap().is_none(),
-                    "{role} exited: {}",
-                    fs::read_to_string(dir.join("stderr.log")).unwrap()
-                );
-                assert!(Instant::now() < end, "{role} did not listen");
-                thread::sleep(Duration::from_millis(20));
-            }
-            agent
-        };
-        let production = spawn("production", ports[1]);
-        let capture = spawn("capture", ports[0]);
+        let production = Agent::spawn(&root.join("production"), ports[1], ports[6], ports[7]);
+        let capture = Agent::spawn(&root.join("capture"), ports[0], ports[6], ports[7]);
         println!(
             "two real agents, isolated worker environment; evidence {}",
             root.display()

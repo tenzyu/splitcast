@@ -2,22 +2,20 @@
   lib,
   rustPlatform,
   makeWrapper,
-  callPackage,
   bash,
   coreutils,
   ffmpeg-full,
   gpu-screen-recorder,
+  glibc,
   mediamtx,
   pipewire,
   pulseaudio,
   openssh,
-  v4l-utils,
   rnnoise-plugin,
   obs-studio,
-  webAssets ? callPackage ../splitcast-web {},
 }: let
   obs = import ../../nix/obs.nix {inherit obs-studio;};
-  runtime = [coreutils ffmpeg-full gpu-screen-recorder mediamtx pipewire pulseaudio openssh v4l-utils obs];
+  runtime = [coreutils glibc.bin ffmpeg-full gpu-screen-recorder mediamtx pipewire pulseaudio openssh obs];
 in
   rustPlatform.buildRustPackage {
     pname = "splitcast-rs-core";
@@ -30,7 +28,6 @@ in
     nativeBuildInputs = [makeWrapper bash coreutils];
     postInstall = ''
       wrapProgram "$out/bin/splitcast-rs-core" \
-        --set SPLITCAST_WEB_ASSETS ${webAssets} \
         --prefix PATH : ${lib.makeBinPath runtime} \
         --prefix LADSPA_PATH : ${rnnoise-plugin.ladspa}/lib/ladspa
       ln -s splitcast-rs-core "$out/bin/splitcast"
@@ -39,7 +36,6 @@ in
       example = ./tests/example.json;
       rnnoise = rnnoise-plugin.ladspa;
       inherit obs;
-      web = webAssets;
     };
     meta = {
       mainProgram = "splitcast";

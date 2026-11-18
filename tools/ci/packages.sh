@@ -2,8 +2,8 @@
 set -euo pipefail
 
 mkdir -p artifacts/ci
-nix derivation show .#default .#splitcast-web > artifacts/ci/derivations.json
-nix build .#default .#splitcast-web --no-link --print-out-paths | tee artifacts/ci/outputs.txt
+nix derivation show .#default > artifacts/ci/derivations.json
+nix build .#default --no-link --print-out-paths | tee artifacts/ci/outputs.txt
 mapfile -t outputs < artifacts/ci/outputs.txt
 nix path-info --recursive --json --json-format 1 "${outputs[@]}" > artifacts/ci/closure.json
 nix flake check

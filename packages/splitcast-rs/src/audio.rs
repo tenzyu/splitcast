@@ -85,22 +85,38 @@ pub(crate) fn ready_operation(
     cfg: &Config,
     operation: Option<&crate::request::Operation>,
 ) -> io::Result<bool> {
-    let argv = client(
-        cfg,
-        vec![
-            "pactl".into(),
-            "-f".into(),
-            "json".into(),
-            "list".into(),
-            "sinks".into(),
-        ],
-    );
-    let value: serde_json::Value =
-        serde_json::from_str(&media::command_operation(&argv, operation)?)
-            .map_err(|_| io::Error::other("invalid private audio observation"))?;
-    Ok(value.as_array().is_some_and(|sinks| {
+    let sinks = inventory(cfg, "sinks", operation)?;
+    Ok(sinks.as_array().is_some_and(|sinks| {
         sinks.len() == 1 && sinks[0]["name"].as_str() == Some(&cfg.processed_sink)
     }))
+}
+
+pub(crate) fn processing_ready(
+    cfg: &Config,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<bool> {
+    let inputs = inventory(cfg, "sink-inputs", operation)?;
+    Ok(inputs.as_array().is_some_and(|inputs| {
+        inputs.len() == 1
+            && inputs[0]["corked"] == false
+            && inputs[0]["properties"]["media.name"] == "SplitCast processed microphone"
+    }))
+}
+
+fn inventory(
+    cfg: &Config,
+    kind: &str,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<serde_json::Value> {
+    let argv = client(
+        cfg,
+        ["pactl", "-f", "json", "list", kind]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    );
+    serde_json::from_str(&media::command_operation(&argv, operation)?)
+        .map_err(|_| io::Error::other("invalid private audio observation"))
 }
 
 #[cfg(test)]

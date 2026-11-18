@@ -7,8 +7,6 @@ use std::time::Duration;
 pub enum Worker {
     Game,
     Microphone,
-    Camera,
-    Speech,
     Rnnoise,
     Obs,
     AudioServer,
@@ -20,8 +18,6 @@ impl Worker {
         match self {
             Self::Game => "game",
             Self::Microphone => "mic",
-            Self::Camera => "camera",
-            Self::Speech => "tts",
             Self::Rnnoise => "rnnoise",
             Self::Obs => "obs",
             Self::AudioServer => "pulse",
@@ -82,7 +78,7 @@ mod tests {
     #[test]
     fn every_owned_worker_is_included_in_stop() {
         let mut workers = Workers::default();
-        for worker in [Worker::Speech, Worker::AudioServer, Worker::Tunnel] {
+        for worker in [Worker::Rnnoise, Worker::AudioServer, Worker::Tunnel] {
             workers
                 .spawn(worker, &["sleep".into(), "30".into()])
                 .unwrap();

@@ -2,18 +2,11 @@
 
 This runbook separates local development checks from tests that require current operator authorization. It is not a command to enable a production service. Capture and production are roles, not fixed machine identities.
 
-The [initial PoC checkpoint](evidence/poc-20261117.md) records S24's narrower
-trial policy. Its recordings are temporary-only, at most 30 seconds each and
-500 MB aggregate, inspected then deleted only by their trial owner. Do not run
-the existing retained-media profile unchanged under that permission. Read-only
-SSH is not a worker-launch channel. The [fixture playback command](poc-speech.md)
-does not connect Twitch or authorize physical listening by itself.
-
-[S25's convergence checkpoint](evidence/poc-convergence-20261117.md) records the
-later Twitch authorization. WSS, configured-channel chat subscription, necessary
-Helix calls and existing suitable OAuth use are approved. New OAuth and scope
-changes are not. Missing account inputs stop that operation. Capture SSH still
-permits metadata investigation only, not worker launch or helper provisioning.
+Current authorization governs physical and external effects. The
+[versioned Wiki](memory/session-state.md) records the latest live evidence and
+links older, separately scoped trials. Keep each physical recording within
+30 seconds and the aggregate within 500 MB. Use trial-owned resources and an
+explicitly selected game, microphone and playback sink.
 
 ## 1. Record the artifact and scope
 
@@ -25,11 +18,11 @@ Before each test, name its inputs and side effects. Refuse a step that needs una
 
 ```sh
 nix develop -c cargo run -p splitcast-xtask -- verify
-nix build .#default .#splitcast-web
+nix build .#default
 nix flake check
 ```
 
-The verifier runs fmt, workspace/all-target check and Clippy, unit and integration tests, doctests, the no-default-features matrix, the valid all-features check, the WASM target check, dependency trees, and repository portability. Each command's output and exit status are retained under `artifacts/verification/`. A failing command makes the verifier fail even if later checks pass.
+The verifier runs fmt, workspace/all-target check and Clippy, unit and integration tests, doctests, the no-default-features matrix, the valid all-features check, dependency trees, and repository portability. Each command's output and exit status are retained under `artifacts/verification/`. A failing command makes the verifier fail even if later checks pass.
 
 Hosted CI runs those checks on ephemeral runners. Signed GitHub Releases can
 provide the same pinned package outputs without builds. Follow the exact source,
@@ -40,7 +33,7 @@ not a moving release tag. Publishing a cache never enables runtime or autostart.
 
 For the additional real production software path, follow [real local media acceptance](media-acceptance.md). Its opt-in `media-test` shell uses a device-free private namespace, generated publishers, actual production services, and local OBS recordings. Do not invoke the underlying Python orchestrator outside its namespace launcher.
 
-Ordinary tests exercise authenticated local sockets, protocol rejection, terminal input, output selection, peer ownership, worker failures, and timeouts with stand-in workers. They must not contact a real SSH peer or open capture devices.
+Ordinary tests exercise authenticated local sockets, protocol rejection, private output selection, peer ownership, worker failures, and timeouts with stand-in workers. They must not contact a real SSH peer or open capture devices.
 
 Run isolated optional local components separately:
 
@@ -68,7 +61,7 @@ result/bin/splitcast validate --config packages/splitcast-rs/example.toml
 result/bin/splitcast doctor --offline --config packages/splitcast-rs/example.toml
 ```
 
-Selfcheck must not start media. The example must validate but Doctor must not report an unselected capture setup ready. Provision secrets outside Git and outside the Nix store. Configure capture host and production host through SSH aliases and role settings. Share the complete camera contract, transport geometry, routes, and ports. A compatible status endpoint alone is not media readiness.
+Selfcheck must not start media. The example must validate but Doctor must not report an unselected capture setup ready. Provision secrets outside Git and outside the Nix store. Configure capture host and production host through SSH aliases and role settings. Share transport geometry, ports and the speech expiry contract. A compatible status endpoint alone is not media readiness.
 
 Evaluate the consumer's configuration before any activation. Confirm capture remains disabled unless separately approved, `rustCandidate=false`, empty `WantedBy`, migration-gated `ExecStart`, `KillMode=control-group`, `SendSIGKILL=true`, a finite stop timeout, and private state settings. Optional display and stock-OBS firewall modules remain disabled by default. Their evaluation is not permission to install, enable, or activate them.
 
@@ -100,11 +93,54 @@ This harness is not the Rust agent, GSR, OBS, physical audio, camera, or gamepla
 
 Before capture, record local audio routes, input mappings, renderer, resolution, focus, display/scanout behavior, GPU/CPU state, and the exact workload. Do not alter the game or local playback to make the candidate pass. Verify the narrow privileged capture boundary and selected device provenance. A name filter is not a hardware audit.
 
-Start only the reviewed opt-in candidate and its owned workers. Check actual decoded moving pixels, preview, recording, stream types, processed microphone output, selected camera, synchronization, frame age, bounded queues, reconnect behavior, and local gameplay. Request failures and partial startup must stop owned effects. Lost Prepare replies must receive owner-scoped rollback. An unconfirmed remote Stop must retain the obligation rather than report Idle. Confirm process, socket, file, connection, and cgroup cleanup independently after disconnect, child failure, SIGTERM, and an explicitly authorized forced-controller-death trial.
+Start only the reviewed opt-in candidate and its owned workers. Check actual decoded moving pixels, preview, recording, stream types, processed microphone output, synchronization, frame age, bounded queues, reconnect behavior, and local gameplay. Request failures and partial startup must stop owned effects. Lost Prepare replies must receive owner-scoped rollback. An unconfirmed remote Stop must retain the obligation rather than report Idle. Confirm process, socket, file, connection, and cgroup cleanup independently after disconnect, child failure, SIGTERM, and an explicitly authorized forced-controller-death trial.
 
 Measure a comparable game-only baseline before claiming a performance improvement. Preserve replay/workload, versions, settings, thermal state, and focus, then repeat A/B/A trials. Record distributions rather than a single average. Reject any claimed improvement when inputs differ, work is missing, errors occur, or gameplay exceeds the operator's predeclared regression threshold. No baseline or performance gain is claimed by the extraction tests.
 
-Finite speech return has a [software acceptance receipt and rollback procedure](evidence/audio-return.md). EventSub, shared selection transactions, full crash recovery and role-specific backend separation are unfinished. They cannot be accepted by turning off their assertions. Public broadcast requires separate authorization even after every local gate passes.
+Finite speech return has a [software acceptance receipt and rollback procedure](evidence/audio-return.md). The live EventSub and media trial results are in the versioned Wiki. Full crash and performance acceptance remains open. They cannot be accepted by turning off their assertions. Public broadcast requires separate authorization even after every local gate passes.
+
+## Native PoC startup
+
+Build and stage the same reviewed binary on both hosts with the pinned flake.
+Provision mode-0600 bearer and OBS password files. Verify the peer host key and
+use a restricted SSH identity that permits only the configured loopback
+forwards. `peer.ssh_config` can select a trial-specific OpenSSH configuration.
+Start the production Agent, then the capture Agent in their own bounded
+systemd cgroups. Give the production Agent a private display and recording
+directory. Normal Prepare starts MediaMTX but leaves capture and OBS idle.
+
+```sh
+splitcast --config ./capture.toml prepare
+splitcast --config ./capture.toml start --output recording
+splitcast --config ./capture.toml status
+splitcast --config ./capture.toml stop
+```
+
+Keep the capture window visible on its authorized Direct Scanout output.
+Abort if scanout or the selected local game-audio links are lost. The Agent
+attempts normal finalization after 20 seconds and GNU timeout bounds the OBS
+process lifetime to 28 seconds with a 1-second kill grace. Set the trial
+production unit's file size limit and account for each recording before
+another attempt. Independently decode each output and retain PTS, content
+and failure receipts. Remove trial-owned recordings after examination.
+
+For speech without capture, start production-local VOICEVOX and use
+`prepare --speech-only` on capture. Set `tts.enabled` and the same expiry
+on both Agents. The 25-second trial budget passed the earlier
+physical utterance that was clipped at 10 seconds. Configure a capture
+`tts_sink` and optionally `tts_volume_percent` from 0 to 100. Apply a new
+gain on the next Agent launch after stopping the prior session.
+
+To select live chat, set `tts.eventsub = true` on production and set
+`tts.credentials_file` to a private JSON file containing `client_id`,
+`access_token`, `broadcaster_user_id` and `reader_user_id`. Use an existing
+suitable user token or request `user:read:chat` once through the official
+device flow. The operator completes the consent step. Keep the token
+outside the Nix store. The Agent validates identity and creates the
+specific WSS subscription. `tts` reports separate subscription,
+admission and synthesis observations.
+[Twitch chat authorization](https://dev.twitch.tv/docs/eventsub/reference/chat#channel-chat-message) ·
+[Twitch device flow](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#device-code-grant-flow)
 
 ## Stop and rollback
 

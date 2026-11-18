@@ -162,6 +162,12 @@ fn observed(dir: &Path, n: usize, pcm: &[u8]) -> u32 {
     let ledger = fs::read_to_string(dir.join("starts")).unwrap();
     let argv = ledger.lines().nth(n - 1).unwrap();
     assert!(argv.contains("--raw --format=s16 --rate=48000 --channels=2 --target="));
+    let volume = if std::env::var_os("SPLITCAST_RETURN_LAB").is_some() {
+        "--volume=1.00"
+    } else {
+        "--volume=0.60"
+    };
+    assert!(argv.contains(volume));
     assert!(argv.contains("node.dont-fallback = true node.dont-reconnect = true"));
     println!(
         "player input #{n}: {} PCM bytes sha256 {:x}",
@@ -190,7 +196,10 @@ fn return_faults_and_replay() {
     let mut f = Fixture::with_speech(true, None);
     let dir = f.root.join("capture");
     let voice = Voice::new(f.ports[8]);
-    f.capture.ok("prepare", json!({}));
+    let ready = f.capture.ok("prepare", json!({"media":false}));
+    assert_eq!(ready["children"], json!(["ssh"]));
+    assert_eq!(f.production.ok("status", json!({}))["children"], json!([]));
+    rejected(&f.capture, "start", json!({}));
     let id = next_id(&f.production);
     let args = json!({"text":"fixture","id":id});
     let actual = pcm(13, 4800);
@@ -264,7 +273,7 @@ fn return_faults_and_replay() {
     assert!(now.elapsed() < Duration::from_secs(5));
     gone(pid);
     fs::remove_file(dir.join("hang")).unwrap();
-    f.capture.ok("prepare", json!({}));
+    f.capture.ok("prepare", json!({"media":false}));
     rejected(&f.production, "say", json!({"text":"fixture","id":id}));
     let recovered = pcm(18, 4800);
     submit(&f.production, &voice, &recovered);
@@ -273,7 +282,8 @@ fn return_faults_and_replay() {
 
     // Lost pull reply: interrogate the real production Agent under a fresh test owner.
     let owner = json!({"_owner":"test-capture-lease"});
-    f.production.ok("prepare", owner.clone());
+    f.production
+        .ok("prepare", json!({"_owner":owner["_owner"],"media":false}));
     let expired_id = next_id(&f.production);
     wait(|| next_id(&f.production) != expired_id);
     rejected(
@@ -309,6 +319,16 @@ fn native_return() {
         .success());
 }
 
+fn reselect_capture(f: &mut Fixture, target: &str) {
+    f.capture.shutdown();
+    let dir = f.root.join("capture");
+    let config = dir.join("config.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    document["audio"]["tts_sink"] = json!(target);
+    fs::write(config, document.to_string()).unwrap();
+    f.capture = Agent::spawn(&dir, f.ports[0], f.ports[6], f.ports[7]);
+}
+
 #[test]
 #[ignore = "entry point for native_return's isolated private graph"]
 fn native_session() {
@@ -318,10 +338,10 @@ fn native_session() {
         PathBuf::from(std::env::var_os("PIPEWIRE_RUNTIME_DIR").unwrap()),
         lab
     );
-    let f = Fixture::with_speech(true, Some(&lab));
+    let mut f = Fixture::with_speech(true, Some(&lab));
     let voice = Voice::new(f.ports[8]);
     let dir = f.root.join("capture");
-    f.capture.ok("prepare", json!({}));
+    f.capture.ok("prepare", json!({"media":false}));
     let first = pcm(31, 48000);
     fs::write(lab.join("first"), &first).unwrap();
     let id = submit(&f.production, &voice, &first);
@@ -356,32 +376,23 @@ fn native_session() {
         .unwrap()
         .success());
     f.capture.ok("stop", json!({}));
-    f.capture.ok(
-        "routes",
-        json!({"settings":{"audio":{"tts_sink":"return.absent"}}}),
-    );
-    f.capture.ok("prepare", json!({}));
+    reselect_capture(&mut f, "return.absent");
+    f.capture.ok("prepare", json!({"media":false}));
     rejected(&f.production, "say", json!({"id":id,"text":"fixture"}));
     let missing = pcm(91, 48000);
     fs::write(lab.join("missing"), &missing).unwrap();
     submit(&f.production, &voice, &missing);
     gone(observed(&dir, 3, &missing));
     f.capture.ok("stop", json!({}));
-    f.capture.ok(
-        "routes",
-        json!({"settings":{"audio":{"tts_sink":"return.selected"}}}),
-    );
-    f.capture.ok("prepare", json!({}));
+    reselect_capture(&mut f, "return.selected");
+    f.capture.ok("prepare", json!({"media":false}));
     let recovered = pcm(77, 48000);
     fs::write(lab.join("recovered"), &recovered).unwrap();
     submit(&f.production, &voice, &recovered);
     gone(observed(&dir, 4, &recovered));
     f.capture.ok("stop", json!({}));
-    f.capture.ok(
-        "routes",
-        json!({"settings":{"audio":{"tts_sink":"return.vanish"}}}),
-    );
-    f.capture.ok("prepare", json!({}));
+    reselect_capture(&mut f, "return.vanish");
+    f.capture.ok("prepare", json!({"media":false}));
     let removed = pcm(79, 192000);
     fs::write(lab.join("removed"), &removed).unwrap();
     submit(&f.production, &voice, &removed);

@@ -10,7 +10,6 @@ forward_control_port = 17872
 token_file = "~/.config/splitcast/control.token"
 remote_token_file = "~/.config/splitcast/production.token"
 state_dir = "~/.local/state/splitcast"
-retry_limit = 3
 timeout_seconds = 15
 
 [capture]
@@ -27,6 +26,7 @@ api_port = 9997
 [audio]
 mic_source = ""
 tts_sink = ""
+tts_volume_percent = 100
 processed_sink = "splitcast_mic"
 rnnoise_plugin = "/usr/lib/ladspa/librnnoise.so"
 rnnoise_label = "noise_suppressor_mono"
@@ -34,24 +34,11 @@ rnnoise_control = "50|200|0|0|0"
 gain_db = 0
 mic_offset_ms = 0
 
-[camera]
-enabled = false
-location = "capture"
-device = ""
-mode = "h264"
-encoder = "h264_vaapi"
-hw_device = "/dev/dri/renderD128"
-width = 1280
-height = 720
-fps = 30
-offset_ms = 0
-
 [obs]
 binary = "obs"
 websocket_port = 4455
 password_file = "~/.config/splitcast/obs.password"
 recording_dir = "~/Videos/SplitCast"
-twitch_key_file = "~/.config/splitcast/twitch.key"
 bitrate_kbps = 6000
 
 [tts]
@@ -61,41 +48,5 @@ speaker = 3
 queue_limit = 16
 expiry_seconds = 60
 max_text = 200
-mix_remote = false
 eventsub = false
 credentials_file = "~/.config/splitcast/twitch.json"
-
-[[routes]]
-id = "game"
-source = "game.av"
-processors = ["capture.gpu", "transport.rtmp"]
-targets = ["local.headphones", "obs.game"]
-enabled = true
-
-[[routes]]
-id = "mic"
-source = "mic.raw"
-processors = ["transport.rtsp", "remote.rnnoise"]
-targets = ["obs.mic"]
-enabled = true
-
-[[routes]]
-id = "camera"
-source = "camera.selected"
-processors = ["camera.hardware", "transport.rtsp"]
-targets = ["obs.camera"]
-enabled = false
-
-[[routes]]
-id = "tts"
-source = "chat.text"
-processors = ["remote.voicevox", "transport.http"]
-targets = ["local.tts"]
-enabled = true
-
-[[routes]]
-id = "overlay"
-source = "overlay.text"
-processors = ["obs.text"]
-targets = ["obs.overlay"]
-enabled = true

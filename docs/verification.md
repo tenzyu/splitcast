@@ -4,17 +4,44 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 native PoC candidate
+
+The live trial and independent observations are summarized in the
+[versioned Wiki](memory/session-state.md). The original PR #15 speech receipt
+remains unchanged.
+
+| Exact command or profile | Observed result |
+| --- | --- |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | PASS on the native media/EventSub candidate before the gain and mic readiness follow-ups. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify-virtual` | First isolated run failed because the fixture still used the removed mutable routes command. The final run passed all 14 checks, including real private OpenSSH/PipeWire. Receipt `artifacts/verification/runs/1794966010817819864/`. |
+| `nix develop .#media-test -c bash tools/verify-media.sh --case normal` | Initial normal case failed the mic dropout oracle with five consecutive windows. It passed after Start began waiting for the owned RNNoise stream on the private sink. The diagnostic subset leaves the aggregate result INCOMPLETE by design. Receipts `20261118T012927Z-zIVNZMBr` and `20261118T014007Z-kpinXt33` under `artifacts/media-plane/runs/`. |
+| `python3 -m unittest discover -s tools/ci -p 'test_*.py'` | 12 PASS, 1 opt-in test skipped. The first run exposed a fixture variable lost when removing the WASM cache root. |
+| `ffmpeg -nostdin -v error -xerror -i <trial-mkv> -map 0:v:0 -map 0:a:0 -f null -` | Exit 0 on the real two-host recording. Independent FFprobe frame/packet timestamps, decoded frame hashes and sample counts are retained under `artifacts/mission/`. The recording and derived preview were removed after inspection. |
+
+The source comparison counts physical lines in shipped Rust, native schema
+and browser assets. It excludes test-only modules, fixtures, archives and
+generated artifacts. Shipped code went from **7,375 to 6,408 lines** (−967,
+13.1%) and from **26 to 21 source files**. The workspace went from four
+packages to two. The Linux native crate tree grew from 57 to 70 resolved
+package/version entries as the existing WebSocket and HTTP clients gained
+certificate-verified TLS for Twitch. The reduction removes the TUI, browser
+assets and crate, shared UI protocol crate, camera, public OBS publishing,
+mutable route/settings persistence and legacy speech file/ack queue.
+EventSub owns its WSS, identity validation, migration, bounded admission
+and replay set. Authenticated control, session fencing, Stop reconciliation,
+worker ownership, expiry and isolated playback remain product requirements.
+
 ## Verification entry points
 
 With direnv/Nix shell already entered, execute commands directly; otherwise use the `nix develop -c` wrapper.
 
 | Contract | Command | Scope |
 | --- | --- | --- |
-| Source/unit/Clippy/WASM matrix | `cargo run -p splitcast-xtask -- verify` | No physical device/stream required |
+| Source/unit/Clippy matrix | `cargo run -p splitcast-xtask -- verify` | No physical device/stream required |
 | Virtual control and private opt-ins | `cargo run -p splitcast-xtask -- verify-virtual` | Actual local controllers and stand-in workers; not physical media |
 | Generated production-only media | `cargo run -p splitcast-xtask -- verify-media` | Real production software, generated input, independent decode; not capture Agent/SSH |
-| Nix packages and gates | Hosted `Native and WASM packages`, `Delivery scripts` | Build/distribution identity, not runtime cutover |
-| Real PoC | Bounded authorized trial defined in [handoff](handoff/poc-20261117.md) | Not yet accepted |
+| Nix packages and gates | Hosted `Native package`, `Delivery scripts` | Build/distribution identity, not runtime cutover |
+| Real PoC | [Live acceptance](memory/session-state.md) | Decoded two-host output and heard real chat, with open acceptance gates |
 
 Check the repo-local verifier's current CLI before using an optional target. Opt-in runs require the matching dependencies and containment profile; do not run Python fixture internals directly or mistake selected-case exit 0 for the full acceptance profile.
 
@@ -36,6 +63,10 @@ The failed [run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44
 
 ## Still unproven
 
-Actual GSR/helper and appropriate capture-host microphone source; real capture-Agent → authenticated transport → production decoded media; fresh live-frame policy and cross-host clock correspondence; Twitch `channel.chat.message` v1 → VOICEVOX → capture-host playback; stable all-frame gameplay OFF/ON/OFF and Direct Scanout; real browser action, forced-death cleanup and listener ingress/IPv4/IPv6 containment. Deployment requires its own approval.
+Matched workload capture non-regression across input, audio, update, draw and
+display. Bound a live decoded freshness envelope and independently align the
+physical mic and game stream. Exercise media faults with real capture,
+confirm clean OBS process exit and repeat the acceptance on a source-bound
+packaged build. [Current gates](memory/session-state.md)
 
 **Provenance:** [ID register](memory/evidence.md) · [real media receipt](evidence/media-plane-20261115.md) · [PR #3 oracle review](evidence/pr3-review-20261117.md) · [PoC convergence](evidence/poc-convergence-20261117.md) · [S26](evidence/dreaming-main-20261117.md) · [archived full log](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/verification.md).

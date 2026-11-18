@@ -95,6 +95,7 @@ in {
       };
       Service = {
         Type = "simple";
+        LimitCORE = 0;
         ExecStart = if cfg.rustCandidate then "${command "agent"}" else "${gated}";
         Environment = lib.mapAttrsToList (name: value: "${name}=${value}") cfg.environment;
         Restart = "on-failure";

@@ -12,7 +12,7 @@
 | **F04 P2** | `Config` public fields can bypass parser and invalidate sink/filter/role invariants | Validation remains constructor-time, not a universal invariant-bearing public API. Restrict fields/validated updates before stable library claims. |
 | **F05 P2** | libc/FFI sites lack complete adjacent safety and ABI proof; process identity depends on unreaped leader | No demonstrated UB or custom frame ABI; no Miri coverage of real Linux subprocess/signal lifecycle. Adjacent proofs and Linux target contract still needed. |
 | **F06 P2** | String errors collapse protocol categories; cleanup error may mask initiating failure; post-rename fsync can report failure after visible commit | Preserve cause, operation/cleanup status and unknown-commit semantics in stable typed response; no assumption that timeout means no effect. |
-| **F07 P2** | Browser fetch futures lack AbortController/ordering owner; older response may overwrite newer status; token snapshots persist | Browser acceptance and concurrency/stale-response controls remain separate; native/WASM tests do not establish real DOM behavior. |
+| **F07 P2** | Browser fetch futures lack AbortController/ordering owner; older response may overwrite newer status; token snapshots persist | The native PoC removed the browser surface and its concurrent fetch effects. |
 
 ## Structural invariants, not overclaims
 
@@ -20,9 +20,9 @@
 - Process groups require unreaped leaders for PID-group identity; a child can `setsid` escape, a killed controller cannot perform Drop, and uninterruptible kernel I/O is not bounded by user deadlines. The service cgroup is required containment.
 - Lost remote Prepare response may still have committed: record remote cleanup obligation before positive socket write, retain it until owner-specific completion. A `202 requested` Stop is admission, **not** final release.
 - Shared token-bearing strings may be cloned per in-flight connection; token replacement/revocation of stored state does not erase those copies. Do not promise zeroization.
-- `state.rs` temp-write → fsync → rename → directory fsync means post-rename failure can leave visible settings despite error. Read-back or indeterminate-commit handling needed.
-- `tts.rs` synthesis worker's in-memory dedup/cleanup is not persistent exactly-once audio delivery. `agent.rs::prepare` refuses incomplete speech/EventSub/remote mix.
-- `publish=false` crates, Rust 1.95 x86_64-linux flake, WASM browser model and protocol commands do not establish stable mixed-version API, broad architecture support or a working browser.
+- `state.rs` temp-write → fsync → rename → directory fsync means post-rename failure can leave a visible runtime file despite error. Read-back or indeterminate-commit handling needed.
+- `tts.rs` synthesis worker's in-memory dedup/cleanup is not persistent exactly-once audio delivery. The production-only EventSub worker binds chat to the configured user and subscription. The session holds a bounded replay set and speech remains consume-on-read.
+- `publish=false` crates, Rust 1.95 x86_64-linux flake, the internal command protocol is versioned for a matching native pair.
 
 ## Performance/acceptance
 

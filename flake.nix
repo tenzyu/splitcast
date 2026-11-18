@@ -21,14 +21,13 @@
       default = splitcast;
       inherit splitcast;
       splitcast-rs-core = splitcast;
-      splitcast-web = splitcast.web;
       splitcast-obs = splitcast.obs;
       splitcast-obs-stock-candidate = pkgs.obs-studio.override {browserSupport = false;};
       splitcast-voicevox = voicevoxPkgs.voicevox-engine;
     };
     devShells.${system} = {
       default = pkgs.mkShell {
-        packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config pulseaudio pipewire wireplumber python3 ffmpeg-full openssh coreutils wasm-bindgen-cli lld cargo-audit cargo-deny];
+        packages = with pkgs; [cargo rustc rustfmt clippy gcc pkg-config pulseaudio pipewire wireplumber python3 ffmpeg-full openssh coreutils cargo-audit cargo-deny];
       };
       media-test = pkgs.mkShell {
         inputsFrom = [self.devShells.${system}.default];
@@ -41,7 +40,6 @@
     };
     checks.${system} = {
       package = splitcast;
-      web = splitcast.web;
       configs = pkgs.runCommand "splitcast-config-check" {} ''
         ${splitcast}/bin/splitcast selfcheck
         ${splitcast}/bin/splitcast validate --config ${./packages/splitcast-rs/example.toml}

@@ -65,7 +65,6 @@ impl Fixture {
         cfg["peer"]["remote_token_file"] = json!(root.join("remote.token"));
         cfg["peer"]["state_dir"] = json!(root.join("state"));
         cfg["obs"]["password_file"] = json!(root.join("obs.password"));
-        cfg["obs"]["twitch_key_file"] = json!(root.join("twitch.key"));
         cfg["tts"]["credentials_file"] = json!(root.join("twitch.json"));
         cfg["obs"]["recording_dir"] = json!(root.join("recordings"));
         let config = root.join("config.json");
@@ -78,7 +77,7 @@ impl Fixture {
         }
     }
 
-    fn spawn(&self, args: &[&str], input: &[u8], assets: Option<&Path>) -> Process {
+    fn spawn(&self, args: &[&str], input: &[u8]) -> Process {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let out = self.root.join(format!("stdout-{id}"));
         let err = self.root.join(format!("stderr-{id}"));
@@ -87,13 +86,9 @@ impl Fixture {
             .arg("--config")
             .arg(&self.config)
             .args(args)
-            .env_remove("SPLITCAST_WEB_ASSETS")
             .stdin(Stdio::piped())
             .stdout(File::create(&out).unwrap())
             .stderr(File::create(&err).unwrap());
-        if let Some(assets) = assets {
-            command.env("SPLITCAST_WEB_ASSETS", assets);
-        }
         if self.root.join("tools").is_dir() {
             command.env("PATH", self.root.join("tools"));
         }
@@ -110,13 +105,13 @@ impl Fixture {
     }
 
     fn cli(&self, args: &[&str], input: &[u8]) -> (ExitStatus, String, String) {
-        let mut child = self.spawn(args, input, None);
+        let mut child = self.spawn(args, input);
         let status = child.wait(LIMIT);
         (status, child.stdout(), child.stderr())
     }
 
-    fn agent(&self, assets: Option<&Path>) -> Process {
-        let mut agent = self.spawn(&["agent"], b"", assets);
+    fn agent(&self) -> Process {
+        let mut agent = self.spawn(&["agent"], b"");
         let deadline = Instant::now() + LIMIT;
         loop {
             if let Some(status) = agent.child.try_wait().unwrap() {
@@ -245,6 +240,15 @@ impl Fixture {
             .unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         }
+        let pactl = self.root.join("tools/pactl");
+        fs::write(
+            &pactl,
+            format!(
+                "#!{}\nprintf '%s\\n' '[{{\"name\":\"alsa_input.integration_microphone\",\"properties\":{{\"device.api\":\"alsa\",\"device.class\":\"sound\"}}}}]'\n",
+                shell.display()
+            ),
+        )
+        .unwrap();
         fs::write(self.root.join("remote.token"), TOKEN).unwrap();
         fs::set_permissions(
             self.root.join("remote.token"),
@@ -300,7 +304,7 @@ fn executable(name: &str) -> PathBuf {
 enum PeerBehavior {
     Compatible,
     Incompatible,
-    MismatchedCamera { omit_transport: bool },
+    MismatchedMedia { omit_transport: bool },
     RejectPrepare,
     LosePrepareResponse,
     RefuseFirstStop,
@@ -357,23 +361,22 @@ impl Peer {
                         hello
                     }
                     "routes" => {
-                        let mut camera = cfg["camera"].clone();
                         let mut transport = json!({
-                            "version":1,
-                            "video":{"codec":"H264","width":cfg["capture"]["width"],"height":cfg["capture"]["height"],"fps":cfg["capture"]["fps"]},
-                            "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
-                            "ports":{"rtmp":cfg["capture"]["rtmp_port"],"rtsp":cfg["capture"]["rtsp_port"]},
-                            "camera":camera
+                            "version":2,
+                            "media":{
+                                "video":{"codec":"H264","width":cfg["capture"]["width"],"height":cfg["capture"]["height"],"fps":cfg["capture"]["fps"]},
+                                "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
+                                "ports":{"rtmp":cfg["capture"]["rtmp_port"],"rtsp":cfg["capture"]["rtsp_port"]}
+                            }
                         });
-                        if let PeerBehavior::MismatchedCamera { omit_transport } = behavior {
-                            camera["location"] = json!("production");
-                            camera["device"] = json!("/dev/v4l/by-id/other-test-camera");
-                            transport["camera"] = camera.clone();
+                        if let PeerBehavior::MismatchedMedia { omit_transport } = behavior {
                             if omit_transport {
-                                transport.as_object_mut().unwrap().remove("camera");
+                                transport.as_object_mut().unwrap().remove("media");
+                            } else {
+                                transport["media"]["video"]["width"] = json!(1920);
                             }
                         }
-                        json!({"transport":transport,"routes":cfg["routes"],"selection":{"camera":camera}})
+                        json!({"transport":transport})
                     }
                     "prepare" if matches!(behavior, PeerBehavior::RejectPrepare) => {
                         status = 409;
@@ -604,71 +607,17 @@ fn native_validation_keeps_raw_and_unselected_microphones_valid() {
 }
 
 #[test]
-fn real_agent_routes_reject_monitor_microphones_without_saving() {
-    let fixture = Fixture::new();
-    let _agent = fixture.agent(None);
-    let before = fixture.command("routes", json!({})).json();
-    for source in [
-        "alsa_output.integration_stereo.monitor",
-        "splitcast_mic.monitor",
-    ] {
-        let response = fixture.command(
-            "routes",
-            json!({"settings":{"audio":{"mic_source":source}}}),
-        );
-        assert_eq!(
-            response.code,
-            409,
-            "monitor microphone was accepted: {}",
-            response.json()
-        );
-        assert_eq!(fixture.command("routes", json!({})).json(), before);
-        assert!(!fixture.root.join("state/capture/settings.json").exists());
-        assert_idle(&fixture.get("/api/status").json());
-    }
-}
-
-#[test]
-fn real_agent_routes_accept_raw_microphone_selection() {
-    let fixture = Fixture::new();
-    let mut agent = fixture.agent(None);
-    let source = "alsa_input.integration_microphone";
-    let response = fixture.command(
-        "routes",
-        json!({"settings":{"audio":{"mic_source":source}}}),
-    );
-    assert_eq!(response.code, 200, "{}", response.json());
-    assert_eq!(response.json()["selection"]["audio"]["mic_source"], source);
-    assert_idle(&fixture.get("/api/status").json());
-    agent.terminate();
-    let _restarted = fixture.agent(None);
-    assert_eq!(
-        fixture.command("routes", json!({})).json()["selection"]["audio"]["mic_source"],
-        source
-    );
-}
-
-#[test]
-fn real_agent_refuses_mismatched_camera_before_remote_prepare() {
+fn real_agent_refuses_mismatched_media_before_remote_prepare() {
     for omit_transport in [true, false] {
         let fixture = Fixture::new();
         fixture.stub_workers();
-        let mut cfg = fixture.config();
-        cfg["camera"]["enabled"] = json!(true);
-        cfg["camera"]["device"] = json!("/dev/v4l/by-id/integration-nonexistent-camera");
-        for route in cfg["routes"].as_array_mut().unwrap() {
-            if route["id"] == "camera" {
-                route["enabled"] = json!(true);
-            }
-        }
-        fixture.save_config(&cfg);
-        let peer = Peer::new(&fixture, PeerBehavior::MismatchedCamera { omit_transport });
-        let _agent = fixture.agent(None);
+        let peer = Peer::new(&fixture, PeerBehavior::MismatchedMedia { omit_transport });
+        let _agent = fixture.agent();
         let response = fixture.command("prepare", json!({}));
         assert_eq!(
             response.code,
             409,
-            "mismatched camera reached ready: {}",
+            "mismatched media reached ready: {}",
             response.json()
         );
         assert_failed_without_workers(&fixture);
@@ -676,11 +625,6 @@ fn real_agent_refuses_mismatched_camera_before_remote_prepare() {
             .requests()
             .iter()
             .all(|request| !matches!(request["command"].as_str(), Some("prepare" | "start"))));
-        assert_eq!(
-            fixture.command("routes", json!({})).json()["transport"]["camera"],
-            cfg["camera"],
-            "transport must publish the full camera contract"
-        );
     }
 }
 
@@ -689,7 +633,7 @@ fn real_agent_does_not_send_stop_to_an_incompatible_peer() {
     let fixture = Fixture::new();
     fixture.stub_workers();
     let peer = Peer::new(&fixture, PeerBehavior::Incompatible);
-    let mut agent = fixture.agent(None);
+    let mut agent = fixture.agent();
     let response = fixture.command("prepare", json!({}));
     assert_eq!(response.code, 409, "{}", response.json());
     assert_failed_without_workers(&fixture);
@@ -709,12 +653,12 @@ fn real_agent_compatible_prepare_and_stop_release_owned_workers() {
     let fixture = Fixture::new();
     fixture.stub_workers();
     let peer = Peer::new(&fixture, PeerBehavior::Compatible);
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     let prepared = fixture.command("prepare", json!({}));
     assert_eq!(
         prepared.code,
         200,
-        "compatible full-camera peer was rejected: {}",
+        "compatible media peer was rejected: {}",
         prepared.json()
     );
     assert_eq!(prepared.json()["state"], "ready");
@@ -751,7 +695,7 @@ fn real_agent_failed_remote_prepare_releases_tunnel_and_sends_owned_cleanup() {
     let fixture = Fixture::new();
     fixture.stub_workers();
     let peer = Peer::new(&fixture, PeerBehavior::RejectPrepare);
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     let response = fixture.command("prepare", json!({}));
     assert_eq!(response.code, 409, "{}", response.json());
     assert_failed_without_workers(&fixture);
@@ -774,7 +718,7 @@ fn real_agent_lost_prepare_response_still_requires_owned_cleanup() {
     let fixture = Fixture::new();
     fixture.stub_workers();
     let peer = Peer::new(&fixture, PeerBehavior::LosePrepareResponse);
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     assert_eq!(fixture.command("prepare", json!({})).code, 409);
     assert_failed_without_workers(&fixture);
     let requests = peer.requests();
@@ -790,7 +734,7 @@ fn real_agent_unconfirmed_stop_retains_ownership_for_explicit_retry() {
     let fixture = Fixture::new();
     fixture.stub_workers();
     let peer = Peer::new(&fixture, PeerBehavior::RefuseFirstStop);
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     assert_eq!(fixture.command("prepare", json!({})).code, 200);
     let pid = fixture.worker_pid("ssh");
     assert_eq!(fixture.stop()["stop"], "incomplete");
@@ -817,7 +761,7 @@ fn remote_stop_requires_matching_completed_proof_not_acceptance_or_idle() {
         let fixture = Fixture::new();
         fixture.stub_workers();
         let peer = Peer::new(&fixture, behavior);
-        let _agent = fixture.agent(None);
+        let _agent = fixture.agent();
         assert_eq!(fixture.command("prepare", json!({})).code, 200);
         let first = fixture.stop();
         assert_eq!(first["stop"], "incomplete");
@@ -843,7 +787,7 @@ fn real_agent_capture_status_tracks_remote_microphone_mute() {
     let fixture = Fixture::new();
     fixture.stub_workers();
     let _peer = Peer::new(&fixture, PeerBehavior::Compatible);
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     let prepared = fixture.command("prepare", json!({}));
     assert_eq!(
         prepared.code,
@@ -878,9 +822,9 @@ fn real_agent_capture_status_tracks_remote_microphone_mute() {
 }
 
 #[test]
-fn real_agent_status_cli_and_tui_leave_outputs_idle() {
+fn real_agent_status_cli_leaves_outputs_idle() {
     let fixture = Fixture::new();
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     let response = fixture.get("/api/status");
     assert_eq!(response.code, 200);
     assert_idle(&response.json());
@@ -889,19 +833,13 @@ fn real_agent_status_cli_and_tui_leave_outputs_idle() {
     assert!(status.success(), "{err}");
     assert_idle(&serde_json::from_str(&out).unwrap());
     assert!(!out.contains(TOKEN));
-    let (status, out, err) = fixture.cli(&["tui"], b"1\n0\n");
-    assert!(status.success(), "{err}");
-    assert!(out.contains("State idle"), "{out}");
-    assert!(out.contains("game.av"), "routes missing: {out}");
-    assert!(!out.contains("Operation failed"), "{out}");
-    assert!(!out.contains(TOKEN));
     assert_idle(&fixture.get("/api/status").json());
 }
 
 #[test]
 fn real_agent_rejects_authentication_and_ambiguous_http() {
     let fixture = Fixture::new();
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     let headers = fixture.headers();
     let bad_headers = [
         headers.replace(TOKEN, "wrong-token"),
@@ -948,7 +886,7 @@ fn real_agent_rejects_authentication_and_ambiguous_http() {
 #[test]
 fn real_agent_rejects_unknown_commands_and_arguments_without_side_effects() {
     let fixture = Fixture::new();
-    let _agent = fixture.agent(None);
+    let _agent = fixture.agent();
     for body in [
         json!({"command":"not-a-command","args":{}}),
         json!({"command":"status","args":{"unexpected":true}}),
@@ -969,7 +907,7 @@ fn real_agent_rejects_unknown_commands_and_arguments_without_side_effects() {
 #[test]
 fn slow_client_does_not_block_status_or_sigterm_and_role_lock_is_exclusive() {
     let fixture = Fixture::new();
-    let mut agent = fixture.agent(None);
+    let mut agent = fixture.agent();
     let mut slow = TcpStream::connect(("127.0.0.1", fixture.port)).unwrap();
     slow.write_all(b"POST /api/command HTTP/1.1\r\nHost:")
         .unwrap();
@@ -1005,7 +943,7 @@ fn slow_client_does_not_block_status_or_sigterm_and_role_lock_is_exclusive() {
     let listener =
         TcpListener::bind(("127.0.0.1", fixture.port)).expect("SIGTERM releases control port");
     drop(listener);
-    let mut restarted = fixture.agent(None);
+    let mut restarted = fixture.agent();
     assert_idle(&fixture.get("/api/status").json());
     restarted.terminate();
 }
@@ -1030,63 +968,6 @@ fn agent_refuses_world_readable_token_before_serving() {
 }
 
 #[test]
-fn fixed_wasm_assets_are_served_without_secrets_or_path_traversal() {
-    let fixture = Fixture::new();
-    let assets = fixture.root.join("assets");
-    fs::create_dir(&assets).unwrap();
-    for (name, body) in [
-        (
-            "index.html",
-            b"<!doctype html><title>asset fixture</title>".as_slice(),
-        ),
-        ("loader.js", b"// asset fixture\n".as_slice()),
-        (
-            "splitcast_web.js",
-            b"// generated glue fixture\n".as_slice(),
-        ),
-        ("splitcast_web_bg.wasm", b"\0asm\x01\0\0\0".as_slice()),
-    ] {
-        fs::write(assets.join(name), body).unwrap();
-    }
-    fs::write(fixture.root.join("outside-secret"), TOKEN).unwrap();
-    let _agent = fixture.agent(Some(&assets));
-    for (path, mime) in [
-        ("/", "text/html"),
-        ("/loader.js", "text/javascript"),
-        ("/splitcast_web.js", "text/javascript"),
-        ("/splitcast_web_bg.wasm", "application/wasm"),
-    ] {
-        let response = fixture.exchange(
-            format!(
-                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
-                fixture.port
-            )
-            .as_bytes(),
-        );
-        assert_eq!(response.code, 200);
-        assert!(response.head.contains(mime));
-        assert!(response.head.contains("Cache-Control: no-store"));
-        response.no_secret();
-        let file = if path == "/" {
-            "index.html"
-        } else {
-            &path[1..]
-        };
-        assert_eq!(response.body, fs::read(assets.join(file)).unwrap());
-    }
-    for path in [
-        "/../outside-secret",
-        "/%2e%2e/outside-secret",
-        "/loader.js?token=private",
-        "/control.token",
-    ] {
-        let response = fixture.get(path);
-        assert_eq!(response.code, 404, "path mapped to filesystem: {path}");
-        response.no_secret();
-    }
-}
-
-#[test]
 fn native_artifact_validates_toml_offline_without_agent_or_secrets() {
     let mut fixture = Fixture::new();
     let cfg: Value = serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
@@ -1108,7 +989,7 @@ fn cli_default_start_is_recording_and_redirects_are_not_followed() {
     server.set_nonblocking(true).unwrap();
     let redirect_target = TcpListener::bind("127.0.0.1:0").unwrap();
     redirect_target.set_nonblocking(true).unwrap();
-    let mut cli = fixture.spawn(&["start"], b"", None);
+    let mut cli = fixture.spawn(&["start"], b"");
     let deadline = Instant::now() + LIMIT;
     let mut connection = loop {
         match server.accept() {

@@ -108,60 +108,6 @@ fn valid_schema(value: &Value, schema: &Value) -> bool {
             .is_none_or(|a| a.contains(value))
 }
 
-fn valid_routes(c: &Value) -> bool {
-    let Some(routes) = c["routes"].as_array() else {
-        return false;
-    };
-    let specs: [(&str, &str, &[&str], &[&str]); 5] = [
-        (
-            "game",
-            "game.av",
-            &["capture.gpu", "transport.rtmp"],
-            &["local.headphones", "obs.game"],
-        ),
-        (
-            "mic",
-            "mic.raw",
-            &["transport.rtsp", "remote.rnnoise"],
-            &["obs.mic"],
-        ),
-        (
-            "camera",
-            "camera.selected",
-            &["camera.hardware", "transport.rtsp"],
-            &["obs.camera"],
-        ),
-        (
-            "tts",
-            "chat.text",
-            &["remote.voicevox", "transport.http"],
-            &["local.tts"],
-        ),
-        ("overlay", "overlay.text", &["obs.text"], &["obs.overlay"]),
-    ];
-    specs.iter().all(|(id, source, processors, targets)| {
-        let mut found = routes.iter().filter(|r| r["id"].as_str() == Some(id));
-        let Some(r) = found.next() else { return false };
-        if found.next().is_some() {
-            return false;
-        }
-        let mut targets = targets.to_vec();
-        if *id == "tts" && c["tts"]["mix_remote"] == true {
-            targets.push("obs.tts");
-        }
-        let enabled = match *id {
-            "game" | "mic" | "overlay" => r["enabled"] == true,
-            "camera" => r["enabled"] == c["camera"]["enabled"],
-            "tts" => c["tts"]["enabled"] != true || r["enabled"] == true,
-            _ => false,
-        };
-        enabled
-            && r["source"].as_str() == Some(source)
-            && r["processors"] == serde_json::json!(processors)
-            && r["targets"] == serde_json::json!(targets)
-    })
-}
-
 fn valid_connections(c: &Value) -> bool {
     let Some(url) = c["tts"]["voicevox_url"].as_str() else {
         return false;
@@ -205,11 +151,7 @@ fn valid_connections(c: &Value) -> bool {
     {
         return false;
     }
-    valid_routes(c)
-        && (c["camera"]["enabled"] != true
-            || c["camera"]["device"]
-                .as_str()
-                .is_some_and(|s| s.starts_with("/dev/v4l/by-id/")))
+    true
 }
 fn safe_name(s: &str) -> bool {
     !s.is_empty()
@@ -296,12 +238,12 @@ pub struct Config {
     pub token_file: PathBuf,
     pub remote_token_file: PathBuf,
     pub ssh_host: String,
+    pub ssh_config: Option<PathBuf>,
     pub ssh_port: u16,
     pub control_port: u16,
     pub remote_control_port: u16,
     pub forward_control_port: u16,
     pub timeout: u16,
-    pub retry_limit: u16,
     pub rtmp: u16,
     pub rtsp: u16,
     pub api: u16,
@@ -313,26 +255,17 @@ pub struct Config {
     pub game_audio: String,
     pub mic_source: String,
     pub tts_sink: String,
+    pub tts_volume_percent: u16,
     pub processed_sink: String,
     pub rnnoise_plugin: PathBuf,
     pub rnnoise_label: String,
     pub rnnoise_control: String,
     pub gain_db: i32,
     pub mic_offset: i32,
-    pub camera_enabled: bool,
-    pub camera_location: String,
-    pub camera_mode: String,
-    pub camera_device: String,
-    pub camera_encoder: String,
-    pub camera_hw: PathBuf,
-    pub camera_width: u16,
-    pub camera_height: u16,
-    pub camera_fps: u16,
     pub obs_binary: PathBuf,
     pub obs_video_mode: ObsVideoMode,
     pub obs_port: u16,
     pub obs_password: PathBuf,
-    pub twitch_key: PathBuf,
     pub recording_dir: PathBuf,
     pub tts_enabled: bool,
     pub voicevox_url: String,
@@ -341,7 +274,6 @@ pub struct Config {
     pub tts_queue_limit: u16,
     pub tts_expiry_seconds: u16,
     pub tts_credentials_file: PathBuf,
-    pub tts_mix_remote: bool,
     pub eventsub_enabled: bool,
 }
 impl Config {
@@ -426,19 +358,18 @@ impl Config {
         }
         let gain_db = signed_number(filename, ".audio.gain_db", -30, 20)?;
         let mic_offset = signed_number(filename, ".audio.mic_offset_ms", -2000, 2000)?;
-        let camera_location = get(filename, ".camera.location")?;
-        let camera_mode = get(filename, ".camera.mode")?;
-        let camera_encoder = get(filename, ".camera.encoder")?;
-        if !["capture", "production"].contains(&camera_location.as_str())
-            || !["hardware", "h264"].contains(&camera_mode.as_str())
-            || !["h264_vaapi", "h264_nvenc"].contains(&camera_encoder.as_str())
+        if filename["tts"]["eventsub"] == true
+            && (role != "production" || filename["tts"]["enabled"] != true)
         {
-            return Err(error("invalid camera mode"));
+            return Err(error("EventSub requires production with speech enabled"));
         }
         Ok(Self {
             document: document.clone(),
             role,
             ssh_host,
+            ssh_config: filename["peer"]["ssh_config"]
+                .as_str()
+                .map(|value| path(value.into())),
             state_dir: path(get(filename, ".peer.state_dir")?),
             token_file: path(get(filename, ".peer.token_file")?),
             remote_token_file: path(get(filename, ".peer.remote_token_file")?),
@@ -447,7 +378,6 @@ impl Config {
             remote_control_port: number(filename, ".peer.remote_control_port", 1024, 65535)?,
             forward_control_port: number(filename, ".peer.forward_control_port", 1024, 65535)?,
             timeout: number(filename, ".peer.timeout_seconds", 1, 60)?,
-            retry_limit: number(filename, ".peer.retry_limit", 0, 5)?,
             rtmp: number(filename, ".capture.rtmp_port", 1024, 65535)?,
             rtsp: number(filename, ".capture.rtsp_port", 1024, 65535)?,
             api: number(filename, ".capture.api_port", 1024, 65535)?,
@@ -459,21 +389,15 @@ impl Config {
             game_audio,
             mic_source,
             tts_sink: get(filename, ".audio.tts_sink")?,
+            tts_volume_percent: filename["audio"]["tts_volume_percent"]
+                .as_u64()
+                .map_or(100, |volume| volume as u16),
             processed_sink,
             rnnoise_plugin,
             rnnoise_label,
             rnnoise_control,
             gain_db,
             mic_offset,
-            camera_enabled: boolean(filename, ".camera.enabled")?,
-            camera_location,
-            camera_mode,
-            camera_encoder,
-            camera_device: get(filename, ".camera.device")?,
-            camera_hw: path(get(filename, ".camera.hw_device")?),
-            camera_width: number(filename, ".camera.width", 160, 3840)?,
-            camera_height: number(filename, ".camera.height", 120, 2160)?,
-            camera_fps: number(filename, ".camera.fps", 1, 60)?,
             obs_binary: path(get(filename, ".obs.binary")?),
             obs_video_mode: match filename["obs"].get("video_mode").and_then(Value::as_str) {
                 None | Some("hardware") => ObsVideoMode::Hardware,
@@ -482,7 +406,6 @@ impl Config {
             },
             obs_port: number(filename, ".obs.websocket_port", 1024, 65535)?,
             obs_password: path(get(filename, ".obs.password_file")?),
-            twitch_key: path(get(filename, ".obs.twitch_key_file")?),
             recording_dir: path(get(filename, ".obs.recording_dir")?),
             tts_enabled: boolean(filename, ".tts.enabled")?,
             voicevox_url: get(filename, ".tts.voicevox_url")?,
@@ -491,7 +414,6 @@ impl Config {
             tts_queue_limit: number(filename, ".tts.queue_limit", 1, 32)?,
             tts_expiry_seconds: number(filename, ".tts.expiry_seconds", 5, 300)?,
             tts_credentials_file: path(get(filename, ".tts.credentials_file")?),
-            tts_mix_remote: boolean(filename, ".tts.mix_remote")?,
             eventsub_enabled: boolean(filename, ".tts.eventsub")?,
         })
     }
@@ -602,10 +524,6 @@ mod tests {
             (
                 "wrong type",
                 example.replacen("width = 1280", "width = true", 1),
-            ),
-            (
-                "invalid route",
-                example.replace("source = \"game.av\"", "source = \"mic.raw\""),
             ),
             (
                 "non-finite",

@@ -837,14 +837,12 @@ mod tests {
         s
     }
     #[test]
-    fn no_output_before_explicit_start_and_no_recording_promotion() {
+    fn no_output_before_explicit_start() {
         let mut s = ready(None, Instant::now());
         assert_eq!(s.output(), None);
         s.start(Output::Recording).unwrap();
         s.start(Output::Recording).unwrap();
-        assert!(s.start(Output::Twitch).is_err());
         s.degrade().unwrap();
-        assert!(s.start(Output::Twitch).is_err());
         s.fail().unwrap();
         assert_eq!(s.output(), None);
         s.stop().unwrap();

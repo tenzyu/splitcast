@@ -1,7 +1,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }: let
   cfg = config.services.splitcast;
@@ -30,6 +29,5 @@ in {
       wireplumber.enable = lib.mkDefault true;
     };
     hardware.graphics.enable = lib.mkDefault true;
-    environment.systemPackages = [pkgs.v4l-utils];
   };
 }

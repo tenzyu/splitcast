@@ -1,7 +1,5 @@
 use serde_json::{json, Value};
-use splitcast_rs_core::{
-    agent, config, control, protocol::Invocation, tui, Lifecycle, Role, Session,
-};
+use splitcast_rs_core::{agent, config, control, protocol::Invocation, Lifecycle, Role, Session};
 use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -144,7 +142,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
             i += 1;
         }
     }
-    let config=config.ok_or_else(||invalid("usage: splitcast --config FILE.toml agent|tui|doctor|devices|routes|prepare|start|stop|status"))?;
+    let config=config.ok_or_else(||invalid("usage: splitcast --config FILE.toml agent|doctor|devices|routes|prepare|start|stop|status"))?;
     if args.is_empty() {
         return Err(invalid("command required"));
     }
@@ -153,8 +151,12 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
     let mut destination = None;
     let mut offline = false;
     match command.as_str() {
-        "agent" | "tui" | "ui" | "validate" | "cleanup" | "prepare" | "stop" | "status"
-        | "heartbeat" | "devices" => {}
+        "agent" | "validate" | "cleanup" | "stop" | "status" | "heartbeat" | "devices" => {}
+        "prepare" if args == ["--speech-only"] => {
+            args.clear();
+            payload["media"] = json!(false);
+        }
+        "prepare" | "routes" | "preview" => {}
         "doctor" => {
             if args.first().map(String::as_str) == Some("--offline") {
                 args.remove(0);
@@ -165,28 +167,15 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
             let output = if args.first().map(String::as_str) == Some("--output") {
                 args.remove(0);
                 if args.is_empty() {
-                    return Err(invalid("--output requires recording or twitch"));
+                    return Err(invalid("--output requires recording"));
                 }
                 args.remove(0)
-            } else if args
-                .first()
-                .is_some_and(|s| s == "recording" || s == "twitch")
-            {
+            } else if args.first().is_some_and(|s| s == "recording") {
                 args.remove(0)
             } else {
                 "recording".into()
             };
             payload["output"] = json!(output);
-        }
-        "routes" => {
-            if args.first().map(String::as_str) == Some("--settings") {
-                args.remove(0);
-                if args.is_empty() {
-                    return Err(invalid("--settings requires JSON selections"));
-                }
-                payload["settings"] = serde_json::from_str(&args.remove(0))
-                    .map_err(|_| invalid("invalid settings JSON"))?;
-            }
         }
         "mic" | "tts" => {
             payload["action"] = json!(if args.is_empty() {
@@ -195,7 +184,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
                 args.remove(0)
             });
         }
-        "say" | "overlay" => {
+        "say" => {
             if args.is_empty() {
                 return Err(invalid("text argument required"));
             }
@@ -208,7 +197,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
                 payload["id"] = json!(args.remove(0));
             }
         }
-        "preview" | "diagnostics" => {
+        "diagnostics" => {
             if args.first().map(String::as_str) == Some("--output") {
                 args.remove(0);
                 if args.is_empty() {
@@ -283,15 +272,6 @@ fn run() -> io::Result<()> {
         }
         "agent" => return serve(cfg),
         "cleanup" => return agent::cleanup_after_exit(cfg),
-        "tui" => {
-            return tui::run_with(io::stdin().lock(), io::stdout().lock(), |name, args| {
-                request(&cfg, name, args)
-            })
-        }
-        "ui" => {
-            println!("http://127.0.0.1:{}/", cfg.control_port);
-            return Ok(());
-        }
         "doctor" if cli.offline => {
             println!("{}", agent::doctor(&cfg)?);
             return Ok(());
@@ -300,11 +280,6 @@ fn run() -> io::Result<()> {
     }
     let response = request(&cfg, &cli.command, &cli.args.to_string())?;
     if let Some(destination) = cli.destination {
-        if cli.command == "preview" {
-            return Err(invalid(
-                "preview file export is not yet available; use the authenticated preview view",
-            ));
-        }
         splitcast_rs_core::state::atomic_file(&destination, &response)?;
         println!("{}", json!({"path":destination.to_string_lossy()}));
     } else {

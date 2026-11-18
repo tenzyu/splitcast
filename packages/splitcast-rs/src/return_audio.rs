@@ -1,5 +1,6 @@
 //! One-way, consume-on-read speech on the prepared Agent control connection.
 use crate::config::Config;
+use crate::eventsub::EventSub;
 use crate::lifecycle::SessionControl;
 use crate::poc_speech;
 use crate::request::Operation;
@@ -18,6 +19,9 @@ const ENCODED_LIMIT: usize = AUDIO_LIMIT.div_ceil(3) * 4;
 pub(crate) const REPLY_LIMIT: usize = ENCODED_LIMIT + 512;
 
 pub(crate) struct Source {
+    eventsub: Option<EventSub>,
+    chat_admitted: u64,
+    chat_rejected: u64,
     speech: Speech,
     epoch: String,
     issued: u64,
@@ -27,8 +31,20 @@ pub(crate) struct Source {
 
 impl Source {
     pub(crate) fn new(cfg: &Config, epoch: String) -> io::Result<Self> {
+        let speech = Speech::new(cfg)?;
+        let eventsub = if cfg.eventsub_enabled {
+            Some(EventSub::start(
+                &cfg.tts_credentials_file,
+                cfg.tts_queue_limit.into(),
+            )?)
+        } else {
+            None
+        };
         Ok(Self {
-            speech: Speech::in_memory(cfg)?,
+            eventsub,
+            chat_admitted: 0,
+            chat_rejected: 0,
+            speech,
             epoch,
             issued: 0,
             admission: None,
@@ -39,15 +55,16 @@ impl Source {
     pub(crate) fn status(&mut self) -> io::Result<String> {
         let now = Instant::now();
         if self.admission.as_ref().is_none_or(|(_, end)| *end <= now) {
-            self.issued = self
-                .issued
-                .checked_add(1)
-                .ok_or_else(|| io::Error::other("speech sequence exhausted"))?;
-            self.admission = Some((format!("{}-{}", self.epoch, self.issued), now + self.expiry));
+            self.admission = Some((self.next_id()?, now + self.expiry));
         }
-        let mut status = self.speech.command("status", &[])?;
+        let mut status = self.speech.status();
         status["epoch"] = json!(self.epoch);
         status["next_id"] = json!(self.admission.as_ref().map(|(id, _)| id));
+        if let Some(eventsub) = &self.eventsub {
+            status["eventsub"] = eventsub.status();
+            status["eventsub"]["admitted"] = json!(self.chat_admitted);
+            status["eventsub"]["rejected"] = json!(self.chat_rejected);
+        }
         Ok(status.to_string())
     }
 
@@ -59,13 +76,40 @@ impl Source {
             .as_ref()
             .filter(|(issued, end)| issued == id && *end > Instant::now())
             .ok_or_else(|| io::Error::other("speech ID is stale or out of sequence"))?;
-        let result = self.speech.enqueue_until(text, id, *expires)?;
+        self.speech.enqueue_until(text, id, *expires)?;
         self.admission = None;
-        Ok(result.to_string())
+        Ok(json!({"id": id, "duplicate": false}).to_string())
+    }
+
+    fn next_id(&mut self) -> io::Result<String> {
+        self.issued = self
+            .issued
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("speech sequence exhausted"))?;
+        Ok(format!("{}-{}", self.epoch, self.issued))
     }
 
     pub(crate) fn tick(&mut self) {
         self.speech.tick();
+        // Admit at most one notification per owner tick so control/Stop can
+        // progress even while chat arrives faster than synthesis.
+        if let Some(chat) = self
+            .eventsub
+            .as_ref()
+            .and_then(|input| input.chat.try_recv().ok())
+        {
+            let admitted = self.next_id().and_then(|id| {
+                self.speech
+                    .enqueue_until(&chat.text, &id, chat.received + self.expiry)
+            });
+            if admitted.is_ok() {
+                // Prevent a lower, reserved manual sequence from overtaking chat.
+                self.admission = None;
+                self.chat_admitted += 1;
+            } else {
+                self.chat_rejected += 1;
+            }
+        }
     }
 
     pub(crate) fn take(&mut self) -> String {
@@ -164,10 +208,11 @@ impl Receiver {
             Operation::until(Arc::clone(&cancel), deadline).with_control(control, generation);
         operation.check()?;
         let target = cfg.tts_sink.clone();
+        let volume = cfg.tts_volume_percent;
         self.consumed = sequence;
         let handle = thread::Builder::new()
             .name("splitcast-return-player".into())
-            .spawn(move || poc_speech::play_return(&wav, &target, &operation))?;
+            .spawn(move || poc_speech::play_return(&wav, &target, volume, &operation))?;
         self.player = Some(Player { cancel, handle });
         Ok(())
     }

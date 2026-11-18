@@ -86,14 +86,6 @@ fn response_data(response: &str) -> io::Result<Value> {
         .map(|_| value["d"]["responseData"].clone())
         .ok_or_else(|| err("OBS response data required"))
 }
-fn output_method(output: &str) -> io::Result<&'static str> {
-    match output {
-        "recording" => Ok("GetRecordStatus"),
-        "twitch" => Ok("GetStreamStatus"),
-        _ => Err(err("unknown output")),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputStatus {
     pub active: bool,
@@ -319,79 +311,34 @@ impl Obs {
             "SetInputAudioMonitorType",
             "{\"inputName\":\"MicProcessed\",\"monitorType\":\"OBS_MONITORING_TYPE_NONE\"}",
         )?;
-        if cfg.camera_enabled {
-            self.input("CameraFeed", "ffmpeg_source", feed("camera"))?;
-        }
-        self.input(
-            "Overlay",
-            "text_ft2_source_v2",
-            json!({"text":"SplitCast","font":{"face":"Sans","size":36}}),
-        )?;
-        if cfg.tts_mix_remote {
-            self.input(
-                "TTSMix",
-                "ffmpeg_source",
-                json!({"is_local_file":true,"local_file":""}),
-            )?;
-        }
         self.call("SetCurrentProgramScene", "{\"sceneName\":\"SplitCast\"}")?;
         Ok(())
     }
-    pub fn start(&mut self, cfg: &Config, output: &str) -> io::Result<()> {
-        match output {
-            "recording" => {
-                self.call("StartRecord", "{}")?;
-            }
-            "twitch" => {
-                let key = secret(&cfg.twitch_key, 4096)?;
-                if key.is_empty() {
-                    return Err(err("Twitch key is empty"));
-                }
-                self.call("SetStreamServiceSettings", &json!({"streamServiceType":"rtmp_custom","streamServiceSettings":{"server":"rtmps://live.twitch.tv:443/app","key":key,"use_auth":false}}).to_string())?;
-                self.call("StartStream", "{}")?;
-            }
-            _ => return Err(err("unknown output")),
-        }
-        Ok(())
+    pub fn start(&mut self) -> io::Result<()> {
+        self.call("StartRecord", "{}").map(|_| ())
     }
     pub fn stop(&mut self) -> io::Result<()> {
         let deadline = self
             .operation
             .as_ref()
             .map_or(Ok(Instant::now() + TIMEOUT), |op| op.deadline(TIMEOUT))?;
-        for (output, stop) in [("recording", "StopRecord"), ("twitch", "StopStream")] {
-            let mut requested = false;
-            loop {
-                let response =
-                    response_data(&self.call_until(output_method(output)?, "{}", deadline)?)?;
-                let active = response["outputActive"]
-                    .as_bool()
-                    .ok_or_else(|| err("OBS outputActive boolean required"))?;
-                if !active {
-                    break;
-                }
-                if !requested {
-                    self.call_until(stop, "{}", deadline)?;
-                    requested = true;
-                }
-                std::thread::sleep(Duration::from_millis(20));
+        let mut requested = false;
+        loop {
+            let response = response_data(&self.call_until("GetRecordStatus", "{}", deadline)?)?;
+            match response["outputActive"].as_bool() {
+                Some(false) => return Ok(()),
+                Some(true) => {}
+                None => return Err(err("OBS outputActive boolean required")),
             }
+            if !requested {
+                self.call_until("StopRecord", "{}", deadline)?;
+                requested = true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(())
     }
-    pub fn overlay(&mut self, text: &str) -> io::Result<()> {
-        if text.chars().count() > 1000 {
-            return Err(err("overlay too long"));
-        }
-        self.call(
-            "SetInputSettings",
-            &json!({"inputName":"Overlay","inputSettings":{"text":text},"overlay":true})
-                .to_string(),
-        )?;
-        Ok(())
-    }
-    pub fn observe(&mut self, output: &str) -> io::Result<OutputStatus> {
-        let response = response_data(&self.call(output_method(output)?, "{}")?)?;
+    pub fn observe(&mut self) -> io::Result<OutputStatus> {
+        let response = response_data(&self.call("GetRecordStatus", "{}")?)?;
         Ok(OutputStatus {
             active: response["outputActive"]
                 .as_bool()
@@ -401,23 +348,12 @@ impl Obs {
             duration_ms: response["outputDuration"].as_u64(),
         })
     }
-    pub fn status(&mut self, output: &str) -> io::Result<bool> {
-        Ok(self.observe(output)?.active)
-    }
     pub fn preview(&mut self) -> io::Result<String> {
         let response = response_data(&self.call("GetSourceScreenshot", "{\"sourceName\":\"SplitCast\",\"imageFormat\":\"png\",\"imageWidth\":960,\"imageHeight\":540}")?)?;
         let image = response["imageData"]
             .as_str()
-            .ok_or_else(|| err("OBS image required"))?;
-        let encoded = image
-            .strip_prefix("data:image/png;base64,")
-            .ok_or_else(|| err("invalid OBS preview format"))?;
-        let data = STANDARD
-            .decode(encoded)
-            .map_err(|_| err("invalid OBS preview base64"))?;
-        if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Err(err("invalid OBS preview PNG data"));
-        }
+            .filter(|image| image.starts_with("data:image/png;base64,"))
+            .ok_or_else(|| err("OBS returned an invalid scene screenshot"))?;
         Ok(json!({"image":image}).to_string())
     }
 }
@@ -448,6 +384,10 @@ pub fn launch_args(cfg: &Config) -> io::Result<Vec<String>> {
     Ok(vec![
         "env".into(),
         format!("XDG_CONFIG_HOME={}", base.display()),
+        "timeout".into(),
+        "--signal=TERM".into(),
+        "--kill-after=1s".into(),
+        "28s".into(),
         cfg.obs_binary.to_string_lossy().to_string(),
         "--multi".into(),
         "--disable-shutdown-check".into(),
@@ -465,7 +405,6 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::thread;
 
-    const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8xkAAAAASUVORK5CYII=";
     struct Fixture {
         dir: PathBuf,
     }
@@ -548,13 +487,13 @@ mod tests {
             state_dir: dir.into(),
             token_file: dir.join("token"),
             remote_token_file: dir.join("token"),
+            ssh_config: None,
             ssh_host: "localhost".into(),
             ssh_port: 22,
             control_port: 18001,
             remote_control_port: 18002,
             forward_control_port: 18003,
             timeout: 1,
-            retry_limit: 0,
             rtmp: 18004,
             rtsp: 18005,
             api: 18006,
@@ -565,6 +504,7 @@ mod tests {
             target: String::new(),
             game_audio: String::new(),
             mic_source: String::new(),
+            tts_volume_percent: 100,
             tts_sink: String::new(),
             processed_sink: "splitcast_mic".into(),
             rnnoise_plugin: dir.join("rnnoise"),
@@ -572,20 +512,10 @@ mod tests {
             rnnoise_control: String::new(),
             gain_db: 0,
             mic_offset: 0,
-            camera_enabled: false,
-            camera_location: "production".into(),
-            camera_mode: "h264".into(),
-            camera_device: String::new(),
-            camera_encoder: "h264_nvenc".into(),
-            camera_hw: dir.into(),
-            camera_width: 640,
-            camera_height: 480,
-            camera_fps: 30,
             obs_binary: "obs".into(),
             obs_video_mode: ObsVideoMode::Hardware,
             obs_port: port,
             obs_password: dir.join("password"),
-            twitch_key: dir.join("twitch"),
             recording_dir: dir.join("recordings"),
             tts_enabled: false,
             voicevox_url: String::new(),
@@ -594,7 +524,6 @@ mod tests {
             tts_queue_limit: 1,
             tts_expiry_seconds: 5,
             tts_credentials_file: dir.join("tts"),
-            tts_mix_remote: false,
             eventsub_enabled: false,
         }
     }
@@ -668,11 +597,10 @@ mod tests {
                         break;
                     }
                 }
-                assert_eq!(feeds, ["GameFeed", "CameraFeed"]);
+                assert_eq!(feeds, ["GameFeed"]);
             });
             let mut cfg = fixture.config(port);
             cfg.obs_video_mode = mode;
-            cfg.camera_enabled = true;
             Obs::connect(&cfg).unwrap().configure(&cfg).unwrap();
             thread.join().unwrap();
         }
@@ -713,7 +641,7 @@ mod tests {
             while let Ok(message) = socket.read() {
                 let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
                 thread::sleep(Duration::from_millis(40));
-                let response = json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":true},"responseData":{"scenes":[{"sceneName":"SplitCast"}],"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}}});
+                let response = json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":true},"responseData":{"scenes":[{"sceneName":"SplitCast"}],"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"}]}}});
                 if socket
                     .send(Message::Text(response.to_string().into()))
                     .is_err()
@@ -759,21 +687,6 @@ mod tests {
             io::ErrorKind::Interrupted
         );
         drop(obs);
-        thread.join().unwrap();
-    }
-    #[test]
-    fn authenticates_and_decodes_preview_over_real_websocket() {
-        let fixture = Fixture::new();
-        let (port, thread) = server(|mut socket| {
-            let request = read(&mut socket);
-            assert_eq!(request["d"]["requestType"], "GetSourceScreenshot");
-            answer(&mut socket, &request, json!({"imageData":PNG}));
-        });
-        let mut obs = Obs::connect(&fixture.config(port)).unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&obs.preview().unwrap()).unwrap()["image"],
-            PNG
-        );
         thread.join().unwrap();
     }
     #[test]
@@ -1040,26 +953,7 @@ mod tests {
         thread.join().unwrap();
     }
     #[test]
-    fn preview_requires_decodable_png_not_just_prefix() {
-        let fixture = Fixture::new();
-        let (port, thread) = server(|mut socket| {
-            for image in [
-                "data:image/png;base64,iVBORw0KGgoA===",
-                "data:image/png;base64,aGVsbG8=",
-                "data:image/jpeg;base64,iVBORw0KGgo=",
-            ] {
-                let request = read(&mut socket);
-                answer(&mut socket, &request, json!({"imageData":image}));
-            }
-        });
-        let mut obs = Obs::connect(&fixture.config(port)).unwrap();
-        for _ in 0..3 {
-            assert!(obs.preview().is_err());
-        }
-        thread.join().unwrap();
-    }
-    #[test]
-    fn output_status_reports_progress_and_rejects_unknown_output() {
+    fn output_status_reports_progress() {
         let fixture = Fixture::new();
         let (port, thread) = server(|mut socket| {
             let request = read(&mut socket);
@@ -1071,9 +965,8 @@ mod tests {
             );
         });
         let mut obs = Obs::connect(&fixture.config(port)).unwrap();
-        assert!(obs.status("invalid").is_err());
         assert_eq!(
-            obs.observe("recording").unwrap(),
+            obs.observe().unwrap(),
             OutputStatus {
                 active: true,
                 bytes: Some(123),
@@ -1084,7 +977,7 @@ mod tests {
         thread.join().unwrap();
     }
     #[test]
-    fn recording_does_not_read_twitch_key_or_start_streaming() {
+    fn start_requests_private_recording() {
         let fixture = Fixture::new();
         let (port, thread) = server(|mut socket| {
             let request = read(&mut socket);
@@ -1092,11 +985,8 @@ mod tests {
             answer(&mut socket, &request, json!({}));
         });
         let cfg = fixture.config(port);
-        assert!(!cfg.twitch_key.exists());
         let mut obs = Obs::connect(&cfg).unwrap();
-        assert!(obs.start(&cfg, "unknown").is_err());
-        assert!(obs.start(&cfg, "twitch").is_err());
-        obs.start(&cfg, "recording").unwrap();
+        obs.start().unwrap();
         thread.join().unwrap();
     }
     #[test]
@@ -1108,7 +998,6 @@ mod tests {
                 ("StopRecord", json!({})),
                 ("GetRecordStatus", json!({"outputActive":true})),
                 ("GetRecordStatus", json!({"outputActive":false})),
-                ("GetStreamStatus", json!({"outputActive":false})),
             ] {
                 let request = read(&mut socket);
                 assert_eq!(request["d"]["requestType"], method);
