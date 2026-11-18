@@ -930,11 +930,9 @@ impl Agent {
                     return Err(rejected("OBS layout changed; read scene before saving"));
                 }
                 let operation = self.operation.clone();
-                if let Err(error) = self.scene.save(&self.cfg.state_dir, || {
+                self.scene.save(&self.cfg.state_dir, || {
                     operation.as_ref().map_or(Ok(()), |op| op.check())
-                }) {
-                    return Err(error);
-                }
+                })?;
                 SceneResult::Saved
             }
             Command::SceneReload(edit) => {
