@@ -1004,10 +1004,8 @@ pub(crate) fn run(
                     WindowEvent::Focused(false) => {
                         state.drag = None;
                     }
-                    WindowEvent::Occluded(_) => {
-                        if state.readers(&ui) {
-                            state.publish(&ui);
-                        }
+                    WindowEvent::Occluded(_) if state.readers(&ui) => {
+                        state.publish(&ui);
                     }
                     WindowEvent::RedrawRequested if trace => {
                         let phase = state.active_phase().map(Phase::label).unwrap_or("offline");
@@ -1042,6 +1040,7 @@ mod tests {
         let now = Instant::now();
         let mut window = WindowState::default();
         let mut reader = Reader::new(now);
+        assert!(window.viewable(true));
         window.observe(&WindowEvent::Focused(true));
         assert!(reader.visibility(window.viewable(true)));
         let revision = reader.revision;
