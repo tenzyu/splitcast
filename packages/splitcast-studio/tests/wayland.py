@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -46,6 +48,39 @@ def command(env, commands):
     assert result and all(item["success"] for item in result), (commands, result)
 
 
+def attach_virtual_pointer(stack, display):
+    # Keep a Wayland virtual pointer attached for the lifetime of the fixture.
+    # Sway's cursor IPC drives that seat without opening any input device.
+    peer = stack.enter_context(socket.socket(socket.AF_UNIX))
+    peer.settimeout(5)
+    peer.connect(str(display))
+    stream = stack.enter_context(peer.makefile("rb"))
+
+    def send(sender, opcode, payload):
+        peer.sendall(struct.pack("=II", sender, ((8 + len(payload)) << 16) | opcode) + payload)
+
+    registry, callback, manager, pointer = 2, 3, 4, 5
+    send(1, 1, struct.pack("=I", registry))  # wl_display.get_registry
+    send(1, 0, struct.pack("=I", callback))  # wl_display.sync
+    interface = b"zwlr_virtual_pointer_manager_v1\0"
+    global_name = None
+    while True:
+        sender, header = struct.unpack("=II", stream.read(8))
+        opcode, length = header & 0xffff, header >> 16
+        body = stream.read(length - 8)
+        if sender == callback:  # wl_callback.done
+            break
+        if sender == registry and opcode == 0:  # wl_registry.global
+            name, size = struct.unpack_from("=II", body)
+            if body[8:8 + size] == interface:
+                global_name = name
+    assert global_name is not None, "private compositor lacks the Wayland virtual pointer protocol"
+    padded = interface + bytes(-len(interface) % 4)
+    send(registry, 0, struct.pack("=II", global_name, len(interface)) + padded
+         + struct.pack("=II", 1, manager))  # wl_registry.bind, version 1
+    send(manager, 0, struct.pack("=II", 0, pointer))  # create_virtual_pointer, fallback seat
+
+
 class WaylandStudio(gui.Studio):
     def focus_window(self):
         self.window = gui.eventually(lambda: window(self.env, self.process.pid),
@@ -70,8 +105,9 @@ class WaylandStudio(gui.Studio):
 
     def edit(self, label, value):
         self.click(label)
+        env = {name: value for name, value in self.env.items() if name != "WAYLAND_DEBUG"}
         subprocess.run(["wtype", "-M", "ctrl", "-k", "a", "-m", "ctrl", "--", value],
-                       env=self.env, check=True, timeout=5)
+                       env=env, check=True, timeout=5)
         time.sleep(0.15)
 
 
@@ -124,9 +160,12 @@ for_window [app_id="^splitcast-focus-fixture$"] floating enable, move position 1
         store(self.evidence / "outputs.json", outputs)
         # The headless backend has no physical seat devices. Keep a native
         # virtual keyboard attached so wl_keyboard enter/leave are observable.
+        attach_virtual_pointer(stack, display)
         keyboard = gui.spawn(stack, ["wtype", "-k", "Shift_L", "-s", "300000"], env,
                              self.evidence / "virtual-keyboard.log")
-        gui.eventually(lambda: sway(env, "-t", "get_inputs"), "private virtual keyboard")
+        gui.eventually(lambda: {"keyboard", "pointer"} <= {
+            item["type"] for item in sway(env, "-t", "get_inputs")
+        }, "private virtual keyboard and pointer")
         assert keyboard.poll() is None
         env["WAYLAND_DEBUG"] = "client"
 
