@@ -4,6 +4,47 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 Studio control contract (A)
+
+The [A-to-B contract](studio-control-contract.md) was pinned at
+`df0768f3f8076ced0e3214170ea3113d4459c40d` over
+`e92b5db390835041b33de46618c49d5f98cad9cf`. The implementation uses real
+local Agent HTTP endpoints, synthetic EventSub notifications, and
+authenticated OBS WebSocket stand-ins. The shared screenshot fixture fix is
+`bb3d5ea103c7510986aecce6278f2d5e51888e93` and makes both PNGs decodable.
+The wire contract is unchanged from the checkpoint.
+
+| Exact command | Observed result |
+| --- | --- |
+| `direnv allow` | Exit 0 after reviewing the existing bounded devShell entrypoint. Checks below used explicit Nix wrappers. |
+| `nix develop -c python3 tools/ci/convergence.py init "$contract" --accept "$reviewed_sha256"` | First enrollment blocked with exit 2 because the manual gate keys differed from the three required acceptance axes. Corrected the unregistered JSON and enrolled the owner-only work unit `studio-control-contract-a` with digest `ba0dba0fd88288b8654410c958a0c6cd247daabce71bcda6b915319334f8c146`. |
+| `nix develop -c cargo fmt --all` | Initial formatting attempts failed on a misplaced EventSub module comment (E0753) and a malformed scene reload edit. Both were corrected. Subsequent formatting and verifier fmt checks exited 0. |
+| `nix develop -c cargo check --workspace --all-targets --locked --offline` | Exit 0 on intermediate source, with an unused synthetic source warning before the regression tests were connected. |
+| `nix develop -c cargo test -p splitcast-rs-core --locked --offline studio_ -- --nocapture` | First completed run passed four tests. The next passed five, including the capture-to-production forwarding and withheld OBS acknowledgment Stop case. Earlier compound fmt/test commands short-circuited on fmt failures, so tests did not run in those attempts. |
+| `nix develop -c ffmpeg -nostdin -v error -xerror -i "$fixture_dir/studio-fixture-1.png" -i "$fixture_dir/studio-fixture-481.png" -map 0:v -map 1:v -f null -` | Exit 0 decoding both exact generated PNG byte sequences from the owner-only temporary fixture directory. The 1×1 and 481×1 RGBA scanlines inflate to 5 and 1,925 bytes, respectively. |
+| `nix develop -c cargo run -p splitcast-rs-core -- validate --config packages/splitcast-rs/example.toml` | Exit 0, `valid:true` for capture. |
+| `nix develop -c cargo run -p splitcast-rs-core -- validate --config packages/splitcast-rs/example-production.toml` | Exit 0, `valid:true` for production. |
+| `python3 tools/ci/check_docs.py` | Exit 0 on the implementation checkout, with 50 Markdown files, 260 local links, zero broken links and zero OKF issues. |
+| `git diff --exit-code e92b5db390835041b33de46618c49d5f98cad9cf -- flake.nix nix/modules` | Exit 0. The migration gate and manual service definitions match the pinned base. This is a source comparison. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Initial exit 1 at `d3829cb6dcb375f34227f7a12cb381f63cc5a14b`. Clippy exited 101 on `clippy::question_mark`. The other nine checks passed. Worktree receipt `attempt-000001`, artifact `artifacts/verification/runs/1794983956294301680/`. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0, all 10 checks passed at `231ad1154a7628b6f8c8e2cab8f483e2c1cec405` with the decodable screenshot fixture. Workspace tests and no-default-features each included the five A regressions and the existing CLI, TUI and Web control fixtures. Worktree receipt `attempt-000002`, artifact `artifacts/verification/runs/1794984271591672491/`. |
+
+The targeted cases cover chat with speech off, independent fan-out, unchanged
+speech text and expiry, duplicate handling, UTF-8 limits, history gaps and
+Stop under concurrent reads. Scene cases cover bearer and owner rejection,
+generation races, the observed canvas and source geometry, legacy and small
+preview, OBS reply loss and partial effects, readback, save failure, reload
+and Agent restart. The forwarding case measured Stop admission within the
+500 ms fixture assertion and separately observed completion and cleanup.
+
+Live Twitch, physical devices and A/V, production OBS rendering and frame
+age, matched gameplay and hardware render performance, real two-host
+recovery, package builds, post-rename directory sync fault injection, and
+deployment were not run for A. The optional Chromium integration and
+`verify-virtual` and `verify-media` were not run. The test worker simulates
+OBS state and screenshot responses. The physical gates in the
+[session state](memory/session-state.md) remain open.
+
 ## 2026-11-18 convergence harness integration
 
 | Exact command or profile | Observed result |
