@@ -32,7 +32,10 @@
       };
       media-test = pkgs.mkShell {
         inputsFrom = [self.devShells.${system}.default];
-        packages = with pkgs; [mediamtx splitcast.obs rnnoise-plugin.ladspa xorg-server xauth mesa python3 bubblewrap git];
+        packages = with pkgs; [
+          mediamtx splitcast.obs rnnoise-plugin.ladspa xorg-server xauth mesa bubblewrap git
+          (python3.withPackages (ps: [ps.websockets]))
+        ];
         SPLITCAST_RNNOISE_PLUGIN = "${pkgs.rnnoise-plugin.ladspa}/lib/ladspa/librnnoise_ladspa.so";
         LIBGL_DRIVERS_PATH = "${pkgs.mesa}/lib/dri";
         __EGL_VENDOR_LIBRARY_FILENAMES = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";

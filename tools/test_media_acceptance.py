@@ -1,11 +1,77 @@
 import unittest
 
-from media_acceptance import (analyze_audio, assess_marks, audio_clock, audio_presence,
-                              av_alignment, barcode, frame, source_health, tone_power, video_cadence)
+from media_acceptance import (analyze_audio, assess_marks, assess_obs_stats, assess_scene_age,
+                              audio_clock, audio_presence, av_alignment, barcode, frame,
+                              frame_age_bounds, require_obs_progress, source_health, tone_power, video_cadence)
 import math
 
 
+def obs_samples(render, encode):
+    return [{"phase": phase, "requested": at, "received": at + 0.01, "output_duration_ms": at * 1000,
+             "stats": dict(zip(("renderTotalFrames", "renderSkippedFrames", "outputTotalFrames",
+                                "outputSkippedFrames"), (*render_counts, *encode_counts)))}
+            for phase, at, render_counts, encode_counts in zip(
+                ("running-start", "post-warmup-baseline", "post-warmup", "post-warmup"),
+                (0, 2, 3, 4), render, encode)]
+
+
 class MediaOracleTests(unittest.TestCase):
+    def test_obs_deltas_exclude_warmup_and_keep_render_separate_from_encode(self):
+        samples = obs_samples([(100, 20), (160, 50), (190, 51), (220, 53)],
+                              [(90, 10), (150, 20), (180, 20), (210, 20)])
+        stats = assess_obs_stats(samples)
+        self.assertEqual(stats["render"]["skipped_percent"], 5)
+        self.assertEqual(stats["encode"]["skipped"], 0)
+        self.assertEqual(stats["encode"]["progress_frames"], 60)
+        require_obs_progress(stats)
+
+    def test_obs_stats_reject_missing_invalid_reset_or_inconsistent_counters(self):
+        render = [(100, 2), (160, 3), (190, 4), (220, 5)]
+        for wrong, reason in (
+            ((None, 10), "missing or invalid"),
+            ((True, 0), "missing or invalid"),
+            ((180.0, 10), "missing or invalid"),
+            ((180, -1), "missing or invalid"),
+            ((180, 181), "missing or invalid"),
+            ((2**32, 10), "missing or invalid"),
+            ((0, 0), "counter reset"),
+            ((150, 11), "delta exceeds"),
+        ):
+            with self.subTest(wrong=wrong):
+                stats = assess_obs_stats(obs_samples(render, [(90, 1), (149, 1), wrong, (210, 20)]))
+                self.assertEqual(stats["render"]["status"], "MEASURED")
+                self.assertEqual(stats["encode"]["status"], "UNMEASURABLE")
+                self.assertIn(reason, stats["encode"]["reason"])
+        self.assertEqual(assess_obs_stats([])["render"]["status"], "UNMEASURABLE")
+        samples = obs_samples(render, render)
+        self.assertEqual(assess_obs_stats(samples[:2])["render"]["status"], "UNMEASURABLE")
+        samples[2]["output_duration_ms"] = 0
+        self.assertIn("duration reset", assess_obs_stats(samples)["render"]["reason"])
+        samples[1]["phase"] = "post-warmup"
+        self.assertIn("boundaries", assess_obs_stats(samples)["render"]["reason"])
+
+    def test_obs_output_progress_excludes_skips_and_zero_attempts(self):
+        render = [(100, 0), (160, 0), (190, 0), (220, 0)]
+        stats = assess_obs_stats(obs_samples(render, [(0, 0), (0, 0), (0, 0), (0, 0)]))
+        self.assertIn("no post-warmup frame attempts", stats["encode"]["reason"])
+        stats = assess_obs_stats(obs_samples(render, [(0, 0), (0, 0), (15, 15), (25, 15)]))
+        self.assertEqual(stats["encode"]["progress_frames"], 10)
+        self.assertEqual(stats["encode"]["intervals_without_progress"], 1)
+        stats = assess_obs_stats(obs_samples(render, [(0, 0), (0, 0), (15, 15), (30, 30)]))
+        self.assertEqual(stats["encode"]["progress_frames"], 0)
+        with self.assertRaisesRegex(AssertionError, "no progress"):
+            require_obs_progress(stats)
+
+    def test_scene_age_distinguishes_bounded_inconclusive_and_proven_stale_samples(self):
+        for bounds, status in (((8, 8.1), "WITHIN_LIMIT"), ((6, 9), "INCONCLUSIVE"),
+                               ((5, 6), "STALE")):
+            sample = frame_age_bounds(10, 10.2, bounds)
+            self.assertEqual(assess_scene_age([None, None, sample])["status"], status)
+        self.assertEqual(assess_scene_age([None, None])["status"], "UNMEASURABLE")
+        self.assertEqual(frame_age_bounds(10, 10.2, (10.1, 10.3))["age_lower_seconds"], 0)
+        with self.assertRaisesRegex(AssertionError, "invalid scene age clock"):
+            frame_age_bounds(10, 10.2, (10.3, 10.4))
+
     def test_cadence_rejects_vfr_despite_nominal_rate_and_total_frame_count(self):
         regular = [index / 30 for index in range(360)]
         video_cadence(regular)

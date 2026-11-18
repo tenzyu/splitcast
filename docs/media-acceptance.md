@@ -37,7 +37,51 @@ Authenticated Prepare and Start drive the real production Agent. The source publ
 
 The declared fixture is 1280 by 720 at 30 frames per second with 48 kHz audio and a ten-second recording window. Publishers have a finite 45-second limit to cover service startup and fault observation. The complete matrix includes normal output, frozen video, a four-second generated-frame backlog before RTMP ingress, disconnected publication, stalled publication, killed RNNoise, and explicit recovery on the same controller after worker failure. The backlog is bounded to 128 MiB. It tests old source content traversing the real route, not delayed network packets or congestion control.
 
-Each generated frame carries a source epoch, a tenth-second ordinal, calibration bits, and parity. Its ledger records actual generation time on the test process's monotonic clock. OBS scene screenshots identify those ordinals. Screenshot receipt time minus the earliest generation time for the ordinal gives a conservative local scene-age observation. It includes transport, decode, scene, and RPC delay. It does not measure display scanout, physical capture age, or unrelated host clocks.
+Each generated frame carries a source epoch, a tenth-second ordinal,
+calibration bits, and parity. The feeder records the first generation start
+and last generation completion for each ordinal. Once frozen, the publisher
+repeats identical pixels without refreshing the content timestamp. The
+observer asks OBS for a scene screenshot and decodes its marker independently
+with FFmpeg. The lower age bound is request time minus last generation
+completion for that ordinal, floored at zero. The upper bound is receipt
+time minus first generation start. Source generation and screenshot times
+use the fixture process's monotonic clock. The bounds include sampling and
+RPC uncertainty and cover age at the observed OBS scene. Physical capture
+age, scanout, and inter-host latency require their own measurement.
+
+Ignore the first two scene observations for the age verdict. A healthy
+fixture has every remaining upper bound at or below three seconds. A negative
+case proves staleness when a remaining lower bound exceeds three seconds.
+Overlap with the ceiling is inconclusive. The frozen case must independently
+reject decoded content progression despite output cadence. The delay case
+must decode moving content while its scene age is stale. Both must show
+increasing MediaMTX game ingress bytes and advancing OBS video output.
+The receipts retain the sampled marker/time bounds and separate progress
+observations. Agent production control lacks a trusted age signal and
+cannot autonomously enforce this observer's gate.
+
+The generated OBS observer uses one authenticated loopback WebSocket per
+recording, including a fresh one for recovery. It reads `GetRecordStatus`
+and `GetStats` at Running, then reads the baseline at or after two seconds
+from the Running observation and samples through the ten-second window
+before Stop or fault injection. It retains timestamps, active and advancing
+recording duration, and raw counter values in `obs-stats-*.json`. Keep all
+four cumulative counters in the same OBS instance and recording. The
+baseline-to-last differences exclude warmup. Invalid, absent, decreasing
+or inconsistent counters, an inactive/paused recording, connection loss,
+or zero attempted frames make the corresponding measurement unavailable.
+A missing baseline or post-warmup sample also leaves the measurement
+unavailable. There is no reconnect or cross-session subtraction.
+
+For rendering report `ΔrenderSkippedFrames / ΔrenderTotalFrames` and both
+counts. Report output-thread skips and attempts separately, plus
+`ΔoutputTotalFrames - ΔoutputSkippedFrames` and the number of intervals
+without such progress. Output-thread progress is an OBS-side observation.
+An independent decode supplies the output integrity and content evidence.
+This fixture uses one OBS output at 30 fps and reports software render
+observations without a render-percentage pass threshold. The physical
+post-warmup ≤1% gate applies separately to the authorized hardware and
+matched workload. [Pinned OBS WebSocket implementation](https://github.com/obsproject/obs-websocket/blob/1fcb95b15aa88b1b7e9bda3f9c8650e314377169/src/utils/Obs_ObjectHelper.cpp) · [OBS 32.1.2 output counters](https://github.com/obsproject/obs-studio/blob/32.1.2/libobs/media-io/video-io.c)
 
 The independent sink check probes streams and packets, checks decode timestamps, fully decodes the MKV to EOF, reads frame identities, and examines decoded PCM. Each source second has a unique game frequency, starting at 440 Hz with a 40 Hz increment. A separate harmonic microphone identity must survive the real processing path. The oracle matches uniquely identified audio transitions against video source ordinals on the decoded presentation timeline. It does not establish microphone alignment or a competitive-streaming latency guarantee.
 
@@ -55,6 +99,17 @@ The predeclared envelopes live in `LIMITS` in `tools/media_acceptance.py`. They 
 
 Frozen and delayed cases distinguish the independent observer from the Agent's liveness checks. A successful negative case means the observer detects bad content while the actual transport counters still advance. It does not mean the Agent enforces freshness. Disconnect, stall, and worker death must leave Running without automatic output restart. Stop must reconcile cleanup before fresh recovery. Negative cases can explicitly retry one reported incomplete Stop. The receipt retains the unknown outcome and cleanup obligation before that retry. No Start or Prepare is replayed across an unknown outcome.
 
-The receipt binds the source manifest, build command, controller binary hash, pinned lockfiles, tool hashes, observed output, and cleanup. Any changed source, incomplete matrix, failed decode, or incomplete cleanup keeps acceptance closed. Ordinary `verify` and `verify-virtual` remain separate regression gates.
+The receipt binds the source manifest, build command, controller binary hash,
+pinned lockfiles, tool hashes, observed output, and cleanup. The launcher
+checks the host Git identity and source before and after the run. Inside the
+namespace the observer rehashes the source from the read-only file inventory,
+so a linked worktree's Git metadata stays outside. `sandbox.exit` and
+`sandbox.log` record the namespace command's actual exit. If startup fails
+before the sandbox observer records `environment.json`, the launcher log
+and exit are the available evidence. Each case records cleanup signals,
+reaped exit statuses and independently checked residual resources.
+Any changed source, incomplete matrix, unavailable OBS measurement,
+failed decode, forced cleanup or incomplete cleanup keeps acceptance
+closed. Ordinary `verify` and `verify-virtual` remain separate regression gates.
 
 See [the verification record](verification.md) for actual outcomes. This procedure alone is not a passing result.

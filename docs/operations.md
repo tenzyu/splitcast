@@ -107,21 +107,163 @@ Before capture, record local audio routes, input mappings, renderer, resolution,
 
 Start only the reviewed opt-in candidate and its owned workers. Check actual decoded moving pixels, preview, recording, stream types, processed microphone output, synchronization, frame age, bounded queues, reconnect behavior, and local gameplay. Request failures and partial startup must stop owned effects. Lost Prepare replies must receive owner-scoped rollback. An unconfirmed remote Stop must retain the obligation rather than report Idle. Confirm process, socket, file, connection, and cgroup cleanup independently after disconnect, child failure, SIGTERM, and an explicitly authorized forced-controller-death trial.
 
-Restart the same osu! replay segment from its beginning for each OFF/ON/OFF
-run. Preserve versions, settings, input route, thermal state, focus, Direct
-Scanout, and game-only audio routing. Keep the authorized renderer without
-Vulkan/Zink. Record sample counts, frame-time distributions, uncertainty, and
-unmeasured input or audio dimensions. The gameplay p99 regression limit is
-1 ms and the late production render limit after warmup is 1%. Judge both
-against the matched workload.
+### Production display preflight and stop conditions
 
-Decode the output independently and locate actual game and camera changes,
-an identifiable physical SoloCast/RNNoise signal separated from game audio,
-and their alignment on the decoded media timeline. Gather the physical sound
-and replay restarts at the agreed boundaries. Byte counts, decoded frame
-counts, and scene geometry show progress or configuration. Camera freshness
-requires content observations and cross-host latency requires a measured clock
-relationship or a shared timing reference.
+The [PR #16 OBS receipt](evidence/pr16-obs.md) binds the patched OBS 32.1.2
+package. The first physical recording finalized after 117 late renders in
+645 attempts (18.1%), then OBS exited with SIGSEGV. The generated 60 fps
+Xvfb/llvmpipe and x264 comparison reproduced the SIGTERM crash with
+74/600 late renders and 0/601 output-thread skips. SIGINT exited zero with
+69/601 late renders and 0/601 output-thread skips. The later managed physical
+software runs exited normally and lack a warmup-trimmed counter series.
+The separate 30 fps generated cases logged 3/393 render drops for normal and
+398 frames drawn with no lag line for camera. Preserve those observations at their original
+boundaries. [Managed physical evidence](evidence/pr16-managed-acceptance.md)
+
+Before a hardware trial, record the authorized display, driver, GPU, exact
+OBS package and source identity, trial process/service ownership, allowed
+device nodes, loopback bindings and credentials, output and storage limits,
+and the production host's boot ID, active system and pre-existing sessions.
+Keep the capture host's active system and wrapper snapshot too. Require a
+known usable isolated display, a responsive production host, and an
+operator-owned recovery path. Under separate hardware authorization, run a
+finite private generated-input smoke test on that display. Retain one receipt
+per stage of the path:
+
+| Stage | Evidence required to proceed |
+| --- | --- |
+| OBS renderer | OBS initializes EGL/GL on the intended display and OBS's own log identifies the expected NVIDIA renderer and driver. A compositor's renderer only identifies its own GL context. |
+| Output encoder | The owned OBS output initializes the requested NVENC encoder, remains active, and produces independently decodable H.264/AAC with output progress. Save per-output initialization and device/codec evidence. The package's `obs-nvenc-test` establishes API and codec capability. |
+| Input decode | For each moving H.264 source, observe the actual selected decoder/hardware context in OBS or trace attributable decode-engine activity for that OBS process and source. Isolate each input in the smoke test if aggregate device telemetry cannot identify it. `hw_decode` requests acceleration. Record fallback or unknown explicitly. |
+
+The historical RTX 4060 Ti capability probe succeeded with CUDA 13.20 and
+NVENC API 13.0. Weston headless reported NVIDIA rendering, while OBS
+Wayland failed at `eglGetDisplay`. Xwayland lacked `wl_drm`,
+Glamor and DRI3, and OBS failed EGL/X11 setup. Neither path reached an
+OBS output. The unprivileged diagnostic needed process-group kills.
+The separate privileged Xorg attempts left one task in a DRM modeset wait
+and two in a VT `console_lock` wait. The tasks remained in kernel state
+`D` with SIGKILL pending and service Stop timed out. Normal reboot failed
+to release them despite the request's zero return. The operator's VM reset
+changed the boot ID, cleared the owned tasks, cgroups and private directories,
+and restored a responsive production host with the recorded active system.
+[Software and EGL/NVENC evidence](evidence/pr16-obs.md) · [Xorg and recovery evidence](evidence/pr16-managed-acceptance.md#failures-and-cleanup)
+
+Do not rerun the failed Xorg path. Abort before live inputs if display
+startup, a decode/encode stage, authorization, storage, or the stop channel
+fails preflight. After Start, abort on lost scanout or local audio, wrong
+source or output, renderer failure, stalled output, or expired trial budget.
+Request explicit Stop and fence further Start. If a trial task enters state
+`D` or Stop times out, record its exact PID/start time, wait state, cgroup,
+service result, listeners and private directories. Isolate those resources
+from further trials. Keep cleanup and hardware acceptance open while any
+remain. If the authorized enclosing-service stop fails, hand recovery to the
+operator through the agreed management path. A reboot or VM reset requires
+its own approval. Verify pre/post boot IDs, active system, host responsiveness,
+GPU visibility and removal of exactly the trial resources before clearing
+the quarantine. The original failure stays in the receipt.
+
+### Finite matched acceptance
+
+1. Agree on the two hosts, exact candidate and package, selected physical
+   sources and sink, authorized channel/window, workload, maximum storage
+   and service stop budget. Keep `rustCandidate=false` and no autostart.
+   For an example finite arm use a fixed 60-second replay segment, a
+   ten-second OBS warmup after Running, and a 90-second production output
+   watchdog. Choose a sufficiently long fixed replay and allow time for
+   post-run Stop. Predeclare the independent instruments, minimum sample
+   coverage, frame-age and A/V bounds with uncertainty, and abort/recovery
+   owners before capture. Keep any missing instrument or authorization
+   BLOCKED. Confirm the display/software smoke and private recording first.
+2. Use OFF 1 / ON / OFF 2 in that order with the same replay hash and
+   restart cue. OFF arms have no trial media workers; ON runs the exact
+   intended game/camera/mic/OBS path at the agreed output settings. Match
+   versions, resolution/refresh, workload, the authorized renderer without
+   Vulkan/Zink, focus, input and audio route, and thermal/load conditions. Count per-frame gameplay times
+   over the same replay-aligned 60 seconds in each arm using the same
+   validated observer that preserves Direct Scanout and audio. Save raw
+   samples, start alignment, missing events, p50/p95/p99, and measurement
+   uncertainty. Use nearest-rank p99. For each matched bracket require
+   `p99_ON - min(p99_OFF1, p99_OFF2) <= 1 ms`, including uncertainty.
+   Record both differences and rerun a drifted/invalid bracket only within
+   the approved trial budget. Scheduler waits and missed presentation
+   events leave gameplay or input latency open. For Direct Scanout and
+   local game audio require change-event or continuous evidence for the
+   window, including Stop boundaries. Confirm the same physical sink links
+   and independently observe game audio at the local sink, preserving
+   replay silence. Polls establish only sampled continuity. Begin OFF 2
+   after Stop and release checks.
+3. In the ON arm, authenticate to the owned OBS WebSocket over loopback.
+   Save a Running sample before warmup, a baseline after ten seconds of
+   warmup. Cue the ON replay from its beginning at that baseline, then
+   sample once per second through the matched interval with the last
+   sample before Stop. Retain raw request/receipt times, OBS
+   instance identity, active output and increasing duration, and all four
+   cumulative counters. Compute
+   `100 * ΔrenderSkippedFrames / ΔrenderTotalFrames` from the warm
+   baseline to the final sample; require **≤1%**. Split the receipt on any
+   reconnect or session change. A missing sample, reset/wrap, impossible
+   delta or zero attempts makes that window unmeasurable. Report output
+   skips, total attempts and attempted minus skipped frames independently
+   from render misses. Require actual output progress and independent
+   full decode. Classify the hardware stage before applying the gate.
+   [OBS GetStats implementation](https://github.com/obsproject/obs-websocket/blob/1fcb95b15aa88b1b7e9bda3f9c8650e314377169/src/utils/Obs_ObjectHelper.cpp) · [Generated measurement contract](media-acceptance.md#observable-assertions)
+4. Independently decode game and camera at the production observation
+   point. Associate unique source markers with their capture-side times
+   and production observation times on one clock or a calibrated common
+   reference. For example, timestamp the source events and decoded
+   production monitor on a single external measurement clock, or measure
+   cross-host clock offset and drift before and after the arm, including
+   timestamp and observer latency uncertainty. Record early, mid and
+   late markers, maximum/p99 age with bounds and missing or repeated
+   IDs. Compare the upper bound to the agreed age ceiling. For physical
+   A/V, use a unique co-observed visual and acoustic marker sequence
+   (for example an LED and click measured on the shared reference for
+   camera/mic), plus a replay-aligned game picture and physical playback
+   marker. Locate both sides in the decoded PTS and separate game and
+   processed-mic tracks, account for the source event separation and
+   observer uncertainty, and compare each bounded offset to the agreed
+   A/V ceiling. Unmatched markers or an uncalibrated clock leave the
+   corresponding gate open. Advancing counters establish progress.
+   The Agent currently has no trusted frame-age signal for autonomous
+   freshness enforcement. Keep independent observation during the arm.
+5. During the separately authorized on-air arm, submit one unique real
+   Twitch chat phrase while game/camera/audio and playback are independently
+   observed active. Allow the configured speech budget and playback time
+   before the public deadline. Correlate the production EventSub
+   subscription and message admission, VOICEVOX synthesis completion,
+   capture-side receipt, and physical playback on the selected sink with
+   the same phrase and trial interval. Check that game-only audio remains
+   routed and that the returned phrase is excluded from the stream mix.
+   Confirm the site-side viewer stops after trial Stop. An admitted
+   message with missing synthesis or unheard playback leaves this gate
+   open. [Historical separate and on-air observations](evidence/pr16-managed-acceptance.md#evidence-by-acceptance-gate)
+6. Before the next arm or any new Prepare, record the capture and
+   production owner and current `stop_id`, matching completed/Idle
+   proof and release of `remote_release_pending`. Check active output
+   turns inactive and the owned OBS process exits zero with no signal.
+   Independently verify trial process identities, loopback listeners,
+   cgroups, sockets, profiles, wrapper, private audio routes and
+   connection release. The extent of release includes the enclosing
+   services after their own stop, and trial credentials are disposed of
+   after verification. Verify a private recording finalizes and decodes
+   to EOF, then verify the original local playback and active system
+   snapshots. Preserve unsuccessful Stop, abnormal exit, forced
+   cleanup and unknown outcomes as separate observations. Retain the
+   owner obligation and follow [Stop and rollback](#stop-and-rollback)
+   before any retry or next arm. For separately authorized recovery
+   trials, keep output private and inject one owned fault per finite arm
+   (disconnect, child death or controller death). Verify that an output
+   does not restart automatically, then reconcile the matching owner
+   and independently check release. A dead controller depends on the
+   bounded enclosing service and lease. Perform a fresh Prepare only
+   after release and verify the new session has its own recording and
+   normal Stop.
+
+The original physical trials leave gameplay p99, continuous scanout/audio
+coverage, hardware OBS/late render, physical frame age and A/V, on-air
+speech return, and fault recovery on the current artifact open. The source
+records the discrete observations and the slice-specific passes. [Current gates](memory/session-state.md)
 
 Finite speech return has a [software acceptance receipt and rollback procedure](evidence/audio-return.md). The live EventSub and media trial results are in the versioned Wiki. Full crash and performance acceptance remains open. They cannot be accepted by turning off their assertions. Public broadcast requires separate authorization even after every local gate passes.
 
