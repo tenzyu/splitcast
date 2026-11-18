@@ -8,7 +8,8 @@ status: draft
 
 ## PR #16 stream-readiness follow-up
 
-The managed follow-up runs on the existing PR branch. Both physical hosts used
+PR #16 was merged on 2026-11-18 JST to close the bounded change while the
+operator kept unresolved acceptance work open. Both physical hosts used
 the same binary from `d9b0948` for private recording and the operator-approved
 public test. Separate viewer decoding confirmed moving osu! and camera video,
 the Japanese overlay and audio on the public archive. The separate-track
