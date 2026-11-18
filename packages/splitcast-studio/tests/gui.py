@@ -397,8 +397,9 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
             return body
         direct.wait("Idle")
         direct.wait("Local draft")
+        mark = len(direct.lines())
         direct.click("Apply")
-        direct.wait("Agent draft · unsaved")
+        direct.wait("Agent draft · unsaved", after=mark)
         applied = okay("production", "scene")["draft"]["overlay"]["text"]
         assert applied == "Private fixture draft", f"offline draft after Apply: {applied!r}"
         budget = idle(direct)
@@ -421,13 +422,18 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
         private_file(config, json.dumps(production_config))
         agents["production"] = spawn(stack, [agent_bin, "--config", config, "agent"],
                                      agent_env, work / "agent-restart.log")
-        direct = studio_type(stack, root, studio_bin, "production-stage", production_relay.server_port,
-                             ports["production"], paths["production"], env)
-        direct.wait("Idle")
-        direct.edit("Overlay text", "Private fixture draft")
-        direct.click("Apply")
-        direct.wait("Agent draft · unsaved")
-        cleanup(direct.process)
+        if not focus_only:
+            direct = studio_type(stack, root, studio_bin, "production-stage", production_relay.server_port,
+                                 ports["production"], paths["production"], env)
+            direct.wait("Agent draft · unsaved")
+            mark = len(direct.lines())
+            direct.edit("Overlay text", "Private fixture draft")
+            direct.wait("Local draft", after=mark)
+            mark = len(direct.lines())
+            direct.click("Apply")
+            direct.wait("Agent draft · unsaved", after=mark)
+            assert okay("production", "scene")["draft"]["overlay"]["text"] == "Private fixture draft"
+            cleanup(direct.process)
 
         forwarded = relay(stack, ports["capture"])
         studio = studio_type(stack, root, studio_bin, "capture", forwarded.server_port,
@@ -441,7 +447,8 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
         studio.click("Recording")
         studio.click("Start")
         studio.wait("Running")
-        assert okay("capture", "scene")["applied"]["overlay"]["text"] == "Private fixture draft"
+        if not focus_only:
+            assert okay("capture", "scene")["applied"]["overlay"]["text"] == "Private fixture draft"
         studio.wait("| frame |")
         eventually(lambda: len(forwarded.times("preview-small")) >= 4, "four preview requests")
         intervals = [b - a for a, b in zip(forwarded.times("preview-small"), forwarded.times("preview-small")[1:])]
