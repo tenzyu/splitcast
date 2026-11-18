@@ -884,11 +884,13 @@ def scenario(directory, binary, case, epoch):
                       "-c:v", "copy", "-af", f"aeval=exprs='{expressions}':c=stereo,aformat=channel_layouts=stereo",
                       "-c:a", "aac", "-b:a", "160k", str(tail)])
             result["audio_tail_negative_control"] = reject_recording(run, tail, epoch, "audio-tail", "A/V audio source identity")
-            # At 9 seconds, a 1.5-second notch leaves ample margin above the 70%
-            # identity floor while exceeding the three-window continuity limit.
+            # The game markers start at 440 Hz. A steep high-pass exposes the
+            # 180 Hz mic dropout without removing game identity in the interval.
+            # 1.5 seconds isolates continuity while preserving overall presence.
             dropout = directory / "bad-mic-dropout.mkv"
+            dropout_filter = ",".join(["highpass=f=330:p=2:enable='between(t,3,4.5)'"] * 8)
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
-                      "-c:v", "copy", "-af", "bandreject=f=180:t=h:w=100:enable='between(t,3,4.5)'",
+                      "-c:v", "copy", "-af", dropout_filter,
                       "-c:a", "aac", "-b:a", "160k", str(dropout)])
             result["mic_dropout_negative_control"] = reject_recording(run, dropout, epoch, "mic-dropout", "mic audio consecutive dropout")
         if case == "worker-death":
