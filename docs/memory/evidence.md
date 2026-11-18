@@ -10,6 +10,12 @@ sources:
 
 Recorded 2026-11-13. Imported reports were read for this memory. Historical tests were not rerun. Source Git object IDs were read locally without contacting hosts or GitHub.
 
+The managed PR #16 recording, public playback and remaining host gates have a
+[separate acceptance receipt](../evidence/pr16-managed-acceptance.md). The
+[signal reproduction](../evidence/pr16-obs.md) retains its own source and
+package provenance. The source for the integrated two-host result is
+`d9b0948435877039ba3b55dc4797566ef73d9fec`.
+
 ## Repository and artifact identities
 
 | ID | Identity | Meaning |

@@ -10,24 +10,26 @@ sources:
 
 ## Current follow-up on PR #16
 
-R01 and R04 retain the integrated two-host media, matched gameplay
-performance, and physical alignment gates. The earlier physical trial
-recorded real game content, physical camera composition and Twitch
-ingest in separately scoped runs. It recorded 117/645 late production
-renders and an OBS SIGSEGV after finalization. The next acceptance requires
-both decoded output and orderly exit. [Physical results and pending gates](session-state.md)
+R01 and R04 retain whole-frame gameplay and input timing, physical A/V
+alignment, and camera age. The two-host recording and public archive now
+demonstrate decoded game, camera and audio from the integrated path. The
+matched replay phases preserve sampled Direct Scanout and physical audio links.
+The 117/645 late-render result remains historical failure evidence.
+[Physical and viewer receipts](../evidence/pr16-managed-acceptance.md)
 
-R02 and R09 retain enclosing-cgroup recovery and kernel-stuck worker risks.
-The revised lifecycle attaches a Stop ID to current Agent observations,
-keeps owner-bound remote release, and reports the OBS wait result separately
-from output inactivity. Completion history remains ephemeral across
-Prepare and Agent restart. [Stop and rollback](../operations.md#stop-and-rollback)
+R02 and R09 retain enclosing-cgroup recovery and kernel-stuck workers.
+The OBS signal comparison reproduces the recorded SIGSEGV with SIGTERM, and
+SIGINT produced an orderly exit in the independent and managed recordings.
+The first isolated Xorg attempt left a QXL DRM task stuck in the kernel. Two
+subsequent attempts left tasks blocked on the VT console lock. All three
+service Stops timed out. Production NVIDIA rendering remains blocked.
+[OBS comparison](../evidence/pr16-obs.md) · [Stop and rollback](../operations.md#stop-and-rollback)
 
-R03 and R07 retain full-session live speech and client regression gates.
-The earlier real EventSub-to-VOICEVOX playback and browser/TUI Status and
-Stop checks apply to their observed artifacts. The review found missing
-speech IDs in the manual clients and finite replay capacity in EventSub.
-[Review and verification](../design-review.md#pr-16-review-follow-up)
+R03 retains full-session physical speech return. The refreshed Twitch trial
+delivered a phrase in speech-only mode. The public game trial observed
+admission without completing synthesis before Stop. R07's current client
+regression passed through authenticated CLI, terminal and browser clients.
+[Verification](../verification.md)
 
 The dated records below describe their original source and observations.
 Evidence IDs resolve in [the register](evidence.md).

@@ -8,22 +8,21 @@ status: draft
 
 ## PR #16 stream-readiness follow-up
 
-The review at `0823165` requires separately observable media integrity,
-performance and cleanup. The follow-up changes the managed Start/Stop and
-speech admission contracts. See the run record for source identity and actual
-commands. [Review](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950165310) · [Verification](../verification.md)
+The managed follow-up runs on the existing PR branch. Both physical hosts used
+the same binary from `d9b0948` for private recording and the operator-approved
+public test. Separate viewer decoding confirmed moving osu! and camera video,
+the Japanese overlay and audio on the public archive. The separate-track
+private recording verified SoloCast/RNNoise contribution. Both media outputs
+stopped and OBS exited normally. The same executable passed a 302.036 s
+private Twitch bandwidth test with generated inputs. [Physical and viewer receipts](../evidence/pr16-managed-acceptance.md)
 
-| Acceptance gate | Evidence still required for the follow-up |
-| --- | --- |
-| Combined physical media | Final-source capture and production binaries running actual game video and game-only audio with the selected SoloCast through RNNoise, the selected camera inset, and the selected output. Independent decode checks for moving game content, camera freshness, isolated processed mic and A/V alignment. |
-| Gameplay impact | Restart the same replay from its beginning in each OFF/ON/OFF phase. Compare p99 frame time against the 1 ms bound with sample counts and uncertainty. Observe Direct Scanout and game-only local audio. Record unmeasured input and audio dimensions. |
-| Production OBS | Identify actual renderer, decoder and encoder. Measure at most 1% late renders after warmup and independently verify output integrity, an exit code of zero, and cleanup of owned processes and listeners. The historical 18.1% result remains a failure. A controlled generated-input comparison reproduced the recorded SIGSEGV with SIGTERM. SIGINT exited normally in its corresponding run, where 69/601 renders were late. Hardware-backed OBS remains blocked on a usable isolated NVIDIA display. [OBS diagnostic](../evidence/pr16-obs.md) |
-| Managed Twitch output | At least five healthy minutes in bandwidth-test mode followed by verified Stop. The separately authorized bounded public smoke requires independently decoded viewer playback. Viewer-side confirmation is **BLOCKED** until an independent observation is available. |
-| Live speech return | A live Twitch notification received on the selected account through EventSub, synthesized by production-local VOICEVOX and observed on the capture host's selected physical playback path during the integrated session. |
-
-The [current runbook](../operations.md#native-poc-startup) defines Start
-confirmation, timed Stop, and cleanup observations. The historical runs
-below retain their own binary identities and observed scopes.
+The matched replay restarts preserved Direct Scanout and both physical audio
+links in 120 samples across OFF/ON/OFF. Gameplay p99, input latency, physical
+A/V alignment and the NVIDIA render gate remain open. Three Xorg attempts
+left kernel-stuck tasks on production after Stop timed out. Physical
+Twitch/VOICEVOX return was heard in a separate speech-only session. During the
+public game test EventSub admitted the message before Stop, with no observed
+synthesis completion. [Outstanding gates](open-risks.md) · [Current runbook](../operations.md)
 
 ## Historical physical trials through review head `0823165`
 

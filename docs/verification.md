@@ -4,6 +4,27 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 managed broadcast follow-up on PR #16
+
+The [integrated physical and viewer receipts](evidence/pr16-managed-acceptance.md)
+identify the source, binaries, observed output, failed starts, host residue and
+remaining acceptance gates. The [controlled OBS comparison](evidence/pr16-obs.md)
+covers selected generated media cases and preserves the reproduced SIGSEGV.
+
+| Exact command or profile | Observed result |
+| --- | --- |
+| `direnv exec . cargo run -p splitcast-xtask -- verify` | PASS on `4e3bffe1eac876e426d3805a7c29b21f6b2b7743`, run `1794973440194326628`. Earlier attempts retained the Clippy revocation match failure, an intermediate TUI output-lock compile failure, virtual Prepare timeouts, and the outdated redirect fixture assertion before it was updated to verify the new Status/Start sequence and authentication. |
+| `direnv exec . cargo run -p splitcast-xtask -- verify-virtual` | PASS on `d9b0948435877039ba3b55dc4797566ef73d9fec`, run `1794974733695648133`. This includes the ordinary Rust checks, two actual Agents, private Pulse, generated media, native return and local transport. |
+| `direnv exec . cargo test -p splitcast-rs-core --test two_agents chromium_speaks_through_the_agent_and_observes_stop --locked --offline -- --ignored --nocapture` | PASS at `d9b0948` with pinned Node and Chromium provided through `SPLITCAST_TEST_NODE` and `SPLITCAST_TEST_CHROMIUM`. The actual browser sent authenticated commands to the served Agent. Private receipt `artifacts/mission/pr16-managed/chromium-final.log`. |
+| `nix develop --no-write-lock-file .#media-test -c bash tools/verify-media.sh --case normal --case camera` | Both selected packaged-OBS cases passed, including independent output decode, exact process/listener observation and normal exit. The partial-profile command returned 1 by design. Run `20261118T032417Z-KZVOhzn5` records the earlier tracked-source manifest. |
+| `nix build --no-write-lock-file --max-jobs 1 --cores 4 --no-link --print-out-paths .#default .#checks.x86_64-linux.configs` | PASS on `4e3bffe`. The preceding build failed at the CLI redirect fixture because it expected Start before Status. The derivations also validated both role examples. |
+| Source-bound physical private recording and public Twitch tests | PASS for integrated composited media, decoded viewer playback, private/public Stop and actual OBS exit at `d9b0948`. Physical A/V alignment, p99 gameplay timing, production late-render target and complete Xorg rollback remain open. Post-Stop public-window physical speech playback was not observed. |
+| Source-bound private Twitch bandwidth test | PASS at `d9b0948`, generated media on production. Final observation span 302.036 s across 62 samples. Verified Stop, exit code 0 and empty cleanup error list. Initial private setup attempts failed with a wrong systemd working directory and missing media-shell environment; both are preserved. |
+
+Specialized Miri, fuzzing and live production forced-controller-death were not
+run in this follow-up. The recordings were bounded to trial storage, and the
+independent decoder retained only sanitized receipts after cleanup.
+
 ## 2026-11-18 native PoC candidate
 
 The live trial and independent observations are summarized in the
