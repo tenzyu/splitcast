@@ -24,7 +24,7 @@ Recorded 2026-11-13. Dates below are decision or observation dates, not dates of
 
 Scope clarification: [D15](#d15-recenter-the-poc-on-gameplay-offload-and-independent-audio-return)
 retains the consistency rule. [D20](#d20-speech-admission-and-chat-replay-belong-to-the-prepared-session)
-records the superseding native browser and speech contracts.
+records the superseding native browser and speech contracts. The [#20 package comparison](proposed-revisions.md#chat-or-preview-stalls-after-focus-transfer) explains why the proposed desktop client uses Slint after measuring GPUI.
 
 - Date: 2026-11-13. Adopted historical implementation and operator requirement. Confidence: high.
 - Goal: prevent the CLI, TUI, browser, and configuration formats from granting different capabilities.

@@ -166,8 +166,6 @@ The failed [run 44089362405](https://github.com/tenzyu/splitcast/actions/runs/44
 
 Matched workload capture non-regression across input, audio, update, draw and
 display. Bound a live decoded freshness envelope and independently align the
-physical mic and game stream. Exercise media faults with real capture,
-confirm clean OBS process exit and repeat the acceptance on a source-bound
-packaged build. [Current gates](memory/session-state.md)
+physical mic and game stream. The managed private and public trials at `d9b0948` already observed OBS exit 0. Real-capture fault recovery and equivalent packaged-build evidence retain their own gates. [Current gates](memory/session-state.md)
 
 **Provenance:** [ID register](memory/evidence.md) · [real media receipt](evidence/media-plane-20261115.md) · [PR #3 oracle review](evidence/pr3-review-20261117.md) · [PoC convergence](evidence/poc-convergence-20261117.md) · [S26](evidence/dreaming-main-20261117.md) · [archived full log](https://github.com/tenzyu/splitcast/blob/archive/pre-dreaming-20261117/docs/verification.md).
