@@ -57,3 +57,8 @@ supersession immediately in the cold-start capsule. Never rewrite the historical
 observation to imply it had always been correct. For uncertain CI fixes, link
 the specific failing run and candidate PR; upgrade to PASS only after the exact
 amended commit is verified.
+
+For automated change detection, use the
+[incremental Dreaming workflow](dreaming.md#incremental-proposals).
+Treat a saved proposal as a review input. Add a review baseline only after
+reconciling the exact page and declared sources with the durable evidence.

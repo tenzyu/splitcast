@@ -4,6 +4,37 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 convergence harness integration
+
+| Exact command or profile | Observed result |
+| --- | --- |
+| `sha256sum -c MANIFEST.sha256 && python3 -m unittest tools.convergence.test_prototype -v` | Attached prototype manifest verified. 29 tests passed in 17.029 s in an extracted temporary directory. This evidence covers the prototype. |
+| `direnv exec . cargo run -p splitcast-xtask -- verify` | Initial local integration passed all 10 checks. Receipt `artifacts/verification/runs/1794981111567417251/`, with HEAD `8c54a4ecaecaa4e6c292b59886ff6405caf50d15` and worktree changes listed in the receipt. |
+| `direnv exec . python3 -m unittest discover -s tools/ci -p 'test_*.py'` | Initial integration ran 31 tests with one Git-cache protocol test skipped by its opt-in gate. |
+| `nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh` | Initial integration passed workflow, shell, Python and documentation checks. The signed-cache tamper control failed to import deliberately corrupted fixture data as expected. The protocol suite passed all 10 tests. |
+| [Main CI](https://github.com/tenzyu/splitcast/actions/runs/44245497263) | Delivery scripts, verify, verify-virtual and Native package all passed on the integration base `8c54a4ecaecaa4e6c292b59886ff6405caf50d15`. |
+
+Three existing work units were replayed twice directly and then through the
+harness on the same allowlisted dirty checkout at `8c54a4e`, snapshot
+`588ad697353322b6c552b4aa60a903de04b7e7d4294155adc5b1e762f6401ec0`.
+All three met their existing software acceptance criteria both ways. Each
+replay compared two direct invocations with four harness invocations
+(enroll, run, reuse, status). Actual check launches fell from two to one per
+unit. The comparisons used one workstation and a warm Nix store.
+
+| Existing check argv | Direct total | Harness total | Reuse invocation |
+| --- | ---: | ---: | ---: |
+| `python3 tools/ci/check_docs.py` | 0.186 s | 1.420 s | 0.135 s |
+| `python3 tools/ci/test_finalize_release.py` | 0.288 s | 1.493 s | 0.138 s |
+| `env SPLITCAST_CACHE_PROTOCOL_TEST=1 python3 tools/ci/test_release_cache.py` | 13.239 s | 6.531 s | 0.139 s |
+
+Private summaries in `artifacts/convergence-replay.json` name the source,
+receipt and sanitized log digest per case. Receipt reuse reduced repeated
+execution. Two short checks cost more with enrollment and status included,
+so retain the direct workflow for short one-off checks. These local replays
+included zero review rounds. Token counts and longitudinal review churn were
+unmeasured. Physical acceptance and live Codex were outside this run.
+
 ## 2026-11-18 additional PR #16 review
 
 | Exact command or profile | Observed result |

@@ -5,22 +5,25 @@ import re
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
-BUNDLE = ROOT / "docs" / "memory"
 LINK = re.compile(r"(?<!!)\]\(([^)\n]+)\)")
 IGNORED_DIRS = {".git", "artifacts", "result", ".direnv", "target", ".venv", "node_modules"}
 
 
-def markdown_files():
+def markdown_files(root=ROOT):
     return sorted(
-        p for p in ROOT.rglob("*.md")
-        if not any(part in IGNORED_DIRS for part in p.relative_to(ROOT).parts)
+        p for p in root.rglob("*.md")
+        if not any(part in IGNORED_DIRS for part in p.relative_to(root).parts)
     )
 
 
-def check_links(paths):
+def check_links(paths, root=ROOT):
+    bundle = root / "docs" / "memory"
     errors = []
     n = 0
     for doc in paths:
+        if doc.is_symlink() or not doc.resolve().is_relative_to(root):
+            errors.append(f"{doc.relative_to(root)}: unsafe Markdown path")
+            continue
         for href in LINK.findall(doc.read_text(encoding="utf-8")):
             href = href.strip().split(" \"", 1)[0]
             if not href or href.startswith("#") or re.match(r"^[a-z][a-z0-9+.-]*:", href, re.I):
@@ -28,40 +31,45 @@ def check_links(paths):
             try:
                 local = unquote(urlsplit(href).path)
             except ValueError:
-                errors.append(f"{doc.relative_to(ROOT)}: malformed link {href!r}")
+                errors.append(f"{doc.relative_to(root)}: malformed link {href!r}")
                 continue
             if not local:
                 continue
-            target = (BUNDLE if local.startswith("/") else doc.parent) / local.lstrip("/")
-            if not target.exists():
-                errors.append(f"{doc.relative_to(ROOT)} -> {href}: missing {target.relative_to(ROOT)}")
+            target = (bundle if local.startswith("/") else doc.parent) / local.lstrip("/")
+            if not target.resolve().is_relative_to(root) or not target.exists():
+                errors.append(f"{doc.relative_to(root)} -> {href}: missing or outside repository")
             n += 1
     return n, errors
 
 
-def check_okf():
+def frontmatter(text):
+    parts = text.split("---\n", 2)
+    return parts[1] if text.startswith("---\n") and len(parts) == 3 else None
+
+
+def check_okf(root=ROOT):
+    bundle = root / "docs" / "memory"
     errors = []
-    index = BUNDLE / "index.md"
-    if not index.is_file() or not index.read_text(encoding="utf-8").startswith(
+    index = bundle / "index.md"
+    index_text = index.read_text(encoding="utf-8") if index.is_file() else ""
+    if not index_text.startswith(
         '---\nokf_version: "0.2"\n---\n'
     ):
         errors.append("docs/memory/index.md: expected root OKF v0.2 declaration")
     names = set()
-    for doc in BUNDLE.glob("*.md"):
+    for doc in bundle.glob("*.md"):
         if doc.name in {"index.md", "log.md"}:
             continue
-        s = doc.read_text(encoding="utf-8")
-        fm = s.split("---\n", 2)
-        if not s.startswith("---\n") or len(fm) < 3:
-            errors.append(f"{doc.relative_to(ROOT)}: missing YAML frontmatter")
+        header = frontmatter(doc.read_text(encoding="utf-8"))
+        if header is None:
+            errors.append(f"{doc.relative_to(root)}: missing YAML frontmatter")
             continue
-        header = fm[1]
         if not re.search(r"^type:\s*\S+", header, flags=re.M):
-            errors.append(f"{doc.relative_to(ROOT)}: missing OKF type")
+            errors.append(f"{doc.relative_to(root)}: missing OKF type")
         names.add(doc.name)
     for required in {"decisions.md", "evidence.md", "poc-mission.md", "open-risks.md",
                      "session-state.md", "dreaming.md", "update-protocol.md"}:
-        if required not in names or f"({required})" not in index.read_text(encoding="utf-8"):
+        if required not in names or f"({required})" not in index_text:
             errors.append(f"docs/memory/index.md: concept {required} unavailable or unindexed")
     return errors
 

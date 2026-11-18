@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "watch_from": "8c54a4ecaecaa4e6c292b59886ff6405caf50d15",
+  "pages": {
+    "MEMORY.md": {
+      "kind": "reference",
+      "sources": ["docs/memory/session-state.md", "docs/memory/open-risks.md", "docs/operations.md"]
+    },
+    "docs/memory/INDEX.md": {
+      "kind": "historical",
+      "sources": ["docs/memory/index.md"]
+    },
+    "docs/memory/index.md": {
+      "kind": "reference",
+      "sources": ["MEMORY.md", "docs/memory/decisions.md", "docs/memory/open-risks.md", "docs/memory/session-state.md"]
+    },
+    "docs/memory/decisions.md": {
+      "kind": "current",
+      "sources": ["docs/design-review.md", "packages/splitcast-rs/src/config.rs", "packages/splitcast-rs/src/lifecycle.rs", "packages/splitcast-rs/src/obs.rs", "packages/splitcast-rs/src/workers.rs", "packages/splitcast-rs/src/eventsub.rs", "packages/splitcast-rs/src/return_audio.rs", "nix/modules/nixos.nix"]
+    },
+    "docs/memory/dreaming.md": {
+      "kind": "reference",
+      "sources": ["tools/ci/convergence_wiki.py", "tools/ci/check_docs.py", "docs/memory/update-protocol.md"]
+    },
+    "docs/memory/environment-gap.md": {
+      "kind": "historical",
+      "sources": ["docs/evidence/poc-convergence-20261117.md"]
+    },
+    "docs/memory/evidence.md": {
+      "kind": "reference",
+      "sources": ["docs/verification.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/evidence/real-voicevox-physical-return.md"]
+    },
+    "docs/memory/log.md": {
+      "kind": "reference",
+      "sources": ["docs/memory/dreaming.md", "docs/memory/evidence.md"]
+    },
+    "docs/memory/open-risks.md": {
+      "kind": "current",
+      "sources": ["docs/design-review.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/verification.md", "packages/splitcast-rs/src/process.rs", "packages/splitcast-rs/src/obs.rs"]
+    },
+    "docs/memory/poc-mission.md": {
+      "kind": "current",
+      "sources": ["README.md", "docs/design-review.md"]
+    },
+    "docs/memory/session-state.md": {
+      "kind": "current",
+      "sources": ["docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/evidence/real-voicevox-physical-return.md", "docs/operations.md", "packages/splitcast-rs/src/agent.rs", "packages/splitcast-rs/src/media.rs", "packages/splitcast-rs/src/obs.rs"]
+    },
+    "docs/memory/update-protocol.md": {
+      "kind": "reference",
+      "sources": ["docs/memory/dreaming.md", "docs/memory/evidence.md"]
+    },
+    "docs/handoff/poc-20261117.md": {
+      "kind": "historical",
+      "sources": ["docs/evidence/poc-20261117.md"]
+    }
+  }
+}

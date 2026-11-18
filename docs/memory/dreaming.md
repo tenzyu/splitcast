@@ -41,3 +41,17 @@ Anthropic's 2026-11-06 memory work distinguishes **transcripts**, **memory notes
 - All-frame gameplay OFF/ON/OFF, live freshness and physical event-to-playback are separate acceptance axes.
 
 For correction fields and evidence discipline see [update protocol](update-protocol.md). For exact pre-pruning prose and full original correction tables use [archive](https://github.com/tenzyu/splitcast/tree/archive/pre-dreaming-20261117).
+
+## Incremental proposals
+
+[Provenance](provenance.json) identifies the exact local paths to compare for
+each page. Its `watch_from` is a change-detection anchor. Manual review may add
+`review` with a full `commit` that contains the reviewed page and sources, plus
+`evidence_commit` and `evidence_path` for the durable review record. The scan
+reports the evidence blob and checks that the reviewed page and dependencies
+still match. It never certifies the meaning of a claim. Record any resulting
+correction as specified by the [update protocol](update-protocol.md).
+
+Use [the CLI workflow](../convergence.md) to scan locally or explicitly ask
+Codex for a private, source-bound proposal. Decisions about applying a patch
+and recording its review stay with the reviewer.
