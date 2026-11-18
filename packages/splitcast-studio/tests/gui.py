@@ -127,19 +127,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         drop = self.server.drop == command and command is not None
         try:
             headers = {key: self.headers[key] for key in ("Host", "Origin", "Authorization")}
-            code, body = exchange_http(self.server.upstream, headers, command, args)
+            chat_count = self.server.chat_count if command == "chat" else None
+            # Check authority and forwarding against the Agent without sending
+            # the downstream synthetic cursor to its independent chat history.
+            upstream_args = {} if chat_count is not None else args
+            code, body = exchange_http(self.server.upstream, headers, command, upstream_args)
             if command == "stop":
                 self.server.stop_responses.append((code, json.loads(body).get("stop_id")))
-            if self.server.chat_count is not None and command == "chat" and code == 200:
+            if chat_count is not None and code == 200:
                 # Inject bounded pages at the authenticated relay boundary.
                 # The real Agent call above still verifies authority and routing.
-                count = self.server.chat_count
                 after = args.get("after", 0)
-                cursor = min(count, after + 32)
+                cursor = min(chat_count, after + 32)
                 page = {
                     "enabled": True, "epoch": "fixture-epoch", "cursor": cursor,
-                    "more": cursor < count, "reset": False, "overrun": False,
-                    "subscription": {"state": "subscribed", "notifications": count,
+                    "more": cursor < chat_count, "reset": False, "overrun": False,
+                    "subscription": {"state": "subscribed", "notifications": chat_count,
                                      "duplicates": 0, "dropped": 0, "reconnects": 0, "error": None},
                     "messages": [
                         {"cursor": i, "id": f"generated-{i}", "display_name": "Wayland fixture",
@@ -533,8 +536,10 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
         if admission == 202:
             studio.wait("Stop admitted", after=mark)
         stop_proof = agent("capture")[1]
-        assert stop_proof["stop_id"] == stop_id and stop_proof["remote_release_pending"] is False
-        print(f"concurrent Stop: GUI HTTP {admission}; matching completed Idle proof", flush=True)
+        assert (stop_proof["stop_id"], stop_proof["state"], stop_proof["stop"],
+                stop_proof["remote_release_pending"]) == (stop_id, "idle", "completed", False)
+        print(f"concurrent Stop: GUI HTTP {admission}, stop_id={stop_id},"
+              " matching completed Idle and remote_release_pending=false", flush=True)
         assert agent("production")[1]["state"] == "idle"
         assert agent("production")[1]["obs_shutdown"]["output_inactive_confirmed"]
         ended_workers = [
