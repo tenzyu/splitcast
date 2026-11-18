@@ -77,12 +77,19 @@ def validate_release(release, ref, manifest, run, sha, attempt):
     if len(assets) != 1 or assets[0].get("digest") != "sha256:" + manifest_sha:
         raise ValueError("public manifest differs from GitHub's asset digest")
     document = json.loads(manifest)
+    roots = document.get("roots", {})
+    root_paths = set(roots.values())
+    custom_paths = document.get("custom", [])
+    custom = set(custom_paths)
+    # Both v1 layouts contain each root and one additional custom output (patched OBS).
     if (document.get("version") != 1
             or document.get("revision", {}).get("sha") != sha
             or document.get("revision", {}).get("system") != "x86_64-linux"
-            or set(document.get("roots", {})) != {"native"}
-            or len(document.get("custom", [])) != 3
-            or not set(document["roots"].values()) <= set(document.get("closure", {}))):
+            or set(roots) not in ({"native"}, {"native", "web"})
+            or len(root_paths) != len(roots)
+            or len(custom_paths) != len(custom)
+            or len(custom) != len(root_paths) + 1
+            or not root_paths <= custom <= set(document.get("closure", {}))):
         raise ValueError("published manifest does not describe tested roots")
     return tag, manifest_sha
 
@@ -110,7 +117,10 @@ def update_verified(run_id):
         return
     if release.get("name") != original_title:
         raise ValueError("nonstandard release title; refuse to overwrite manual edits")
-    if "# Experimental Nix cache, not deployment acceptance" not in body:
+    legacy_heading = "# Experimental Nix cache, not deployment acceptance"
+    native_notice = (f"Experimental SplitCast Nix cache for commit {sha}. "
+                     "Not a production or physical-media acceptance. ")
+    if body.partition("\n")[0] != legacy_heading and not body.startswith(native_notice):
         raise ValueError("missing original release safety notice")
     verification = (
         "\n\n## Verified Nix cache delivery (automated)\n\n"

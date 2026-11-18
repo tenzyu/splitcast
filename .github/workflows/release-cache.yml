@@ -9,7 +9,7 @@ on:
         required: true
         default: false
       reviewed_redistribution:
-        description: Owner reviewed the three custom outputs, source bundles, GPL and codec conditions
+        description: Owner reviewed the native and patched OBS outputs, source bundles, GPL and codec conditions
         type: boolean
         required: true
         default: false

@@ -4,6 +4,38 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 published native Nix cache verification
+
+At `90af1210800c94a2fbc5900eb5ea3337604966e2`, [release run 44304462155](https://github.com/tenzyu/splitcast/actions/runs/44304462155/attempts/1)
+passed `build`, `publish`, and the independent `consume` job. The published
+manifest and `consumed-manifest.json` both hash to
+`98136a91a1c3f7cff456b76460141ded3fac6a953893a8633905098831612547`.
+They name one native root and two custom paths, the native output and patched
+OBS. The consumer's retained output lists one path despite the old log
+message referring to both roots.
+
+The [automatic finalizer](https://github.com/tenzyu/splitcast/actions/runs/44308360085)
+and [manual finalizer](https://github.com/tenzyu/splitcast/actions/runs/44314031162)
+both failed with `published manifest does not describe tested roots`. The
+finalizer still expected three custom paths and a release notice superseded
+by the native publisher's commit-specific notice.
+
+| Exact command | Observed result |
+| --- | --- |
+| `gh run view 44314031162 --log-failed` and `gh run view 44308360085 --log-failed` | Both returned the failing finalizer step with the same manifest error. |
+| `gh run download 44304462155 -n release-consumer-evidence-1 -D "$receipt_dir/consumer"` and `gh release download nix-cache-90af1210800c94a2fbc5900eb5ea3337604966e2-44304462155-1 -p manifest.json -D "$receipt_dir/published"` | Both exited 0. `sha256sum "$receipt_dir/published/manifest.json" "$receipt_dir/consumer/consumed-manifest.json"` printed the matching digests above. |
+| `python3 tools/ci/test_finalize_release.py` | The native publisher fixture and legacy layout were rejected before the fix, exit 1. Convergence receipt `verify-published-nix-cache/attempt-000001`. |
+| `python3 tools/ci/test_finalize_release.py` | Six tests passed on the working fix, exit 0. Receipt `attempt-000002`. A later parallel request was blocked by the convergence lock before starting Python. |
+| `nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#python3Packages.pyflakes -c bash tools/ci/lint.sh` | Exit 0 at `430bcd1eda96a91d52599bd4a8340ee66bc0e4b5`. Includes the six finalizer tests and the Nix cache protocol fixture. Receipt `attempt-000003`. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | All 10 stages passed at `430bcd1eda96a91d52599bd4a8340ee66bc0e4b5`, exit 0. Receipt `attempt-000004` and `artifacts/verification/runs/1795010172673780290/`. The preceding parallel request was blocked by the convergence lock before starting Cargo. |
+| `gh workflow run verified-cache.yml --ref fix/verify-published-nix-cache -f run_id=44304462155` | [Run 44319241504](https://github.com/tenzyu/splitcast/actions/runs/44319241504) passed `finalize` on `430bcd1eda96a91d52599bd4a8340ee66bc0e4b5`. The log confirms the exact target run. |
+
+The [target prerelease](https://github.com/tenzyu/splitcast/releases/tag/nix-cache-90af1210800c94a2fbc5900eb5ea3337604966e2-44304462155-1)
+now has the title `Verified Nix delivery candidate 90af1210800c` and
+verification notes for run 44304462155, attempt 1. GitHub API comparisons
+before and after confirmed identical tag, source commit, publication flags,
+and all 447 asset records. No fresh cache publication or physical tests ran.
+
 ## 2026-11-18 repository skill verification
 
 [S34](evidence/wiki-context-skill.md) records T3 discovery, matched reader answers, independent scoring, measured cost and the scoped checks.

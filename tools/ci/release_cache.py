@@ -297,7 +297,7 @@ def consume(url, expected_hash):
     native = manifest["roots"]["native"] + "/bin/splitcast"
     print(run(native, "selfcheck"))
     print(run(native, "validate", "--config", "packages/splitcast-rs/example.toml"))
-    print("Fresh consumer obtained both exact roots with builds disabled and signatures required.")
+    print("Fresh consumer obtained the exact native root with builds disabled and signatures required.")
 
 
 if __name__ == "__main__":
