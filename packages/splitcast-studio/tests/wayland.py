@@ -117,11 +117,15 @@ class WaylandStudio(gui.Studio):
         self.pointer.button(False)
 
     def drag(self, label, dx, dy):
+        start = self.target(label)
         x, y = self.point(label)
         self.pointer.move(x, y)
         self.pointer.button(True)
-        self.pointer.move(x + dx, y + dy)
-        self.pointer.button(False)
+        try:
+            self.pointer.move(x + dx, y + dy)
+            gui.eventually(lambda: self.target(label) != start, "dragged guide rendered", seconds=3)
+        finally:
+            self.pointer.button(False)
 
     def edit(self, label, value):
         self.click(label)
@@ -341,6 +345,7 @@ def main():
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--studio-binary", type=Path)
     parser.add_argument("--studio-source", help="Full Git SHA used to build --studio-binary")
+    parser.add_argument("--focus-only", action="store_true", help="Stop after the baseline focus and reader checks")
     args = parser.parse_args()
     if bool(args.studio_binary) != bool(args.studio_source):
         parser.error("--studio-binary and --studio-source must be supplied together")
@@ -371,7 +376,7 @@ def main():
     store(evidence / "source.json", source)
     test = Acceptance(evidence)
     gui.verify(str(binary), display=test.display, studio_type=test.studio,
-               idle=test.idle, unfocused=test.unfocused)
+               idle=test.idle, unfocused=test.unfocused, focus_only=args.focus_only)
 
 
 if __name__ == "__main__":

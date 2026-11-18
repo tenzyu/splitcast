@@ -360,7 +360,8 @@ def sample_idle(studio, count=20):
     return max(pss) <= 80 and cpu <= 0.5 and renders == 0
 
 
-def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_idle, unfocused=None):
+def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_idle,
+           unfocused=None, focus_only=False):
     os.umask(0o077)
     studio_bin = studio_bin or build(
         ["build", "--release", "--manifest-path", str(MANIFEST)], "splitcast-studio"
@@ -402,11 +403,12 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
         assert applied == "Private fixture draft", f"offline draft after Apply: {applied!r}"
         budget = idle(direct)
         assert not production_relay.times("preview-small"), "Idle preview request"
-        old_camera = okay("production", "scene")["draft"]["camera"]
-        direct.drag("Camera guide", -30, 14)
-        direct.click("Apply")
-        eventually(lambda: okay("production", "scene")["draft"]["camera"]["x"] < old_camera["x"],
-                   "offline camera guide moved in Agent draft")
+        if not focus_only:
+            old_camera = okay("production", "scene")["draft"]["camera"]
+            direct.drag("Camera guide", -30, 14)
+            direct.click("Apply")
+            eventually(lambda: okay("production", "scene")["draft"]["camera"]["x"] < old_camera["x"],
+                       "offline camera guide moved in Agent draft")
         cleanup(direct.process)
 
         # A's owner-bound production fixture supplies a synthetic camera feed.
@@ -471,6 +473,12 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
         time.sleep(4.2)
         assert studio.render_count() == steady_draws, "unchanged preview and empty chat deltas redrew the UI"
         focus_passed = unfocused is None or unfocused(stack, root, studio, forwarded)
+        if focus_only:
+            studio.click("Stop")
+            studio.wait("Stop completed")
+            assert budget, "release idle budget exceeded"
+            assert focus_passed, "visible Studio failed to display the unfocused chat delta"
+            return
 
         studio.edit("Overlay text", "Verified OBS edit")
         other = okay("capture", "scene")
