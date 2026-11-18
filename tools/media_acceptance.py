@@ -110,18 +110,20 @@ def obs_counter_delta(samples, total_key, skipped_key):
             "intervals_without_progress": sum(total == skipped for total, skipped in steady)}
 
 
-def assess_obs_stats(samples):
+def assess_obs_stats(samples, warmup_at, expected_samples):
     def unavailable(reason):
         outcome = {"status": "UNMEASURABLE", "reason": reason}
         return {"render": outcome, "encode": outcome}
 
     if any("error" in sample for sample in samples):
         return unavailable("OBS statistics or active recording observation failed")
-    if len(samples) <= 2:
+    if len(samples) != expected_samples or len(samples) <= 2:
         return unavailable("missing Running, baseline or post-warmup samples")
     phases = ["running-start", "post-warmup-baseline"] + ["post-warmup"] * (len(samples) - 2)
     if [sample["phase"] for sample in samples] != phases:
         return unavailable("missing or out-of-order warmup boundaries")
+    if not samples[0]["received"] < warmup_at <= samples[1]["requested"]:
+        return unavailable("observations do not straddle the warmup deadline")
     for first, second in zip(samples, samples[1:]):
         if (first["received"] > second["requested"]
                 or second["output_duration_ms"] <= first["output_duration_ms"]):
@@ -654,6 +656,8 @@ class Run:
     def sample_recording(self, source):
         samples, counters, observations = [], [], []
         started = time.monotonic()
+        warmup = LIMITS["obs_warmup_seconds"]
+        window = LIMITS["record_seconds"]
         obs = None
 
         def sample_stats(phase):
@@ -670,8 +674,7 @@ class Run:
 
         try:
             sample_stats("running-start")
-            warmup = LIMITS["obs_warmup_seconds"]
-            for elapsed in range(1, LIMITS["record_seconds"] + 1):
+            for elapsed in range(1, window + 1):
                 time.sleep(max(0, started + elapsed - time.monotonic()))
                 if elapsed >= warmup:
                     sample_stats("post-warmup-baseline" if elapsed == warmup else "post-warmup")
@@ -681,10 +684,10 @@ class Run:
         finally:
             if obs is not None:
                 obs.socket.close()
-            assessment = assess_obs_stats(observations)
+            assessment = assess_obs_stats(observations, started + warmup, window - warmup + 2)
             write_json(self.directory / f"obs-stats-{source.epoch}.json", {
                 "source_epoch": source.epoch, "running_observed_at": started,
-                "warmup_seconds": LIMITS["obs_warmup_seconds"], "samples": observations,
+                "warmup_seconds": warmup, "samples": observations,
                 "assessment": assessment,
             })
             write_json(self.directory / f"scene-age-{source.epoch}.json", {

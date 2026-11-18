@@ -1,9 +1,9 @@
+import math
 import unittest
 
-from media_acceptance import (analyze_audio, assess_marks, assess_obs_stats, assess_scene_age,
+from media_acceptance import (analyze_audio, assess_marks, assess_obs_stats as assess_recording_stats, assess_scene_age,
                               audio_clock, audio_presence, av_alignment, barcode, frame,
                               frame_age_bounds, require_obs_progress, source_health, tone_power, video_cadence)
-import math
 
 
 def obs_samples(render, encode):
@@ -13,6 +13,10 @@ def obs_samples(render, encode):
             for phase, at, render_counts, encode_counts in zip(
                 ("running-start", "post-warmup-baseline", "post-warmup", "post-warmup"),
                 (0, 2, 3, 4), render, encode)]
+
+
+def assess_obs_stats(samples):
+    return assess_recording_stats(samples, warmup_at=2, expected_samples=4)
 
 
 class MediaOracleTests(unittest.TestCase):
@@ -45,10 +49,21 @@ class MediaOracleTests(unittest.TestCase):
         self.assertEqual(assess_obs_stats([])["render"]["status"], "UNMEASURABLE")
         samples = obs_samples(render, render)
         self.assertEqual(assess_obs_stats(samples[:2])["render"]["status"], "UNMEASURABLE")
+        self.assertEqual(assess_obs_stats(samples[:3])["render"]["status"], "UNMEASURABLE")
         samples[2]["output_duration_ms"] = 0
         self.assertIn("duration reset", assess_obs_stats(samples)["render"]["reason"])
         samples[1]["phase"] = "post-warmup"
         self.assertIn("boundaries", assess_obs_stats(samples)["render"]["reason"])
+
+    def test_obs_stats_require_samples_to_straddle_the_warmup_deadline(self):
+        counts = [(100, 0), (160, 0), (190, 0), (220, 0)]
+        samples = obs_samples(counts, counts)
+        for key, index, time in (("received", 0, 2), ("requested", 1, 1.99)):
+            with self.subTest(key=key):
+                early_or_late = [sample.copy() for sample in samples]
+                early_or_late[index][key] = time
+                stats = assess_obs_stats(early_or_late)
+                self.assertIn("straddle", stats["render"]["reason"])
 
     def test_obs_output_progress_excludes_skips_and_zero_attempts(self):
         render = [(100, 0), (160, 0), (190, 0), (220, 0)]

@@ -116,9 +116,9 @@ Xvfb/llvmpipe and x264 comparison reproduced the SIGTERM crash with
 74/600 late renders and 0/601 output-thread skips. SIGINT exited zero with
 69/601 late renders and 0/601 output-thread skips. The later managed physical
 software runs exited normally and lack a warmup-trimmed counter series.
-The separate 30 fps generated cases logged 3/393 render drops for normal and
-398 frames drawn with no lag line for camera. Preserve those observations at their original
-boundaries. [Managed physical evidence](evidence/pr16-managed-acceptance.md)
+The separate 30 fps generated cases logged 3/393 render drops for normal
+and 398 frames drawn with no lag line for camera.
+[Managed physical evidence](evidence/pr16-managed-acceptance.md)
 
 Before a hardware trial, record the authorized display, driver, GPU, exact
 OBS package and source identity, trial process/service ownership, allowed
@@ -127,8 +127,8 @@ and the production host's boot ID, active system and pre-existing sessions.
 Keep the capture host's active system and wrapper snapshot too. Require a
 known usable isolated display, a responsive production host, and an
 operator-owned recovery path. Under separate hardware authorization, run a
-finite private generated-input smoke test on that display. Retain one receipt
-per stage of the path:
+finite private generated-input smoke test on that display. Retain a receipt
+for each stage.
 
 | Stage | Evidence required to proceed |
 | --- | --- |
@@ -141,8 +141,9 @@ NVENC API 13.0. Weston headless reported NVIDIA rendering, while OBS
 Wayland failed at `eglGetDisplay`. Xwayland lacked `wl_drm`,
 Glamor and DRI3, and OBS failed EGL/X11 setup. Neither path reached an
 OBS output. The unprivileged diagnostic needed process-group kills.
-The separate privileged Xorg attempts left one task in a DRM modeset wait
-and two in a VT `console_lock` wait. The tasks remained in kernel state
+The first privileged Xorg attempt opened QXL before NVIDIA and left a task
+in a DRM modeset wait. Two further attempts restricted to NVIDIA left
+tasks in a VT `console_lock` wait. The tasks remained in kernel state
 `D` with SIGKILL pending and service Stop timed out. Normal reboot failed
 to release them despite the request's zero return. The operator's VM reset
 changed the boot ID, cleared the owned tasks, cgroups and private directories,
@@ -174,13 +175,14 @@ the quarantine. The original failure stays in the receipt.
    post-run Stop. Predeclare the independent instruments, minimum sample
    coverage, frame-age and A/V bounds with uncertainty, and abort/recovery
    owners before capture. Keep any missing instrument or authorization
-   BLOCKED. Confirm the display/software smoke and private recording first.
+   BLOCKED. Complete the display preflight and a private recording first.
 2. Use OFF 1 / ON / OFF 2 in that order with the same replay hash and
    restart cue. OFF arms have no trial media workers; ON runs the exact
    intended game/camera/mic/OBS path at the agreed output settings. Match
    versions, resolution/refresh, workload, the authorized renderer without
-   Vulkan/Zink, focus, input and audio route, and thermal/load conditions. Count per-frame gameplay times
-   over the same replay-aligned 60 seconds in each arm using the same
+   Vulkan/Zink, focus, input and audio route, and thermal/load conditions.
+   Count per-frame gameplay times over the same replay-aligned 60 seconds
+   in each arm using the same
    validated observer that preserves Direct Scanout and audio. Save raw
    samples, start alignment, missing events, p50/p95/p99, and measurement
    uncertainty. Use nearest-rank p99. For each matched bracket require
@@ -194,7 +196,7 @@ the quarantine. The original failure stays in the receipt.
    replay silence. Polls establish only sampled continuity. Begin OFF 2
    after Stop and release checks.
 3. In the ON arm, authenticate to the owned OBS WebSocket over loopback.
-   Save a Running sample before warmup, a baseline after ten seconds of
+   Save a Running sample before warmup and a baseline after ten seconds of
    warmup. Cue the ON replay from its beginning at that baseline, then
    sample once per second through the matched interval with the last
    sample before Stop. Retain raw request/receipt times, OBS

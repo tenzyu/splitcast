@@ -70,8 +70,9 @@ four cumulative counters in the same OBS instance and recording. The
 baseline-to-last differences exclude warmup. Invalid, absent, decreasing
 or inconsistent counters, an inactive/paused recording, connection loss,
 or zero attempted frames make the corresponding measurement unavailable.
-A missing baseline or post-warmup sample also leaves the measurement
-unavailable. There is no reconnect or cross-session subtraction.
+Incomplete sampling or failure to bracket the warmup deadline also leaves
+the measurement unavailable. The observer keeps the original connection
+and recording for the full sequence.
 
 For rendering report `ΔrenderSkippedFrames / ΔrenderTotalFrames` and both
 counts. Report output-thread skips and attempts separately, plus
