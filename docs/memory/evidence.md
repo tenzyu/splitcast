@@ -58,6 +58,7 @@ Paths are relative to SC-MONO. Original normalized copies were imported under `d
 | S27 | 2026-11-18 JST | Device-free playback validation at base `98605fb` and [repair `08449bc`](https://github.com/tenzyu/splitcast/commit/08449bc4b3cb7742ca34c0036398b307caa07f09) | E22 below. The PR contains the independent CLI replay. |
 | S28 | 2026-11-18 JST | [Prepared Agent audio return](../evidence/audio-return.md) | Two processes, OpenSSH forwarding, private PipeWire sinks and independent PCM observations |
 | S29 | 2026-11-18 JST | [Real VOICEVOX checkpoint](../evidence/real-voicevox-physical-return.md) at `6a503e9` | Production-local synthesis and Agent preflight, plus read-only capture inventory |
+| S30 | 2026-11-18 JST | [Authorized two-host VOICEVOX trial](../evidence/real-voicevox-physical-return.md#authorized-two-host-trial) at `6a503e9` | Physical ALSA route and listening, live faults, and timed expiry comparison |
 
 Original object inspection uses `git ls-tree -r <EXTRACT> -- <source-path>` and `git cat-file -p <blob>` in SC-MONO. Those commands do not run the historical checks.
 
@@ -90,6 +91,7 @@ Original object inspection uses `git ls-tree -r <EXTRACT> -- <source-path>` and 
 | E22 | S27, development host, Rust 1.95.0, pinned direnv shell | Reversing only the format and data chunks gave one inert player start on the base. The repair returns an input error and starts zero. An independent Python `wave` decoder and separate CLI process agreed on both the rejection and a valid leading JUNK chunk with 160 exact PCM bytes. | `cargo test --locked -p splitcast-rs-core --lib data_before_format_never_starts_player` reproduced red then green. `cargo run --locked -p splitcast-xtask -- verify` passed all 11 stages on the clean repair commit. Scope ends at player stdin. |
 | E23 | S28, source and commands in the [run receipt](../evidence/audio-return.md) | Player stdin matched byte-for-byte. Separate sink monitors located the initial and recovered fixtures. Tests removed the forward and a playing sink, expired jobs, and discarded replies. | Device-free on one kernel. Physical routes, gameplay and two-host latency remain open. |
 | E24 | S29, [real VOICEVOX checkpoint](../evidence/real-voicevox-physical-return.md) | A real loopback engine produced 0.960 s of mono PCM16. Independent FFmpeg decode matched the WAV samples. A production Agent preflight observed authorization refusals and a read-only capture inventory located an ALSA sink. | Actual cross-host return, physical listening, and live fault recovery are blocked. |
+| E25 | S30, [authorized two-host trial](../evidence/real-voicevox-physical-return.md#authorized-two-host-trial) | Production PCM matched native player input over a capture-initiated authenticated SSH forward. The operator heard the full 25-second-expiry trial utterance and reported truncation at 10 seconds. Fault isolation, cleanup, fresh recovery, and sampled local game routing passed. | One bounded hardware route. Mixed-media contention, gameplay performance and end-to-end latency remain open. |
 
 ## Corrections that must survive summarization
 

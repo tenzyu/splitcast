@@ -193,3 +193,5 @@ It does not close durable Stop observation, parser exhaustion or R02.
 **R03 update, 2026-11-18 JST.** [S28/E23](../evidence/audio-return.md) covers the prepared software return, replay fencing and selected private sink. Live chat, real hardware, physical listening, latency and crash containment still require their own evidence.
 
 [S29/E24](../evidence/real-voicevox-physical-return.md) independently decoded real production-local VOICEVOX speech. Actual two-host delivery and physical listening still require a scoped capture execution path and runtime prerequisites.
+
+[S30/E25](../evidence/real-voicevox-physical-return.md#authorized-two-host-trial) closes the bounded physical return gate at the tested 25-second expiry. The 10-second acoustic failure remains recorded. Long-running use, concurrent media load, live chat, competitive performance and end-to-end latency still need their own evidence.
