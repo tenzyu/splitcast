@@ -7,7 +7,7 @@ description: Trace SplitCast design decisions, incidents, disputed acceptance cl
 
 Use the **working-tree** [capsule](../../../MEMORY.md) and [topic index](../../../docs/memory/index.md). Reuse them if already loaded. The Wiki can postdate the implementation it describes.
 
-Jump to the linked heading with `rg -A 8 '^### Heading' path`. Follow its primary links at their own revisions, e.g. `git show REV:path | sed -n '40,60p'` for a link ending in `#L40-L60`. Batch ranges shared by several questions. Once a rule and its receipt answer the question, finish the lookup.
+When the checkout and pins are supplied, go directly to the linked topics. Headings vary in depth. For example, `rg -i -A 8 '^#{2,6} .*queued activation' docs/memory/open-risks.md` finds the fence and its receipt. Group topic reads in one shell call, then group the cited ranges at their own revisions (`git show REV:path | sed -n '40,60p'` for `#L40-L60`). Stop when the rule and its observation answer the question.
 
 For polling, report each reader’s eligibility, concurrency limit and interval or backoff where specified. For a lifecycle race, trace work already queued through the transition and check who proves release.
 
