@@ -106,9 +106,9 @@ class MetadataTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in directory.iterdir()), [])
 
     def test_rejects_foreign_paths_and_incomplete_closures(self):
-        path = "/nix/store/" + "a" * 32 + "-splitcast-web-0.1.0"
         source = {"sha": "fixture"}
-        selected = {"native": path, "web": path}
+        path = "/nix/store/" + "a" * 32 + "-splitcast-rs-core-0.1.0"
+        selected = {"native": path}
         manifest = {"version": 1, "revision": source, "roots": selected,
                     "closure": {path: {"references": []}}, "custom": [path]}
         with patch.object(cache, "revision", return_value=source), patch.object(cache, "roots", return_value=selected), patch.object(cache, "run", return_value=path):

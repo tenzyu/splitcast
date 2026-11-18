@@ -2,7 +2,6 @@ use crate::{
     control,
     protocol::{Command, Invocation},
     request::{error_response, RequestTicket},
-    web::Assets,
 };
 use std::io;
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -84,7 +83,6 @@ struct ConnectionConfig {
     port: u16,
     token: String,
     max_text: usize,
-    assets: Arc<Assets>,
     limits: Limits,
     control: crate::lifecycle::SessionControl,
     normal_waiters: AtomicUsize,
@@ -98,7 +96,6 @@ impl ListenerOwner {
         listener: TcpListener,
         token: String,
         max_text: usize,
-        assets: Arc<Assets>,
         shutdown: Arc<AtomicBool>,
         limits: Limits,
         control: crate::lifecycle::SessionControl,
@@ -108,7 +105,6 @@ impl ListenerOwner {
             port,
             token,
             max_text,
-            assets,
             limits,
             control,
             normal_waiters: AtomicUsize::new(0),
@@ -202,12 +198,8 @@ fn connection(
         }
     };
     if request.method == "GET" {
-        if let Some((mime, body)) = config.assets.get(&request.path) {
+        if let Some((mime, body)) = crate::web::asset(&request.path) {
             let _ = control::reply_bytes(stream, 200, mime, body);
-            return;
-        }
-        if request.path == "/" {
-            let _ = control::reply(stream, 503, "{\"error\":\"Rust WASM assets unavailable; use the TUI or build the web package\"}");
             return;
         }
     }
@@ -243,7 +235,7 @@ fn connection(
                         if let Some(response) = ticket.response() { break response; }
                         if cancel.load(Ordering::Relaxed) || Instant::now() >= end {
                             let cleanup = if cancel.load(Ordering::Relaxed) { "unknown" } else { "pending" };
-                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup}).to_string());
+                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup,"stop_id":ticket.id}).to_string());
                         }
                         thread::sleep(Duration::from_millis(10));
                     }
@@ -278,7 +270,7 @@ fn connection(
     )) {
         Ok(generation) => generation,
         Err(error) => {
-            let response = error_response("not_executed", &error.to_string());
+            let response = error_response(crate::request::Failure::NotExecuted, &error.to_string());
             let _ = control::reply(stream, response.0, &response.1);
             return;
         }
@@ -287,7 +279,10 @@ fn connection(
     // Slow unauthenticated headers can still exhaust the finite total cap.
     if config.normal_waiters.fetch_add(1, Ordering::Relaxed) >= NORMAL_WAIT_LIMIT {
         config.normal_waiters.fetch_sub(1, Ordering::Relaxed);
-        let response = error_response("not_executed", "ordinary command capacity unavailable");
+        let response = error_response(
+            crate::request::Failure::NotExecuted,
+            "ordinary command capacity unavailable",
+        );
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }
@@ -315,7 +310,10 @@ fn connection(
         })
         .is_err()
     {
-        error_response("not_executed", "command queue unavailable")
+        error_response(
+            crate::request::Failure::NotExecuted,
+            "command queue unavailable",
+        )
     } else {
         loop {
             if let Some(response) = ticket.response() {

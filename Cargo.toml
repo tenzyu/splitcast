@@ -1,5 +1,5 @@
 [workspace]
-members = ["packages/splitcast-rs", "packages/splitcast-protocol", "packages/splitcast-web", "tools/xtask"]
+members = ["packages/splitcast-rs", "tools/xtask"]
 resolver = "2"
 
 [workspace.package]

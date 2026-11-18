@@ -129,19 +129,39 @@ pub struct Session {
 struct ControlState {
     phase: Phase,
     generation: u64,
+    output_until: Option<Instant>,
+    instance: String,
+    stop_id: Option<String>,
     stop: Option<StopIntent>,
     active_owner: Option<OwnerId>,
     last_stop_owner: Option<OwnerId>,
     stop_completed: bool,
 }
 impl ControlState {
+    fn stop_admission(&self, ticket: Arc<crate::request::RequestTicket>) -> StopAdmission {
+        StopAdmission {
+            id: self.stop_id.clone().expect("admitted Stop has an ID"),
+            ticket,
+        }
+    }
+
+    fn expired(&self, now: Instant) -> bool {
+        self.output_until.is_some_and(|end| now >= end)
+            || self.phase.authority().is_some_and(|a| a.expired(now))
+    }
+
     fn revoked(&self, generation: u64) -> bool {
-        self.generation != generation
-            || self.stop.is_some()
-            || self
-                .phase
-                .authority()
-                .is_some_and(|a| a.expired(Instant::now()))
+        self.generation != generation || self.stop.is_some() || self.expired(Instant::now())
+    }
+}
+#[derive(Debug)]
+pub(crate) struct StopAdmission {
+    pub(crate) id: String,
+    ticket: Arc<crate::request::RequestTicket>,
+}
+impl StopAdmission {
+    pub(crate) fn response(&self) -> Option<crate::request::Response> {
+        self.ticket.response()
     }
 }
 #[derive(Debug)]
@@ -234,11 +254,9 @@ impl SessionControl {
         }
         Ok(written)
     }
-    fn request_locked(
-        state: &mut ControlState,
-    ) -> std::io::Result<Arc<crate::request::RequestTicket>> {
+    fn request_locked(state: &mut ControlState) -> std::io::Result<StopAdmission> {
         if let Some(intent) = &state.stop {
-            return Ok(Arc::clone(&intent.ticket));
+            return Ok(state.stop_admission(Arc::clone(&intent.ticket)));
         }
         state.generation = state
             .generation
@@ -252,16 +270,14 @@ impl SessionControl {
         }
         let ticket = Arc::new(crate::request::RequestTicket::accepted());
         state.stop_completed = false;
+        state.stop_id = Some(format!("{}-{}", state.instance, state.generation));
         state.stop = Some(StopIntent {
             ticket: Arc::clone(&ticket),
             since: Instant::now(),
         });
-        Ok(ticket)
+        Ok(state.stop_admission(ticket))
     }
-    pub(crate) fn request_stop(
-        &self,
-        owner: Option<&OwnerId>,
-    ) -> std::io::Result<Arc<crate::request::RequestTicket>> {
+    pub(crate) fn request_stop(&self, owner: Option<&OwnerId>) -> std::io::Result<StopAdmission> {
         let mut state = self.lock();
         if let Some(owner) = owner {
             // Expiry revokes creation/renewal, not the matching owner's duty
@@ -300,14 +316,17 @@ impl SessionControl {
                 let ticket = Arc::new(crate::request::RequestTicket::new(Instant::now()));
                 ticket.finish((
                     200,
-                    serde_json::json!({"state":"idle","stop":"completed","outcome":"completed","owner":owner.as_str()})
+                    serde_json::json!({"state":"idle","stop":"completed","outcome":"completed","owner":owner.as_str(),"stop_id":state.stop_id})
                         .to_string(),
                 ));
-                return Ok(ticket);
+                return Ok(state.stop_admission(ticket));
             }
         }
         let ticket = Self::request_locked(&mut state)?;
         Ok(ticket)
+    }
+    pub(crate) fn stop_id(&self) -> Option<String> {
+        self.lock().stop_id.clone()
     }
     pub(crate) fn completed_owner(&self) -> Option<OwnerId> {
         let state = self.lock();
@@ -347,7 +366,7 @@ impl SessionControl {
             Some(Authority::Capture(CaptureAuthority::RemoteAttempt(_)))
         );
         let overdue = intent.since.elapsed() >= STOP_OBSERVATION_BUDGET;
-        Ok(Some(serde_json::json!({"version":1,"engine":"rust-candidate","role":match self.role {Role::Capture=>"capture",Role::Production=>"production"},"state":"stopping","stop":"requested","outcome":if overdue {"unknown"} else {"accepted"},"cleanup":if overdue {"unknown"} else {"pending"},"resource_observation":"unknown","children":null,"output":state.phase.output().map(Output::as_str),"remote_release_pending":remote,"owner":peer}).to_string()))
+        Ok(Some(serde_json::json!({"version":1,"engine":"rust-candidate","role":match self.role {Role::Capture=>"capture",Role::Production=>"production"},"state":"stopping","stop":"requested","outcome":if overdue {"unknown"} else {"accepted"},"cleanup":if overdue {"unknown"} else {"pending"},"resource_observation":"unknown","children":null,"stop_id":state.stop_id,"output":state.phase.output().map(Output::as_str),"remote_release_pending":remote,"owner":peer}).to_string()))
     }
     pub(crate) fn heartbeat(
         &self,
@@ -384,12 +403,7 @@ impl SessionControl {
     }
     pub(crate) fn expire(&self) {
         let mut state = self.lock();
-        if !matches!(state.phase, Phase::Stopping { .. })
-            && state
-                .phase
-                .authority()
-                .is_some_and(|a| a.expired(Instant::now()))
-        {
+        if !matches!(state.phase, Phase::Stopping { .. }) && state.expired(Instant::now()) {
             // Generation exhaustion is fail-closed: Operation also observes the
             // expired authority, and the effect owner still checks lease expiry.
             let _ = Self::request_locked(&mut state);
@@ -402,20 +416,25 @@ impl SessionControl {
         let mut state = self.lock();
         if let Some(intent) = state.stop.take() {
             state.stop_completed = response.0 == 200;
+            let mut body: serde_json::Value =
+                serde_json::from_str(&response.1).expect("Stop response is JSON");
+            body["stop_id"] = serde_json::json!(state.stop_id);
             if response.0 == 200 {
                 if let Some(owner) = &state.last_stop_owner {
-                    let mut body: serde_json::Value =
-                        serde_json::from_str(&response.1).expect("owner Stop completion is JSON");
                     body["owner"] = serde_json::json!(owner.as_str());
-                    response.1 = body.to_string();
                 }
             }
+            response.1 = body.to_string();
             intent.ticket.finish(response);
         }
     }
 }
 impl Session {
     pub fn new(role: Role) -> Self {
+        Self::for_agent(role, String::new())
+    }
+
+    pub(crate) fn for_agent(role: Role, instance: String) -> Self {
         Self {
             role,
             control: SessionControl {
@@ -423,6 +442,9 @@ impl Session {
                 state: Arc::new(Mutex::new(ControlState {
                     phase: Phase::Idle,
                     generation: 0,
+                    output_until: None,
+                    instance,
+                    stop_id: None,
                     stop: None,
                     active_owner: None,
                     last_stop_owner: None,
@@ -459,8 +481,45 @@ impl Session {
     }
     pub fn lease_expired(&self, now: Instant) -> bool {
         let state = self.control.lock();
-        !matches!(state.phase, Phase::Stopping { .. })
-            && state.phase.authority().is_some_and(|a| a.expired(now))
+        !matches!(state.phase, Phase::Stopping { .. }) && state.expired(now)
+    }
+
+    pub(crate) fn arm_output_limit(
+        &mut self,
+        limit: Option<Duration>,
+    ) -> Result<(), TransitionError> {
+        let mut state = self.control.lock();
+        let now = Instant::now();
+        if self.role != Role::Production
+            || state.phase.state() != Lifecycle::Ready
+            || state.stop.is_some()
+            || state.expired(now)
+        {
+            return Err(Self::error(&state.phase, "arm output"));
+        }
+        state.output_until = limit.map(|duration| now + duration);
+        Ok(())
+    }
+
+    pub(crate) fn start_id(&self) -> Option<String> {
+        let state = self.control.lock();
+        if state.stop.is_some() || state.expired(Instant::now()) {
+            return None;
+        }
+        let phase = match state.phase.state() {
+            Lifecycle::Idle => "idle",
+            Lifecycle::Ready => "ready",
+            Lifecycle::Running => "running",
+            _ => return None,
+        };
+        Some(format!("{}-{}-{phase}", state.instance, state.generation))
+    }
+
+    pub(crate) fn output_seconds_remaining(&self) -> Option<u64> {
+        self.control
+            .lock()
+            .output_until
+            .map(|end| end.saturating_duration_since(Instant::now()).as_secs())
     }
     pub fn prepare(
         &mut self,
@@ -484,6 +543,7 @@ impl Session {
         state.phase = Phase::Preparing(authority);
         state.last_stop_owner = None;
         state.stop_completed = false;
+        state.stop_id = None;
         Ok(())
     }
     pub fn prepared(&mut self) -> Result<(), TransitionError> {
@@ -572,12 +632,7 @@ impl Session {
     }
     pub fn start(&mut self, output: Output) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
-        if state.stop.is_some()
-            || state
-                .phase
-                .authority()
-                .is_some_and(|a| a.expired(Instant::now()))
-        {
+        if state.stop.is_some() || state.expired(Instant::now()) {
             return Err(Self::error(&state.phase, "cancelled start"));
         }
         match &state.phase {
@@ -623,6 +678,7 @@ impl Session {
             authority: state.phase.authority().unwrap().clone(),
             output: state.phase.output(),
         };
+        state.output_until = None;
         Ok(())
     }
     pub fn stopped(&mut self) -> Result<(), TransitionError> {
@@ -647,6 +703,31 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_watchdog_revokes_start_and_requests_one_correlated_stop() {
+        let mut session = Session::for_agent(Role::Production, "fixture".into());
+        session
+            .prepare(None, Instant::now(), Duration::from_secs(30))
+            .unwrap();
+        session.prepared().unwrap();
+        let old_id = session.start_id().unwrap();
+        let control = session.control();
+        let generation = control.generation();
+        session.arm_output_limit(Some(Duration::ZERO)).unwrap();
+        assert!(session.start(Output::TwitchLive).is_err());
+        assert!(control.cancelled(generation));
+        control.expire();
+        let admitted = control.request_stop(None).unwrap();
+        assert_eq!(admitted.id, "fixture-1");
+        session.stop().unwrap();
+        session.stopped().unwrap();
+        control.finish_stop((200, r#"{"state":"idle","stop":"completed"}"#.into()));
+        let reply: serde_json::Value =
+            serde_json::from_str(&admitted.response().unwrap().1).unwrap();
+        assert_eq!(reply["stop_id"], admitted.id);
+        assert_ne!(session.start_id().unwrap(), old_id);
+    }
     #[test]
     fn overdue_stop_observation_is_unknown_without_erasing_owned_state() {
         let mut session = ready(None, Instant::now());
@@ -837,14 +918,12 @@ mod tests {
         s
     }
     #[test]
-    fn no_output_before_explicit_start_and_no_recording_promotion() {
+    fn no_output_before_explicit_start() {
         let mut s = ready(None, Instant::now());
         assert_eq!(s.output(), None);
         s.start(Output::Recording).unwrap();
         s.start(Output::Recording).unwrap();
-        assert!(s.start(Output::Twitch).is_err());
         s.degrade().unwrap();
-        assert!(s.start(Output::Twitch).is_err());
         s.fail().unwrap();
         assert_eq!(s.output(), None);
         s.stop().unwrap();

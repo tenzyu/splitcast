@@ -24,7 +24,7 @@ JOBS = {"jobs": [
 TAG = f"nix-cache-{SHA}-123-1"
 MANIFEST = json.dumps({
     "version": 1, "revision": {"sha": SHA, "system": "x86_64-linux"},
-    "roots": {"native": "/nix/store/one", "web": "/nix/store/two"},
+    "roots": {"native": "/nix/store/one"},
     "closure": {"/nix/store/one": {}, "/nix/store/two": {}},
     "custom": ["a", "b", "c"],
 }).encode()

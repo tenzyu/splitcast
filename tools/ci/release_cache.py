@@ -106,7 +106,7 @@ def revision():
 
 def roots():
     return {name: run("nix", "eval", "--raw", f".#{attribute}.outPath")
-            for name, attribute in (("native", "default"), ("web", "splitcast-web"))}
+            for name, attribute in (("native", "default"),)}
 
 
 def validate_manifest(manifest):
@@ -287,7 +287,7 @@ def consume(url, expected_hash):
         validate_info(read_url(url + "/" + store_hash(path) + ".narinfo").decode(), path, manifest["closure"][path])
     run("nix", "store", "verify", "--store", url, "--recursive", "--no-contents", "--sigs-needed", "1",
         "--option", "substituters", "", "--option", "trusted-public-keys", trust_keys(), *manifest["roots"].values())
-    output = run("nix", "build", ".#default", ".#splitcast-web", "--no-link", "--print-out-paths",
+    output = run("nix", "build", ".#default", "--no-link", "--print-out-paths",
                  "--max-jobs", "0", "--builders", "", "--option", "substituters", url,
                  "--option", "trusted-public-keys", trust_keys(), "--option", "require-sigs", "true",
                  "--option", "accept-flake-config", "false")

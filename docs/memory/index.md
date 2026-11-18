@@ -7,11 +7,11 @@ Load [MEMORY.md](../../MEMORY.md) once for the mission and permission boundary; 
 
 ## Goal and decisions
 * [PoC mission](poc-mission.md) — workload isolation, separate media and return-audio budgets; why not a general streaming platform
-* [Decisions D01–D18](decisions.md) — retained choices, rejected alternatives, correction dates and source IDs
+* [Decisions D01–D20](decisions.md) — retained choices, rejected alternatives, correction dates and source IDs
 * [Open risks](open-risks.md) — falsifiable unresolved gates, failure modes, and authorization limits
 
 ## Implementation and next experiment
-* [Current state](session-state.md) — exact merged main/CI scope and missing PoC inputs
+* [Current state](session-state.md) — PR #16 acceptance gates and source-bound historical physical trials
 * [Completed environment discovery](environment-gap.md) — **deprecated** historical investigation, not a fresh task
 * [PoC handoff](../handoff/poc-20261117.md) — bounded execution, dependencies, failed resets and live Twitch input gap
 * [Operations](../operations.md) — stop/rollback and runtime containment; not deployment approval
@@ -19,7 +19,7 @@ Load [MEMORY.md](../../MEMORY.md) once for the mission and permission boundary; 
 ## Evidence and memory maintenance
 * [Evidence IDs](evidence.md) — Sxx/Exx identity and original artifact boundaries
 * [Real VOICEVOX checkpoints](../evidence/real-voicevox-physical-return.md) — physical return, fault recovery, and the tested utterance expiry
-* [Current-main verification](../verification.md) — separate CI, virtual, generated media and physical acceptance
+* [Verification record](../verification.md) — separate CI, virtual, generated media and physical acceptance
 * [Dreaming protocol](dreaming.md) — re-check note versus source, merge contradictions and prune redundant text
 * [Update protocol](update-protocol.md) — annotate corrections without overwriting failed results
 * [Change log](log.md) — dated wiki maintenance

@@ -30,9 +30,6 @@ fn listener() -> TcpListener {
     listener.set_nonblocking(true).unwrap();
     listener
 }
-fn assets() -> Arc<crate::web::Assets> {
-    Arc::new(crate::web::Assets::load(None).unwrap())
-}
 fn send(port: u16, command: &str, args: Value) -> TcpStream {
     send_as(port, command, args, TOKEN)
 }
@@ -78,7 +75,7 @@ impl Drop for Running {
 }
 
 #[test]
-fn expired_and_abandoned_queue_entries_never_write_settings() {
+fn expired_and_abandoned_queue_entries_never_prepare() {
     let fixture = Fixture::new();
     let mut agent = Agent::new(fixture.0.clone()).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -93,18 +90,13 @@ fn expired_and_abandoned_queue_entries_never_write_settings() {
         socket,
         TOKEN.into(),
         1000,
-        assets(),
         Arc::clone(&cancel),
         limits,
         agent.session.control(),
     )
     .unwrap();
     for abandon in [false, true] {
-        let client = send(
-            port,
-            "routes",
-            json!({"settings":{"audio":{"mic_offset_ms":123}}}),
-        );
+        let client = send(port, "prepare", json!({}));
         let work = queue.recv_timeout(Duration::from_secs(2)).unwrap();
         if abandon {
             assert!(work.ticket.cancel_queued());
@@ -112,8 +104,7 @@ fn expired_and_abandoned_queue_entries_never_write_settings() {
         let reply = response(client);
         assert_eq!(reply["outcome"], "not_executed");
         agent.execute_work(work, &cancel, limits);
-        assert!(!agent.cfg.state_dir.join("settings.json").exists());
-        assert_ne!(agent.cfg.mic_offset, 123);
+        assert_eq!(agent.session.state(), Lifecycle::Idle);
     }
     server.join().unwrap();
     drop(agent);
@@ -135,17 +126,12 @@ fn started_request_timeout_reports_unknown_and_cancels_next_effect() {
         socket,
         TOKEN.into(),
         1000,
-        assets(),
         Arc::clone(&cancel),
         limits,
         agent.session.control(),
     )
     .unwrap();
-    let client = send(
-        port,
-        "routes",
-        json!({"settings":{"audio":{"mic_offset_ms":123}}}),
-    );
+    let client = send(port, "prepare", json!({}));
     let work = queue.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(work.ticket.begin());
     agent.operation = Some(crate::request::Operation::new(
@@ -155,7 +141,7 @@ fn started_request_timeout_reports_unknown_and_cancels_next_effect() {
     ));
     assert_eq!(response(client)["outcome"], "unknown");
     assert!(agent.execute(work.invocation).is_err());
-    assert!(!agent.cfg.state_dir.join("settings.json").exists());
+    assert_eq!(agent.session.state(), Lifecycle::Idle);
     server.join().unwrap();
     drop(agent);
 }
@@ -172,14 +158,7 @@ fn repeated_server_instances_close_partial_requests_and_release_role_lock() {
         let server = Running {
             cancel: Arc::clone(&cancel),
             thread: Some(thread::spawn(move || {
-                serve_bound(
-                    cfg,
-                    socket,
-                    TOKEN.into(),
-                    assets(),
-                    shutdown,
-                    Limits::default(),
-                )
+                serve_bound(cfg, socket, TOKEN.into(), shutdown, Limits::default())
             })),
         };
         assert_eq!(response(send(port, "status", json!({})))["state"], "idle");
@@ -218,6 +197,10 @@ fn unconfirmed_obs_finalization_does_not_complete_stop() {
     agent
         .spawn(Worker::Obs, vec!["sleep".into(), "30".into()])
         .unwrap();
+    agent.obs_profile = Some(obs::SessionProfile::test_attempt(
+        agent.cfg.state_dir.join("obs-attempt-test"),
+        Output::Recording,
+    ));
     assert!(agent.stop(None).is_err());
     assert_eq!(agent.session.state(), Lifecycle::Stopping);
     assert!(agent.children.names().is_empty());
@@ -347,7 +330,6 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
         socket,
         TOKEN.into(),
         1000,
-        assets(),
         Arc::clone(&shutdown),
         Limits::default(),
         control.clone(),
@@ -478,7 +460,7 @@ fn cancellation_before_remote_prepare_dispatch_does_not_invent_an_obligation() {
         .with_control(control.clone(), control.generation()),
     );
     control.request_stop(None).unwrap();
-    let result = agent.prepare_remote(OwnerId::parse("never-dispatched").unwrap());
+    let result = agent.prepare_remote(OwnerId::parse("never-dispatched").unwrap(), true);
     assert!(result.is_err());
     assert!(
         matches!(peer.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock),
@@ -521,7 +503,6 @@ fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
         socket,
         TOKEN.into(),
         1000,
-        assets(),
         Arc::clone(&cancel),
         Limits {
             lease: Duration::from_millis(250),
@@ -583,7 +564,6 @@ fn completed_http_response_closes_even_when_listener_reaping_is_delayed() {
         socket,
         TOKEN.into(),
         1000,
-        assets(),
         cancel,
         Limits::default(),
         control.clone(),
@@ -679,7 +659,6 @@ fn stop_acknowledges_during_failure_cleanup_before_remote_ack_is_released() {
         socket,
         TOKEN.into(),
         1000,
-        assets(),
         cancel,
         Limits::default(),
         control.clone(),
@@ -864,14 +843,7 @@ fn delayed_prepare_control_case(command: &str, test_name: &str) {
     let server = Running {
         cancel: Arc::clone(&cancel),
         thread: Some(thread::spawn(move || {
-            serve_bound(
-                cfg,
-                socket,
-                TOKEN.into(),
-                assets(),
-                shutdown,
-                Limits::default(),
-            )
+            serve_bound(cfg, socket, TOKEN.into(), shutdown, Limits::default())
         })),
     };
     let args = if command == "prepare" {

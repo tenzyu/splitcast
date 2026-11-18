@@ -1,5 +1,5 @@
 //! Finite HTTP messages on authenticated loopback connections.
-use crate::config::{json_string, Config};
+use crate::config::Config;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
@@ -84,6 +84,27 @@ impl std::error::Error for UnknownOutcome {
 fn unknown_outcome(error: io::Error) -> io::Error {
     io::Error::new(error.kind(), UnknownOutcome(error))
 }
+
+#[derive(Debug)]
+pub(crate) enum RemoteFailure {
+    NotExecuted,
+    CleanupIncomplete(Option<String>),
+}
+
+impl std::fmt::Display for RemoteFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotExecuted => write!(f, "control command not executed"),
+            Self::CleanupIncomplete(Some(id)) => {
+                write!(f, "Stop {id} cleanup incomplete; inspect Agent status")
+            }
+            Self::CleanupIncomplete(None) => {
+                write!(f, "Stop cleanup incomplete; inspect Agent status")
+            }
+        }
+    }
+}
+impl std::error::Error for RemoteFailure {}
 
 fn read_until_header(
     stream: &mut TcpStream,
@@ -200,12 +221,7 @@ fn recv_until(
     if h.get("origin").is_some_and(|o| o != &origin) {
         return Err(err("same-origin mismatch"));
     }
-    let asset = parts[0] == "GET"
-        && matches!(
-            parts[1],
-            "/" | "/loader.js" | "/splitcast_web.js" | "/splitcast_web_bg.wasm"
-        );
-    if !asset {
+    if parts[0] != "GET" || crate::web::asset(parts[1]).is_none() {
         if h.get("origin") != Some(&origin) {
             return Err(err("same-origin request required"));
         }
@@ -271,7 +287,7 @@ fn reply_bytes_until(
         503 => "Service Unavailable",
         _ => "Conflict",
     };
-    write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n\r\n", body.len())?;
+    write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\n\r\n", body.len())?;
     stream.write_all(body)?;
     stream.flush()
 }
@@ -341,7 +357,7 @@ pub(crate) fn request_operation(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
         remaining(deadline)?,
     )?;
-    let body = format!("{{\"command\":{},\"args\":{}}}", json_string(command), args);
+    let body = serde_json::json!({"command":command,"args":serde_json::from_str::<serde_json::Value>(args).map_err(io::Error::other)?}).to_string();
     if body.len() > BODY_LIMIT {
         return Err(err("command exceeds 16KiB"));
     }
@@ -404,8 +420,15 @@ pub(crate) fn request_operation(
     if document["outcome"] == "not_executed" {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "control command not executed; no redirects permitted",
+            RemoteFailure::NotExecuted,
         ));
+    }
+    if command == "stop" && document["stop"] == "incomplete" && document["outcome"] == "unknown" {
+        let id = document["stop_id"]
+            .as_str()
+            .filter(|id| crate::protocol::valid_id(id))
+            .map(str::to_owned);
+        return Err(io::Error::other(RemoteFailure::CleanupIncomplete(id)));
     }
     Err(unknown_outcome(err(
         "control command failed; no redirects permitted",
@@ -445,9 +468,10 @@ mod tests {
     }
 
     #[test]
-    fn public_assets_carry_no_token_and_require_loopback_host() {
-        assert_eq!(exchange("", "GET", "/", "").unwrap().path, "/");
+    fn all_control_endpoints_require_loopback_origin_and_token() {
+        assert!(exchange("", "GET", "/", "").is_ok());
         assert!(exchange("", "GET", "/api/status", "").is_err());
+        assert!(exchange("", "GET", "/app.js?extra", "").is_err());
         assert!(exchange("Origin: https://evil.invalid\r\n", "GET", "/", "").is_err());
         assert!(exchange("Host: evil.invalid\r\n", "GET", "/", "").is_err());
     }

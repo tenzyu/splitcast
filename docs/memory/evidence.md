@@ -10,6 +10,12 @@ sources:
 
 Recorded 2026-11-13. Imported reports were read for this memory. Historical tests were not rerun. Source Git object IDs were read locally without contacting hosts or GitHub.
 
+The managed PR #16 recording, public playback and remaining host gates have a
+[separate acceptance receipt](../evidence/pr16-managed-acceptance.md). The
+[signal reproduction](../evidence/pr16-obs.md) retains its own source and
+package provenance. The source for the integrated two-host result is
+`d9b0948435877039ba3b55dc4797566ef73d9fec`.
+
 ## Repository and artifact identities
 
 | ID | Identity | Meaning |
@@ -59,6 +65,8 @@ Paths are relative to SC-MONO. Original normalized copies were imported under `d
 | S28 | 2026-11-18 JST | [Prepared Agent audio return](../evidence/audio-return.md) | Two processes, OpenSSH forwarding, private PipeWire sinks and independent PCM observations |
 | S29 | 2026-11-18 JST | [Real VOICEVOX checkpoint](../evidence/real-voicevox-physical-return.md) at `6a503e9` | Production-local synthesis and Agent preflight, plus read-only capture inventory |
 | S30 | 2026-11-18 JST | [Authorized two-host VOICEVOX trial](../evidence/real-voicevox-physical-return.md#authorized-two-host-trial) at `6a503e9` | Physical ALSA route and listening, live faults, and timed expiry comparison |
+| S31 | 2026-11-18 JST | [PR #16 mandatory review](https://github.com/tenzyu/splitcast/pull/16#pullrequestreview-5950165310) against `0823165ecb6f5ecfe6d3a1b8df989bc62c80dfb0` | Required fixes and real-host acceptance gates. Prior physical trials are [bound to their own artifacts](session-state.md#historical-physical-trials-through-review-head-0823165). |
+| S32 | 2026-11-18 JST | PR #16 managed-output and speech follow-up | [Review disposition](../design-review.md#pr-16-review-follow-up), [decisions D19–D20](decisions.md#d19-one-owned-watchdog-governs-timed-output), and [verification record](../verification.md). |
 
 Original object inspection uses `git ls-tree -r <EXTRACT> -- <source-path>` and `git cat-file -p <blob>` in SC-MONO. Those commands do not run the historical checks.
 
@@ -92,6 +100,8 @@ Original object inspection uses `git ls-tree -r <EXTRACT> -- <source-path>` and 
 | E23 | S28, source and commands in the [run receipt](../evidence/audio-return.md) | Player stdin matched byte-for-byte. Separate sink monitors located the initial and recovered fixtures. Tests removed the forward and a playing sink, expired jobs, and discarded replies. | Device-free on one kernel. Physical routes, gameplay and two-host latency remain open. |
 | E24 | S29, [real VOICEVOX checkpoint](../evidence/real-voicevox-physical-return.md) | A real loopback engine produced 0.960 s of mono PCM16. Independent FFmpeg decode matched the WAV samples. A production Agent preflight observed authorization refusals and a read-only capture inventory located an ALSA sink. | Actual cross-host return, physical listening, and live fault recovery are blocked. |
 | E25 | S30, [authorized two-host trial](../evidence/real-voicevox-physical-return.md#authorized-two-host-trial) | Production PCM matched native player input over a capture-initiated authenticated SSH forward. The operator heard the full 25-second-expiry trial utterance and reported truncation at 10 seconds. Fault isolation, cleanup, fresh recovery, and sampled local game routing passed. | One bounded hardware route. Mixed-media contention, gameplay performance and end-to-end latency remain open. |
+| E26 | S31, [physical trial binary identities and observations](session-state.md#historical-physical-trials-through-review-head-0823165) | Independent decode of real gameplay, physical camera slice, actual EventSub-to-VOICEVOX playback and separate short Twitch ingest observations. Production logged 117/645 late renders and OBS SIGSEGV after finalizing a recording. | Earlier source and binaries. Physical mic isolation, matched workload, the simultaneous media path, sustained bandwidth test, clean OBS exit and independent viewer playback remain open for S32. |
+| E27 | S32, patched OBS 32.1.2 on production with isolated generated inputs | Both files decoded after output finalization. SIGTERM reproduced the recorded null dereference and SIGINT exited 0. Late renders after warmup were 74/600 and 69/601 respectively. NVIDIA capability probing succeeded, while isolated OBS startup failed before hardware render or encode could start. | Independently observed wait status and decode without an Agent. Final source-bound media, hardware cadence and workload acceptance remain open. [OBS diagnostic](../evidence/pr16-obs.md) |
 
 ## Corrections that must survive summarization
 

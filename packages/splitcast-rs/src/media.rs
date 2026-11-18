@@ -5,7 +5,6 @@ use crate::config::Config;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -13,9 +12,6 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 fn err(s: &str) -> io::Error {
     io::Error::other(s)
-}
-pub fn command_checked(argv: &[String]) -> io::Result<String> {
-    command_operation(argv, None)
 }
 pub(crate) fn command_operation(
     argv: &[String],
@@ -42,6 +38,7 @@ pub struct MediaObservation {
     pub bytes_received: u64,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
+    track_count: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -59,21 +56,27 @@ pub enum FeedKind {
     Camera,
 }
 
-pub struct ReceiveMonitor(std::collections::BTreeMap<&'static str, MediaProgress>);
+pub struct ReceiveMonitor {
+    game: MediaProgress,
+    mic: MediaProgress,
+    camera: Option<MediaProgress>,
+}
+
 impl ReceiveMonitor {
     pub fn new(camera: bool) -> Self {
-        let mut feeds = std::collections::BTreeMap::from([
-            ("game", MediaProgress::new(FeedKind::Game)),
-            ("mic", MediaProgress::new(FeedKind::Mic)),
-        ]);
-        if camera {
-            feeds.insert("camera", MediaProgress::new(FeedKind::Camera));
+        Self {
+            game: MediaProgress::new(FeedKind::Game),
+            mic: MediaProgress::new(FeedKind::Mic),
+            camera: camera.then(|| MediaProgress::new(FeedKind::Camera)),
         }
-        Self(feeds)
     }
+
     pub fn observe(&mut self, document: &str, now: Instant) -> io::Result<bool> {
         let mut healthy = true;
-        for (name, progress) in &mut self.0 {
+        for (name, progress) in [("game", &mut self.game), ("mic", &mut self.mic)]
+            .into_iter()
+            .chain(self.camera.iter_mut().map(|progress| ("camera", progress)))
+        {
             let sample = parse_media_observation(document, name)?;
             healthy &= progress.observe_at(&sample, now);
         }
@@ -81,6 +84,7 @@ impl ReceiveMonitor {
     }
 }
 
+#[cfg(test)]
 pub fn receive_snapshot(cfg: &Config) -> io::Result<String> {
     receive_operation(cfg, None)
 }
@@ -107,7 +111,9 @@ impl MediaObservation {
                         && self.audio_codec.as_deref() == Some("MPEG-4 Audio")
                 }
                 FeedKind::Mic => self.audio_codec.as_deref() == Some("Opus"),
-                FeedKind::Camera => self.video_codec.as_deref() == Some("H264"),
+                FeedKind::Camera => {
+                    self.video_codec.as_deref() == Some("H264") && self.track_count == 1
+                }
             }
     }
 }
@@ -119,6 +125,7 @@ impl MediaProgress {
             ..Self::default()
         }
     }
+    #[cfg(test)]
     pub fn observe(&mut self, sample: &MediaObservation) -> bool {
         self.observe_at(sample, Instant::now())
     }
@@ -177,12 +184,8 @@ pub fn parse_media_observation(json: &str, path: &str) -> io::Result<MediaObserv
         bytes_received,
         video_codec,
         audio_codec,
+        track_count: tracks.len(),
     })
-}
-pub fn run(exe: &str, args: &[&str]) -> io::Result<String> {
-    let mut cmd = vec![exe.to_string()];
-    cmd.extend(args.iter().map(|s| s.to_string()));
-    command_checked(&cmd)
 }
 pub fn game(cfg: &Config) -> io::Result<Vec<String>> {
     if cfg.target.is_empty() || cfg.game_audio.is_empty() {
@@ -229,9 +232,29 @@ pub fn game(cfg: &Config) -> io::Result<Vec<String>> {
     a.push(format!("rtmp://127.0.0.1:{}/game", cfg.rtmp));
     Ok(a)
 }
-pub fn mic(cfg: &Config) -> io::Result<Vec<String>> {
+pub(crate) fn mic(
+    cfg: &Config,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<Vec<String>> {
     if cfg.mic_source.is_empty() {
         return Err(err("explicit mic_source required"));
+    }
+    let sources = command_operation(
+        &strings(&["pactl", "-f", "json", "list", "sources"]),
+        operation,
+    )?;
+    let sources: serde_json::Value =
+        serde_json::from_str(&sources).map_err(|_| err("invalid microphone inventory"))?;
+    if !sources.as_array().is_some_and(|sources| {
+        sources.iter().any(|source| {
+            source["name"].as_str() == Some(cfg.mic_source.as_str())
+                && source["properties"]["device.api"] == "alsa"
+                && source["properties"]["device.class"] == "sound"
+        })
+    }) {
+        return Err(err(
+            "selected microphone must be an existing hardware ALSA source",
+        ));
     }
     let mut a = strings(&[
         "ffmpeg",
@@ -297,68 +320,107 @@ pub fn rnnoise(cfg: &Config) -> io::Result<Vec<String>> {
         "1".into(),
         "-f".into(),
         "pulse".into(),
+        // Keep the private playback buffer below the startup continuity budget.
+        "-buffer_duration".into(),
+        "100".into(),
+        "-prebuf".into(),
+        "1920".into(), // 20 ms at 48 kHz, mono s16le.
+        "-stream_name".into(),
+        "SplitCast processed microphone".into(),
         "-device".into(),
         cfg.processed_sink.clone(),
         "SplitCast processed microphone".into(),
     ])
 }
-pub fn camera(cfg: &Config) -> io::Result<Vec<String>> {
-    if !cfg.camera_device.starts_with("/dev/v4l/by-id/")
-        || cfg.camera_device.contains("..")
-        || !Path::new(&cfg.camera_device).exists()
+pub(crate) fn camera(cfg: &Config) -> io::Result<Option<Vec<String>>> {
+    use std::os::unix::fs::FileTypeExt;
+    let Some(camera) = cfg
+        .camera
+        .as_ref()
+        .filter(|camera| camera.location == cfg.role)
+    else {
+        return Ok(None);
+    };
+    if !camera
+        .device
+        .metadata()
+        .is_ok_and(|m| m.file_type().is_char_device())
     {
-        return Err(err(
-            "camera device must be an existing stable /dev/v4l/by-id path",
-        ));
+        return Err(err("selected V4L2 camera is unavailable"));
     }
-    let mut a = strings(&["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error"]);
-    if cfg.camera_mode == "hardware" && cfg.camera_encoder == "h264_vaapi" {
-        a.push("-vaapi_device".into());
-        a.push(cfg.camera_hw.to_string_lossy().to_string());
+    let mut args = strings(&["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error"]);
+    if let Some(render) = camera
+        .render_device
+        .as_ref()
+        .filter(|_| camera.encoder == "h264_vaapi")
+    {
+        args.extend(strings(&["-vaapi_device", &render.to_string_lossy()]));
     }
-    a.extend(strings(&[
+    args.extend(strings(&[
         "-f",
         "v4l2",
         "-input_format",
-        if cfg.camera_mode == "h264" {
-            "h264"
-        } else {
-            "yuyv422"
-        },
+        &camera.input_format,
         "-video_size",
-        &format!("{}x{}", cfg.camera_width, cfg.camera_height),
+        &format!("{}x{}", camera.width, camera.height),
         "-framerate",
-        &cfg.camera_fps.to_string(),
+        &camera.fps.to_string(),
         "-i",
+        &camera.device.to_string_lossy(),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-c:v",
+        &camera.encoder,
     ]));
-    a.push(cfg.camera_device.clone());
-    a.push("-an".into());
-    if cfg.camera_mode == "h264" {
-        a.extend(strings(&["-c:v", "copy"]));
-    } else {
-        if cfg.camera_encoder == "h264_vaapi" {
-            a.extend(strings(&["-vf", "format=nv12,hwupload"]));
-        }
-        a.extend(strings(&[
-            "-c:v",
-            &cfg.camera_encoder,
+    match camera.encoder.as_str() {
+        "h264_vaapi" => args.extend(strings(&["-vf", "format=nv12,hwupload"])),
+        "libx264" => args.extend(strings(&[
+            "-pix_fmt",
+            "yuv420p",
+            "-threads",
+            "1",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+        ])),
+        _ => {}
+    }
+    if camera.encoder != "copy" {
+        args.extend(strings(&[
             "-b:v",
-            "4M",
+            "2M",
             "-g",
-            &(cfg.camera_fps as u32 * 2).to_string(),
+            &camera.fps.to_string(),
+            "-bf",
+            "0",
         ]));
     }
-    a.extend(strings(&["-f", "rtsp", "-rtsp_transport", "tcp"]));
-    a.push(format!("rtsp://127.0.0.1:{}/camera", cfg.rtsp));
-    Ok(a)
+    args.extend(strings(&[
+        "-f",
+        "rtsp",
+        "-rtsp_transport",
+        "tcp",
+        &format!("rtsp://127.0.0.1:{}/camera", cfg.rtsp),
+    ]));
+    Ok(Some(args))
 }
-pub fn tunnel(cfg: &Config) -> Vec<String> {
-    let mut a = strings(&[
-        "ssh",
+
+pub fn tunnel(cfg: &Config, media: bool) -> Vec<String> {
+    let mut a = vec!["ssh".into()];
+    if let Some(file) = &cfg.ssh_config {
+        a.extend(["-F".into(), file.to_string_lossy().into_owned()]);
+    }
+    a.extend(strings(&[
         "-N",
         "-T",
         "-o",
         "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ControlPath=none",
         "-o",
         "ExitOnForwardFailure=yes",
         "-o",
@@ -369,12 +431,10 @@ pub fn tunnel(cfg: &Config) -> Vec<String> {
         "ConnectTimeout=5",
         "-p",
         &cfg.ssh_port.to_string(),
-    ]);
-    for (local, remote) in [
-        (cfg.forward_control_port, cfg.remote_control_port),
-        (cfg.rtmp, cfg.rtmp),
-        (cfg.rtsp, cfg.rtsp),
-    ] {
+    ]));
+    let control = [(cfg.forward_control_port, cfg.remote_control_port)];
+    let transport = [(cfg.rtmp, cfg.rtmp), (cfg.rtsp, cfg.rtsp)];
+    for (local, remote) in control.iter().chain(transport.iter().filter(|_| media)) {
         a.push("-L".into());
         a.push(format!("127.0.0.1:{local}:127.0.0.1:{remote}"));
     }
@@ -387,20 +447,24 @@ pub fn receiver(cfg: &Config) -> io::Result<Vec<String>> {
     fs::create_dir_all(root)?;
     let filename = root.join("mediamtx-rs.json");
     // All ports come from bounded unsigned integers and never from user shell.
-    let contents = format!(
-        r#"{{"logLevel":"warn","readTimeout":"5s","writeTimeout":"5s","writeQueueSize":128,"rtsp":true,"rtspAddress":"127.0.0.1:{}","rtspTransports":["tcp"],"rtmp":true,"rtmpAddress":"127.0.0.1:{}","api":true,"apiAddress":"127.0.0.1:{}","hls":false,"webrtc":false,"srt":false,"metrics":false,"pprof":false,"playback":false,"paths":{{"game":{{"source":"publisher"}},"mic":{{"source":"publisher"}},"camera":{{"source":"publisher"}}}}}}"#,
-        cfg.rtsp, cfg.rtmp, cfg.api
-    );
-    fs::write(&filename, contents)?;
+    let mut contents = serde_json::json!({
+        "logLevel":"warn","readTimeout":"5s","writeTimeout":"5s","writeQueueSize":128,
+        "rtsp":true,"rtspAddress":format!("127.0.0.1:{}",cfg.rtsp),"rtspTransports":["tcp"],
+        "rtmp":true,"rtmpAddress":format!("127.0.0.1:{}",cfg.rtmp),
+        "api":true,"apiAddress":format!("127.0.0.1:{}",cfg.api),
+        "hls":false,"webrtc":false,"srt":false,"metrics":false,"pprof":false,"playback":false,
+        "paths":{"game":{"source":"publisher"},"mic":{"source":"publisher"}}
+    });
+    if cfg.camera.is_some() {
+        contents["paths"]["camera"] = serde_json::json!({"source":"publisher"});
+    }
+    fs::write(&filename, contents.to_string())?;
     Ok(vec![
         "mediamtx".into(),
         filename.to_string_lossy().to_string(),
     ])
 }
-pub fn pcm_paths(cfg: &Config) -> String {
-    format!("http://127.0.0.1:{}/v3/paths/list", cfg.api)
-}
-
+#[cfg(test)]
 pub fn ready_output(buf: &str, name: &str) -> bool {
     let kind = match name {
         "game" => FeedKind::Game,
@@ -410,24 +474,22 @@ pub fn ready_output(buf: &str, name: &str) -> bool {
     };
     parse_media_observation(buf, name).is_ok_and(|o| o.usable(kind))
 }
-pub fn check_tools(role: &str) -> io::Result<Vec<String>> {
-    required_tools(role, false)
-}
-
-pub(crate) fn session_tools(cfg: &Config) -> io::Result<Vec<String>> {
-    required_tools(&cfg.role, cfg.tts_enabled)
-}
-
-fn required_tools(role: &str, return_audio: bool) -> io::Result<Vec<String>> {
-    let mut req = vec!["ffmpeg", "ffprobe", "pactl"];
-    if role == "capture" {
-        req.extend(["ssh", "gpu-screen-recorder"]);
-        if return_audio {
+pub(crate) fn missing_tools(cfg: &Config, media: bool, start: bool) -> Vec<String> {
+    let mut req = Vec::new();
+    if cfg.role == "capture" {
+        req.push("ssh");
+        if cfg.tts_enabled {
             req.push("pw-play");
         }
-    } else {
-        req.extend(["mediamtx", "pulseaudio"])
-    };
+        if media && start {
+            req.extend(["gpu-screen-recorder", "ffmpeg", "pactl"]);
+        }
+    } else if media {
+        req.push("mediamtx");
+        if start {
+            req.extend(["pulseaudio", "pactl", "ffmpeg"]);
+        }
+    }
     let mut missing = vec![];
     for name in req {
         let present = std::env::var_os("PATH").is_some_and(|path| {
@@ -443,13 +505,7 @@ fn required_tools(role: &str, return_audio: bool) -> io::Result<Vec<String>> {
             missing.push(name.into());
         }
     }
-    Ok(missing)
-}
-pub fn check_path(p: &Path) -> bool {
-    p.is_file()
-}
-pub fn devices(role: &str) -> io::Result<serde_json::Value> {
-    devices_operation(role, None)
+    missing
 }
 pub(crate) fn devices_operation(
     role: &str,
@@ -461,7 +517,7 @@ pub(crate) fn devices_operation(
         argv.extend(args.iter().map(|s| (*s).to_owned()));
         command_operation(&argv, operation)
     };
-    let mut result = json!({"role":role,"sources":[],"sinks":[],"cameras":[],"capture_targets":"","applications":"","errors":[]});
+    let mut result = json!({"role":role,"sources":[],"sinks":[],"capture_targets":"","applications":"","errors":[]});
     let mut errors = Vec::new();
     for kind in ["sources", "sinks"] {
         if let Some(operation) = operation {
@@ -477,25 +533,6 @@ pub(crate) fn devices_operation(
             _ => errors.push(format!("cannot discover Pulse {kind}")),
         }
     }
-    let mut cameras = Vec::new();
-    if let Ok(entries) = fs::read_dir("/dev/v4l/by-id") {
-        let mut paths = entries
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .collect::<Vec<_>>();
-        paths.sort();
-        for path in paths.into_iter().take(32) {
-            if let Some(operation) = operation {
-                operation.check()?;
-            }
-            let device = path.to_string_lossy().into_owned();
-            match run("v4l2-ctl", &["--device", &device, "--list-formats-ext"]) {
-                Ok(formats) => cameras.push(json!({"device":device,"formats":formats})),
-                _ => errors.push("camera enumeration failed".into()),
-            }
-        }
-    }
-    result["cameras"] = json!(cameras);
     if role == "capture" {
         for (key, option) in [
             ("capture_targets", "--list-capture-options"),
@@ -511,11 +548,31 @@ pub(crate) fn devices_operation(
         }
     }
     result["errors"] = json!(errors);
+    let mut cameras: Vec<_> = fs::read_dir("/dev/v4l/by-id")
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.path().into_os_string().into_string().ok())
+        .collect();
+    cameras.sort();
+    result["cameras"] = json!(cameras);
     Ok(result)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_requires_only_one_h264_track() {
+        assert!(ready_output(
+            r#"{"items":[{"name":"camera","ready":true,"bytesReceived":200,"tracks":["H264"]}]}"#,
+            "camera"
+        ));
+        assert!(!ready_output(
+            r#"{"items":[{"name":"camera","ready":true,"bytesReceived":200,"tracks":["H264","G711"]}]}"#,
+            "camera"
+        ));
+    }
     #[test]
     fn receiver_api_needs_no_external_http_tool() {
         use std::{

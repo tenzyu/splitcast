@@ -135,18 +135,6 @@ fn verify(base: &Path, virtual_system: bool) -> io::Result<bool> {
             ],
         ),
         (
-            "wasm",
-            &[
-                "check",
-                "-p",
-                "splitcast-web",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--locked",
-                "--offline",
-            ],
-        ),
-        (
             "duplicate-dependencies",
             &["tree", "--duplicates", "--locked", "--offline"],
         ),

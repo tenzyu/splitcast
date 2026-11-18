@@ -27,6 +27,52 @@ struct Agent {
 }
 
 impl Agent {
+    fn spawn(dir: &Path, port: u16, api: u16, obs: u16) -> Self {
+        let role = dir.file_name().unwrap().to_str().unwrap();
+        let mut agent = Self {
+            child: Command::new(env!("CARGO_BIN_EXE_splitcast-rs-core"))
+                .args([
+                    "--config",
+                    dir.join("config.json").to_str().unwrap(),
+                    "agent",
+                ])
+                .env("PATH", dir.join("tools"))
+                .env("SPLITCAST_VIRTUAL_DIR", dir)
+                .env("SPLITCAST_VIRTUAL_API", api.to_string())
+                .env("SPLITCAST_VIRTUAL_OBS", obs.to_string())
+                .stdin(Stdio::null())
+                .stdout(File::create(dir.join("stdout.log")).unwrap())
+                .stderr(File::create(dir.join("stderr.log")).unwrap())
+                .spawn()
+                .unwrap(),
+            port,
+            token: fs::read_to_string(dir.join("token")).unwrap(),
+            evidence: dir.to_path_buf(),
+        };
+        let end = Instant::now() + LIMIT;
+        while !splitcast_rs_core::control::request(
+            port,
+            port,
+            &agent.token,
+            "status",
+            "{}",
+            Duration::from_millis(500),
+        )
+        .ok()
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .is_some_and(|body| body["role"] == role && body["state"] == "idle")
+        {
+            assert!(
+                agent.child.try_wait().unwrap().is_none(),
+                "{role} exited: {}",
+                fs::read_to_string(dir.join("stderr.log")).unwrap()
+            );
+            assert!(Instant::now() < end, "{role} did not listen");
+            thread::sleep(Duration::from_millis(20));
+        }
+        agent
+    }
+
     fn trace(&self, event: Value) {
         // Fixture-only private diagnostics; never record the bearer or password.
         let mut log = OpenOptions::new()
@@ -88,7 +134,10 @@ impl Agent {
         if command == "stop" && code == 202 {
             assert_eq!(body["stop"], "requested");
             assert_eq!(body["outcome"], "accepted");
-            return self.wait_for_stop();
+            assert!(body["stop_id"].as_str().is_some_and(|id| !id.is_empty()));
+            let completed = self.wait_for_stop();
+            assert_eq!(completed["stop_id"], body["stop_id"]);
+            return completed;
         }
         assert_eq!(code, 200, "{command}: {body}");
         body
@@ -239,6 +288,7 @@ impl Fixture {
             let tools = dir.join("tools");
             fs::create_dir(&tools).unwrap();
             std::os::unix::fs::symlink(executable("env"), tools.join("env")).unwrap();
+            std::os::unix::fs::symlink(executable("timeout"), tools.join("timeout")).unwrap();
             for name in [
                 "ssh",
                 "ffmpeg",
@@ -251,7 +301,15 @@ impl Fixture {
             ] {
                 let text = if name == "pactl" {
                     format!(
-                        "#!{}\nprintf '%s\\n' '[{{\"name\":\"splitcast_mic\"}}]'\n",
+                        r#"#!{}
+if [ "$4" = sources ]; then
+    printf '%s\n' '[{{"name":"virtual_microphone","properties":{{"device.api":"alsa","device.class":"sound"}}}}]'
+elif [ "$4" = sink-inputs ]; then
+    printf '%s\n' '[{{"corked":false,"properties":{{"media.name":"SplitCast processed microphone"}}}}]'
+else
+    printf '%s\n' '[{{"name":"splitcast_mic"}}]'
+fi
+"#,
                         executable("sh").display()
                     )
                 } else {
@@ -261,7 +319,8 @@ impl Fixture {
                 fs::write(&path, text).unwrap();
                 fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
             }
-            private_file(&dir.join("token"), &format!("virtual-{role}-private-token"));
+            let fixture_id = root.file_name().unwrap().to_str().unwrap();
+            private_file(&dir.join("token"), &format!("virtual-{fixture_id}-{role}"));
             private_file(&dir.join("password"), PASSWORD);
             let mut cfg: Value = serde_json::from_str(include_str!("agent-example.json")).unwrap();
             cfg["role"] = json!(role);
@@ -295,7 +354,14 @@ impl Fixture {
             cfg["obs"]["websocket_port"] = json!(ports[7]);
             cfg["obs"]["password_file"] = json!(dir.join("password"));
             cfg["obs"]["recording_dir"] = json!(dir.join("recordings"));
-            cfg["obs"]["twitch_key_file"] = json!(dir.join("absent-twitch-key"));
+            if role == "production" {
+                let key = dir.join("virtual-stream-key");
+                private_file(&key, "isolated-fixture-key");
+                cfg["twitch"] = json!({
+                    "ingest_host":"apn10.contribute.live-video.net",
+                    "key_file":key,"allow_public":false,
+                });
+            }
             cfg["tts"]["credentials_file"] = json!(dir.join("absent-credentials"));
             cfg["tts"]["voicevox_url"] = json!(format!("http://127.0.0.1:{}", ports[8]));
             if speech {
@@ -304,49 +370,17 @@ impl Fixture {
                 cfg["tts"]["expiry_seconds"] = json!(5);
                 if role == "capture" {
                     cfg["audio"]["tts_sink"] = json!("return.selected");
+                    if native_lab.is_none() {
+                        cfg["audio"]["tts_volume_percent"] = json!(60);
+                    }
                     return_tests::install_player(&dir, native_lab);
                 }
             }
             fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
         }
         drop(reservations);
-        let spawn = |role: &str, port| {
-            let dir = root.join(role);
-            let mut agent = Agent {
-                child: Command::new(env!("CARGO_BIN_EXE_splitcast-rs-core"))
-                    .args([
-                        "--config",
-                        dir.join("config.json").to_str().unwrap(),
-                        "agent",
-                    ])
-                    .env("PATH", dir.join("tools"))
-                    .env("SPLITCAST_VIRTUAL_DIR", &dir)
-                    .env("SPLITCAST_VIRTUAL_API", ports[6].to_string())
-                    .env("SPLITCAST_VIRTUAL_OBS", ports[7].to_string())
-                    .env_remove("SPLITCAST_WEB_ASSETS")
-                    .stdin(Stdio::null())
-                    .stdout(File::create(dir.join("stdout.log")).unwrap())
-                    .stderr(File::create(dir.join("stderr.log")).unwrap())
-                    .spawn()
-                    .unwrap(),
-                port,
-                token: format!("virtual-{role}-private-token"),
-                evidence: dir.clone(),
-            };
-            let end = Instant::now() + LIMIT;
-            while TcpStream::connect(("127.0.0.1", port)).is_err() {
-                assert!(
-                    agent.child.try_wait().unwrap().is_none(),
-                    "{role} exited: {}",
-                    fs::read_to_string(dir.join("stderr.log")).unwrap()
-                );
-                assert!(Instant::now() < end, "{role} did not listen");
-                thread::sleep(Duration::from_millis(20));
-            }
-            agent
-        };
-        let production = spawn("production", ports[1]);
-        let capture = spawn("capture", ports[0]);
+        let production = Agent::spawn(&root.join("production"), ports[1], ports[6], ports[7]);
+        let capture = Agent::spawn(&root.join("capture"), ports[0], ports[6], ports[7]);
         println!(
             "two real agents, isolated worker environment; evidence {}",
             root.display()
@@ -388,6 +422,59 @@ impl Fixture {
 }
 
 #[test]
+fn production_watchdog_requires_stream_frames_as_well_as_bytes() {
+    for fault in ["missing", "wrong-type", "unchanged", "decreasing"] {
+        let mut fixture = Fixture::new();
+        let agent = &fixture.production;
+        agent.ok("prepare", json!({}));
+        agent.ok("start", json!({"output":"twitch-test"}));
+        let baseline = agent.state("running")["output_progress"].clone();
+        let end = Instant::now() + Duration::from_secs(4);
+        loop {
+            let status = agent.state("running");
+            let progress = &status["output_progress"];
+            if progress["bytes"].as_u64() > baseline["bytes"].as_u64() {
+                assert!(
+                    progress["frames"].as_u64().unwrap() > baseline["frames"].as_u64().unwrap()
+                );
+                assert_eq!(progress["frame_health"], "progressing");
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "valid stream counters did not advance: {status}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let pids = fixture.pids();
+        assert!(!pids.is_empty());
+        fs::write(fixture.root.join("production/frame-counter-fault"), fault).unwrap();
+        let end = Instant::now() + Duration::from_secs(4);
+        loop {
+            let status = agent.ok("status", json!({}));
+            if status["state"] == "failed" {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "watchdog accepted {fault} stream frames: {status}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let failed = agent.state("failed");
+        assert_eq!(failed["obs_shutdown"]["output_inactive_confirmed"], true);
+        fixture.released(&pids);
+        let log = fs::read_to_string(fixture.root.join("production/obs-requests.log")).unwrap();
+        assert_eq!(log.lines().filter(|line| *line == "StartStream").count(), 1);
+        assert_eq!(log.lines().filter(|line| *line == "StopStream").count(), 1);
+        agent.ok("stop", json!({}));
+        fixture.production.shutdown();
+        fixture.capture.shutdown();
+    }
+}
+
+#[test]
 fn two_actual_agents_control_failure_and_explicit_recovery() {
     let mut f = Fixture::new();
     f.capture.state("idle");
@@ -405,6 +492,17 @@ fn two_actual_agents_control_failure_and_explicit_recovery() {
         let before = f.capture.state("running");
         let production_before = f.production.state("running");
         assert_eq!(before["output"], "recording");
+        assert_eq!(
+            production_before["output_progress"]["frame_health"],
+            "unknown"
+        );
+        assert!(production_before["output_progress"]["frames"].is_null());
+        assert!(
+            production_before["output_progress"]["bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
         assert_eq!(production_before["output"], "recording");
         f.capture.ok("start", json!({"output":"recording"}));
         assert_eq!(f.capture.state("running"), before);
@@ -494,21 +592,24 @@ fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
     assert_eq!(status_line, b"HTTP/1.1 202 Accepted\r\n");
     drop(lost);
     let end = Instant::now() + LIMIT;
-    loop {
+    let first_stop = loop {
         let (code, observation) = f.production.command("status", json!({"_owner":first}));
         assert_eq!(code, 200, "{observation}");
         if observation["stop"] == "completed" {
             assert_eq!(observation["owner"], first);
             assert_eq!(observation["state"], "idle");
             assert_eq!(observation["children"], json!([]));
-            break;
+            assert!(observation["stop_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()));
+            break observation["stop_id"].clone();
         }
         assert!(
             Instant::now() < end,
             "lost-reply Stop did not resolve: {observation}"
         );
         thread::sleep(Duration::from_millis(10));
-    }
+    };
     f.released(&pids);
     f.production.ok("prepare", json!({"_owner":second}));
     let current = f.production.ok("status", json!({}));
@@ -518,6 +619,7 @@ fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
         "new session fabricated old completion"
     );
     assert!(current["owner"].is_null());
+    assert!(current["stop_id"].is_null());
     assert!(!current["children"].as_array().unwrap().is_empty());
     for command in ["status", "stop", "prepare", "heartbeat"] {
         assert_eq!(
@@ -533,6 +635,7 @@ fn lost_stop_reply_and_new_session_do_not_fabricate_old_completion_history() {
     let overwritten = f.production.ok("status", json!({"_owner":first}));
     assert_eq!(overwritten["stop"], "completed");
     assert_eq!(overwritten["owner"], second);
+    assert_ne!(overwritten["stop_id"], first_stop);
     assert_ne!(
         overwritten["owner"], first,
         "another session became the first owner's release proof"
@@ -803,7 +906,7 @@ fn virtual_obs(dir: &Path) {
         .parse()
         .unwrap();
     let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let state = Arc::new(Mutex::new((false, 0u64)));
+    let state = Arc::new(Mutex::new((None, 0u64)));
     let log = Arc::new(Mutex::new(
         OpenOptions::new()
             .create(true)
@@ -841,11 +944,29 @@ fn virtual_obs(dir: &Path) {
                 "GetSceneItemId" => json!({"sceneItemId":1}),
                 "GetSceneItemTransform" => json!({"sceneItemTransform":{"sourceWidth":1280,"sourceHeight":720}}),
                 "GetInputList" => json!({"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}),
-                "StartRecord" => { assert!(!*active); *active = true; json!({}) },
-                "StopRecord" => { *active = false; json!({}) },
+                "StartRecord" | "StartStream" => {
+                    assert!(active.is_none());
+                    *active = Some(if method == "StartRecord" { "GetRecordStatus" } else { "GetStreamStatus" });
+                    json!({})
+                },
+                "StopRecord" | "StopStream" => { *active = None; json!({}) },
+                "SetStreamServiceSettings" => {
+                    assert_eq!(request["d"]["requestData"]["streamServiceSettings"]["key"], "isolated-fixture-key?bandwidthtest=true");
+                    json!({})
+                },
                 "GetRecordStatus" | "GetStreamStatus" => {
                     *count += 1;
-                    json!({"outputActive":method == "GetRecordStatus" && *active,"outputBytes":*count*1024,"outputTotalFrames":*count*30,"outputDuration":*count*1000})
+                    let mut status = json!({"outputActive":*active == Some(method),"outputBytes":*count*1024,"outputDuration":*count*1000});
+                    if method == "GetStreamStatus" {
+                        match fs::read_to_string(dir.join("frame-counter-fault")).as_deref() {
+                            Ok("missing") => {},
+                            Ok("wrong-type") => status["outputTotalFrames"] = json!("9000"),
+                            Ok("unchanged") => status["outputTotalFrames"] = json!((*count - 1) * 30),
+                            Ok("decreasing") => status["outputTotalFrames"] = json!(0),
+                            _ => status["outputTotalFrames"] = json!(*count * 30),
+                        }
+                    }
+                    status
                 }
                 "SetInputSettings" | "SetInputAudioSyncOffset" | "SetInputAudioMonitorType" | "SetCurrentProgramScene" => json!({}),
                 other => panic!("unexpected OBS request {other}"),

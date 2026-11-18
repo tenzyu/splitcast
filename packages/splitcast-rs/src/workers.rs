@@ -1,14 +1,14 @@
 use crate::OwnedProcess;
 use std::collections::BTreeMap;
 use std::io;
+use std::process::ExitStatus;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Worker {
     Game,
-    Microphone,
     Camera,
-    Speech,
+    Microphone,
     Rnnoise,
     Obs,
     AudioServer,
@@ -19,9 +19,8 @@ impl Worker {
     pub fn name(self) -> &'static str {
         match self {
             Self::Game => "game",
-            Self::Microphone => "mic",
             Self::Camera => "camera",
-            Self::Speech => "tts",
+            Self::Microphone => "mic",
             Self::Rnnoise => "rnnoise",
             Self::Obs => "obs",
             Self::AudioServer => "pulse",
@@ -50,6 +49,14 @@ impl Workers {
         self.0
             .values_mut()
             .any(|child| !matches!(child.try_wait(), Ok(None)))
+    }
+    pub(crate) fn close_obs(&mut self) -> io::Result<Option<ExitStatus>> {
+        let Some(obs) = self.0.get_mut(&Worker::Obs) else {
+            return Ok(None);
+        };
+        let status = obs.close_obs(Duration::from_secs(3))?;
+        self.0.remove(&Worker::Obs);
+        Ok(Some(status))
     }
     pub fn stop(&mut self, worker: Worker, grace: Duration) -> io::Result<()> {
         if let Some(child) = self.0.get_mut(&worker) {
@@ -82,7 +89,7 @@ mod tests {
     #[test]
     fn every_owned_worker_is_included_in_stop() {
         let mut workers = Workers::default();
-        for worker in [Worker::Speech, Worker::AudioServer, Worker::Tunnel] {
+        for worker in [Worker::Rnnoise, Worker::AudioServer, Worker::Tunnel] {
             workers
                 .spawn(worker, &["sleep".into(), "30".into()])
                 .unwrap();

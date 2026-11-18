@@ -8,7 +8,35 @@ sources:
 ---
 # Open risks
 
-Recorded 2026-11-13. These are unresolved historical gates and extraction questions, not newly reproduced standalone defects. Evidence IDs resolve in [the register](evidence.md).
+## Current follow-up on PR #16
+
+R01 and R04 retain whole-frame gameplay and input timing, physical A/V
+alignment, and camera age. The two-host recording and public archive now
+demonstrate decoded game, camera and audio from the integrated path. The
+matched replay phases preserve sampled Direct Scanout and physical audio links.
+The 117/645 late-render result remains historical failure evidence.
+[Physical and viewer receipts](../evidence/pr16-managed-acceptance.md)
+
+R02 and R09 retain enclosing-cgroup recovery and kernel-stuck workers.
+The OBS signal comparison reproduces the recorded SIGSEGV with SIGTERM, and
+SIGINT produced an orderly exit in the independent and managed recordings.
+The first isolated Xorg attempt left a QXL DRM task stuck in the kernel. Two
+subsequent attempts left tasks blocked on the VT console lock. All three
+service Stops timed out. An operator VM reset cleared these trial resources.
+Production NVIDIA rendering and clean rollback of a future hardware display
+run remain unverified.
+[OBS comparison](../evidence/pr16-obs.md) · [Stop and rollback](../operations.md#stop-and-rollback)
+
+R03 retains full-session physical speech return. The refreshed Twitch trial
+delivered a phrase in speech-only mode. The public game trial observed
+admission without completing synthesis before Stop. R07's current client
+regression passed through authenticated CLI, terminal and browser clients.
+[Verification](../verification.md)
+
+The dated records below describe their original source and observations.
+Evidence IDs resolve in [the register](evidence.md).
+
+## Historical register from 2026-11-13
 
 | ID | Unknown or risk | Evidence needed to close it | Sources |
 | --- | --- | --- | --- |

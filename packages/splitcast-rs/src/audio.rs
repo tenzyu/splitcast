@@ -1,8 +1,5 @@
 //! Production audio lives in an owned private server, never the player's graph.
-use crate::{
-    config::{self, Config},
-    media, state,
-};
+use crate::{config::Config, media, state};
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -58,7 +55,7 @@ pub fn server(cfg: &Config) -> io::Result<Vec<String>> {
     let mut random = [0; 256];
     fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
     state::atomic_file(&cookie, random)?;
-    let script=format!("load-module module-native-protocol-unix socket={} auth-anonymous=0 auth-cookie={}\nload-module module-null-sink sink_name={} rate=48000 channels=1\nset-default-sink {}\n",config::json_string(&socket(cfg).to_string_lossy()),config::json_string(&cookie.to_string_lossy()),cfg.processed_sink,cfg.processed_sink);
+    let script=format!("load-module module-native-protocol-unix socket={} auth-anonymous=0 auth-cookie={}\nload-module module-null-sink sink_name={} rate=48000 channels=1\nset-default-sink {}\n",serde_json::json!(socket(cfg).to_string_lossy()),serde_json::json!(cookie.to_string_lossy()),cfg.processed_sink,cfg.processed_sink);
     let script_path = root.join("server.pa");
     state::atomic_file(&script_path, &script)?;
     Ok(vec![
@@ -78,6 +75,7 @@ pub fn server(cfg: &Config) -> io::Result<Vec<String>> {
     ])
 }
 
+#[cfg(test)]
 pub fn ready(cfg: &Config) -> io::Result<bool> {
     ready_operation(cfg, None)
 }
@@ -85,22 +83,38 @@ pub(crate) fn ready_operation(
     cfg: &Config,
     operation: Option<&crate::request::Operation>,
 ) -> io::Result<bool> {
-    let argv = client(
-        cfg,
-        vec![
-            "pactl".into(),
-            "-f".into(),
-            "json".into(),
-            "list".into(),
-            "sinks".into(),
-        ],
-    );
-    let value: serde_json::Value =
-        serde_json::from_str(&media::command_operation(&argv, operation)?)
-            .map_err(|_| io::Error::other("invalid private audio observation"))?;
-    Ok(value.as_array().is_some_and(|sinks| {
+    let sinks = inventory(cfg, "sinks", operation)?;
+    Ok(sinks.as_array().is_some_and(|sinks| {
         sinks.len() == 1 && sinks[0]["name"].as_str() == Some(&cfg.processed_sink)
     }))
+}
+
+pub(crate) fn processing_ready(
+    cfg: &Config,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<bool> {
+    let inputs = inventory(cfg, "sink-inputs", operation)?;
+    Ok(inputs.as_array().is_some_and(|inputs| {
+        inputs.len() == 1
+            && inputs[0]["corked"] == false
+            && inputs[0]["properties"]["media.name"] == "SplitCast processed microphone"
+    }))
+}
+
+fn inventory(
+    cfg: &Config,
+    kind: &str,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<serde_json::Value> {
+    let argv = client(
+        cfg,
+        ["pactl", "-f", "json", "list", kind]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    );
+    serde_json::from_str(&media::command_operation(&argv, operation)?)
+        .map_err(|_| io::Error::other("invalid private audio observation"))
 }
 
 #[cfg(test)]

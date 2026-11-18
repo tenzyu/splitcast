@@ -165,7 +165,7 @@ fn play_fixture_with(
     }
     let bytes = read_fixture(input, operation)?;
     let wav = PcmWav::parse(&bytes).map_err(PlaybackError::Input)?;
-    play_pcm(&wav, target, operation, program, prefix)?;
+    play_pcm(&wav, target, 100, operation, program, prefix)?;
     Ok(FixturePlaybackReceipt {
         target: target.into(),
         channels: wav.channels(),
@@ -178,18 +178,20 @@ fn play_fixture_with(
 pub(crate) fn play_return(
     bytes: &[u8],
     target: &str,
+    volume_percent: u16,
     operation: &Operation,
 ) -> Result<(), PlaybackError> {
     let wav = PcmWav::parse(bytes).map_err(PlaybackError::Input)?;
     if !valid_target(target) {
         return Err(PlaybackError::InvalidTarget);
     }
-    play_pcm(&wav, target, operation, "pw-play", &[])
+    play_pcm(&wav, target, volume_percent, operation, "pw-play", &[])
 }
 
 fn play_pcm(
     wav: &PcmWav<'_>,
     target: &str,
+    volume_percent: u16,
     operation: &Operation,
     program: &str,
     prefix: &[String],
@@ -201,6 +203,7 @@ fn play_pcm(
         format!("--rate={}", wav.sample_rate()),
         format!("--channels={}", wav.channels()),
         format!("--target={target}"),
+        format!("--volume={:.2}", f32::from(volume_percent) / 100.0),
         format!("--properties={PROPERTIES}"),
         "-".into(),
     ]);
@@ -416,6 +419,7 @@ mod tests {
                 "--rate=48000",
                 "--channels=2",
                 "--target=fixture.selected",
+                "--volume=1.00",
                 "--properties={ node.dont-fallback = true node.dont-reconnect = true application.name = splitcast-tts }",
                 "-",
             ])

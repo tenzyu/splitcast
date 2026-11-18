@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import select
 import shutil
@@ -30,7 +31,7 @@ AUDIO_SECONDS = 45
 AUDIO_FREQUENCIES = tuple(440 + 40 * second for second in range(AUDIO_SECONDS))
 GAME_AUDIO = "aevalsrc='0.18*sin(2*PI*(440+40*floor(t))*t)':s=48000"
 MIC_AUDIO = "aevalsrc=0.15*(sin(2*PI*180*t)+0.5*sin(2*PI*360*t)+0.3*sin(2*PI*540*t)):s=48000"
-CASES = ("normal", "frozen", "delay", "disconnect", "stall", "worker-death")
+CASES = ("normal", "camera", "frozen", "delay", "disconnect", "stall", "worker-death")
 LIMITS = {
     "record_seconds": 10,
     "duration_min": 9,
@@ -363,19 +364,57 @@ class Run:
     def stop(self, allow_retry=False):
         body = self.control("stop")
         deadline = time.monotonic() + 30
+        stop_id = body.get("stop_id")
         while body.get("stop") == "requested":
             require(time.monotonic() < deadline, "Stop completion timed out")
             time.sleep(0.05)
             body = self.control("status")
+            require(stop_id is None or body.get("stop_id") == stop_id,
+                    "Stop observation belongs to a different request")
         if allow_retry and body.get("stop") == "incomplete":
             require(body.get("state") == "stopping" and body.get("outcome") == "unknown",
                     f"incomplete cleanup obligation was lost: {body}")
             self.commands.append({"explicit_cleanup_retry": body, "at": time.monotonic()})
-            self.stop()
-            return
+            return self.stop()
         require(body.get("state") == "idle" and body.get("children") == []
                 and body.get("stop") == "completed" and not body.get("remote_release_pending"),
                 f"incomplete Stop: {body}")
+        return body
+
+    def stop_recording(self):
+        # Keep the log readable after Agent removes its credential-bearing profile.
+        logs = list((self.directory / "state/production").glob("obs-session-*/obs-studio/logs/*.txt"))
+        require(len(logs) == 1, "expected one owned OBS log")
+        processes = []
+        for pid, info in descendants(self.agent.pid).items():
+            try:
+                exe = Path(os.readlink(f"/proc/{pid}/exe"))
+            except FileNotFoundError:
+                continue
+            if exe.name in ("obs", ".obs-wrapped"):
+                processes.append(info)
+        require(len(processes) == 1, "expected one owned OBS process")
+        obs, = processes
+        reply = {}
+        with logs[0].open("rb") as log:
+            try:
+                reply = self.stop()
+            finally:
+                log.seek(max(0, os.fstat(log.fileno()).st_size - (1 << 20)))
+                diagnostic = re.compile(
+                    r"(?:Loading up OpenGL|OpenGL loaded|Total (?:drawn|frames output)|"
+                    r"rendering lag/stalls|Record(?:ing)? Stop|Shutting down|Freeing OBS context data)"
+                )
+                lines = [line for line in log.read(1 << 20).decode(errors="replace").splitlines()
+                         if diagnostic.search(line)]
+                observation = {
+                    "agent_exit_status": reply.get("obs_shutdown"),
+                    "process_released": not still_owned(obs),
+                    "websocket_listener_closed": not port_open(self.ports[5]),
+                    "obs_log": lines,
+                }
+                write_json(self.directory / "obs-shutdown.json", observation)
+        return observation
 
     def transport(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.ports[4], timeout=2)
@@ -410,7 +449,7 @@ class Run:
         finally:
             os.close(read_fd)
 
-    def prepare(self):
+    def prepare(self, *, camera=False):
         ports = free_ports(6)
         self.port = ports[0]
         self.ports = ports
@@ -430,8 +469,10 @@ class Run:
         config["audio"]["rnnoise_control"] = "0|200|0|0|0"
         config["obs"].update({"binary": "obs", "websocket_port": ports[5], "video_mode": "software",
                               "password_file": str(self.directory / "password"),
-                              "recording_dir": str(self.directory / "recordings"),
-                              "twitch_key_file": str(self.directory / "absent-stream-key")})
+                              "recording_dir": str(self.directory / "recordings")})
+        if camera:
+            config["camera"] = {"location": "capture", "width": 320, "height": 180,
+                                "fps": 15, "input_format": "h264", "encoder": "copy"}
         self.config = config
         write_json(self.directory / "config.json", config)
         self.agent = self.spawn("agent", [str(self.binary), "--config", str(self.directory / "config.json"), "agent"])
@@ -519,6 +560,8 @@ class Run:
         pulse = self.directory / "state/production/production-audio/native.sock"
         if pulse.exists():
             errors.append("private Pulse socket survives")
+        if list((self.directory / "state/production").glob("obs-session-*")):
+            errors.append("private OBS profile survives")
         write_json(self.directory / "commands.json", self.commands)
         write_json(self.directory / "cleanup.json", {"errors": errors, "children": [
             {"name": name, "pid": child.pid, "returncode": child.poll()} for name, child in self.children]})
@@ -700,9 +743,15 @@ def scenario(directory, binary, case, epoch):
     result = {"case": case, "result": "FAIL", "limits": LIMITS}
     try:
         run.display()
-        run.prepare()
+        run.prepare(camera=case == "camera")
         source = Source(run, epoch, frozen=case == "frozen",
                         backlog_seconds=LIMITS["backlog_delay_seconds"] if case == "delay" else 0)
+        if case == "camera":
+            run.spawn("camera", ["ffmpeg", "-v", "error", "-nostdin", "-re", "-f", "lavfi",
+                                 "-i", "color=red:s=320x180:r=15", "-an", "-c:v", "libx264",
+                                 "-threads", "1", "-preset", "ultrafast", "-tune", "zerolatency",
+                                 "-t", str(LIMITS["source_seconds"]), "-f", "rtsp", "-rtsp_transport", "tcp",
+                                 f"rtsp://127.0.0.1:{run.ports[3]}/camera"])
         require(run.control("start", {"output": "recording"})["state"] == "running", "Start did not reach Running")
         run.observe_resources()
         samples, counters = [], []
@@ -746,7 +795,10 @@ def scenario(directory, binary, case, epoch):
             if case == "stall":
                 os.kill(source.child.pid, signal.SIGCONT)
         source.expect_stop("controller Stop")
-        run.stop(allow_retry=case != "normal")
+        if case in ("normal", "camera"):
+            result["obs_shutdown"] = run.stop_recording()
+        else:
+            run.stop(allow_retry=True)
         recordings = list((directory / "recordings").glob("*.mkv"))
         require(len(recordings) == 1, f"expected one new OBS recording: {recordings}")
         if case in ("frozen", "delay"):
@@ -775,6 +827,14 @@ def scenario(directory, binary, case, epoch):
                     "live scene exceeded freshness envelope")
             result["decoded"] = inspect_recording(run, recordings[0], epoch,
                                                    fault_tail=case in ("disconnect", "stall", "worker-death"))
+        if case == "camera":
+            pixel = run.tool(["ffmpeg", "-v", "error", "-ss", "2", "-i", str(recordings[0]),
+                              "-vf", "crop=2:2:1100:96", "-frames:v", "1", "-pix_fmt", "rgb24",
+                              "-f", "rawvideo", "pipe:1"])
+            require(len(pixel) == 12, "camera crop missing from decoded recording")
+            require(all(r > 210 and g < 40 and b < 40 for r, g, b in zip(pixel[::3], pixel[1::3], pixel[2::3])),
+                    "camera fixture colour missing from the expected scene inset")
+            result["camera_composition"] = {"pixel": [1100, 96], "rgb": list(pixel[:3])}
         if case == "normal":
             delayed = directory / "bad-av-offset.mkv"
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-itsoffset",
@@ -824,9 +884,13 @@ def scenario(directory, binary, case, epoch):
                       "-c:v", "copy", "-af", f"aeval=exprs='{expressions}':c=stereo,aformat=channel_layouts=stereo",
                       "-c:a", "aac", "-b:a", "160k", str(tail)])
             result["audio_tail_negative_control"] = reject_recording(run, tail, epoch, "audio-tail", "A/V audio source identity")
+            # The game markers start at 440 Hz. A steep high-pass exposes the
+            # 180 Hz mic dropout without removing game identity in the interval.
+            # 1.5 seconds isolates continuity while preserving overall presence.
             dropout = directory / "bad-mic-dropout.mkv"
+            dropout_filter = ",".join(["highpass=f=330:p=2:enable='between(t,3,4.5)'"] * 8)
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
-                      "-c:v", "copy", "-af", "bandreject=f=180:t=h:w=100:enable='between(t,3,6.5)'",
+                      "-c:v", "copy", "-af", dropout_filter,
                       "-c:a", "aac", "-b:a", "160k", str(dropout)])
             result["mic_dropout_negative_control"] = reject_recording(run, dropout, epoch, "mic-dropout", "mic audio consecutive dropout")
         if case == "worker-death":
@@ -853,6 +917,15 @@ def scenario(directory, binary, case, epoch):
             result["recovery"]["scene_samples"] = recovered_samples
             require(all(sample["age_upper_seconds"] <= LIMITS["max_scene_age_seconds"]
                         for sample in recovered_samples[LIMITS["scene_startup_samples"]:]), "stale recovery scene")
+        if case in ("normal", "camera"):
+            shutdown = result["obs_shutdown"]
+            status = shutdown["agent_exit_status"] or {}
+            require(shutdown["process_released"] and shutdown["websocket_listener_closed"],
+                    "OBS process or listener survived completed Stop")
+            require(status.get("output_inactive_confirmed") is True,
+                    f"OBS output inactivity was not verified: {status}")
+            require(status.get("normal_exit") is True and status.get("exit_code") == 0
+                    and status.get("signal") is None, f"OBS did not exit normally: {status}")
         result["result"] = "PASS"
     except Exception as error:
         result["error"] = f"{type(error).__name__}: {error}"

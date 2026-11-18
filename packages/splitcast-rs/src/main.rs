@@ -1,7 +1,5 @@
 use serde_json::{json, Value};
-use splitcast_rs_core::{
-    agent, config, control, protocol::Invocation, tui, Lifecycle, Role, Session,
-};
+use splitcast_rs_core::{agent, config, control, protocol::Invocation, Lifecycle, Role, Session};
 use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -9,7 +7,18 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+mod tui;
+
+const HELP: &str = "Usage: splitcast --config FILE COMMAND
+Commands: agent, validate, doctor, devices, routes, prepare, start, stop,
+          status, diagnostics, preview, mic, tts, say, tui, cleanup
+  prepare [--speech-only]
+  start [--output recording|twitch-test|twitch-live] [--duration-seconds N]
+  start --output twitch-live --duration-seconds N --confirm-public
+  say TEXT [--id CURRENT_SPEECH_ID]
+  stop   Request Stop and observe its completion";
 
 static SIGNALLED: AtomicBool = AtomicBool::new(false);
 extern "C" fn signal_shutdown(_: i32) {
@@ -144,7 +153,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
             i += 1;
         }
     }
-    let config=config.ok_or_else(||invalid("usage: splitcast --config FILE.toml agent|tui|doctor|devices|routes|prepare|start|stop|status"))?;
+    let config = config.ok_or_else(|| invalid(HELP))?;
     if args.is_empty() {
         return Err(invalid("command required"));
     }
@@ -153,8 +162,12 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
     let mut destination = None;
     let mut offline = false;
     match command.as_str() {
-        "agent" | "tui" | "ui" | "validate" | "cleanup" | "prepare" | "stop" | "status"
-        | "heartbeat" | "devices" => {}
+        "agent" | "validate" | "cleanup" | "stop" | "status" | "heartbeat" | "devices" | "tui" => {}
+        "prepare" if args == ["--speech-only"] => {
+            args.clear();
+            payload["media"] = json!(false);
+        }
+        "prepare" | "routes" | "preview" => {}
         "doctor" => {
             if args.first().map(String::as_str) == Some("--offline") {
                 args.remove(0);
@@ -165,27 +178,34 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
             let output = if args.first().map(String::as_str) == Some("--output") {
                 args.remove(0);
                 if args.is_empty() {
-                    return Err(invalid("--output requires recording or twitch"));
+                    return Err(invalid(
+                        "--output requires recording, twitch-test, or twitch-live",
+                    ));
                 }
                 args.remove(0)
-            } else if args
-                .first()
-                .is_some_and(|s| s == "recording" || s == "twitch")
-            {
+            } else if args.first().is_some_and(|s| s == "recording") {
                 args.remove(0)
             } else {
                 "recording".into()
             };
             payload["output"] = json!(output);
-        }
-        "routes" => {
-            if args.first().map(String::as_str) == Some("--settings") {
-                args.remove(0);
-                if args.is_empty() {
-                    return Err(invalid("--settings requires JSON selections"));
+            let mut flags = args.drain(..);
+            while let Some(flag) = flags.next() {
+                match flag.as_str() {
+                    "--confirm-public" if payload["confirm_public"].is_null() => {
+                        payload["confirm_public"] = json!(true);
+                    }
+                    "--duration-seconds" if payload["duration_seconds"].is_null() => {
+                        let seconds = flags
+                            .next()
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .ok_or_else(|| {
+                                invalid("--duration-seconds requires an integer from 1 to 28800")
+                            })?;
+                        payload["duration_seconds"] = json!(seconds);
+                    }
+                    _ => return Err(invalid("unexpected or repeated Start argument")),
                 }
-                payload["settings"] = serde_json::from_str(&args.remove(0))
-                    .map_err(|_| invalid("invalid settings JSON"))?;
             }
         }
         "mic" | "tts" => {
@@ -195,12 +215,12 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
                 args.remove(0)
             });
         }
-        "say" | "overlay" => {
+        "say" => {
             if args.is_empty() {
                 return Err(invalid("text argument required"));
             }
             payload["text"] = json!(args.remove(0));
-            if command == "say" && args.first().map(String::as_str) == Some("--id") {
+            if args.first().map(String::as_str) == Some("--id") {
                 args.remove(0);
                 if args.is_empty() {
                     return Err(invalid("--id requires a speech id"));
@@ -208,7 +228,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
                 payload["id"] = json!(args.remove(0));
             }
         }
-        "preview" | "diagnostics" => {
+        "diagnostics" => {
             if args.first().map(String::as_str) == Some("--output") {
                 args.remove(0);
                 if args.is_empty() {
@@ -231,17 +251,97 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
     })
 }
 
-fn request(cfg: &config::Config, name: &str, args: &str) -> io::Result<String> {
-    let value: Value = serde_json::from_str(args).map_err(|_| invalid("invalid command JSON"))?;
-    Invocation::parse(name, &value, cfg.tts_max_text as usize)?;
-    control::request(
-        cfg.control_port,
-        cfg.control_port,
-        &cfg.token(false)?,
-        name,
-        args,
-        Duration::from_secs(180),
-    )
+struct LocalClient<'a> {
+    cfg: &'a config::Config,
+    token: String,
+}
+
+impl<'a> LocalClient<'a> {
+    fn new(cfg: &'a config::Config) -> io::Result<Self> {
+        Ok(Self {
+            cfg,
+            token: cfg.token(false)?,
+        })
+    }
+
+    fn request(&self, command: &str, args: &Value, timeout: Duration) -> io::Result<Value> {
+        Invocation::parse(command, args, self.cfg.max_speech_text())?;
+        let port = self.cfg.control_port();
+        let body = control::request(port, port, &self.token, command, &args.to_string(), timeout)?;
+        serde_json::from_str(&body).map_err(io::Error::other)
+    }
+
+    fn execute(&self, command: &str, args: Value) -> io::Result<Value> {
+        self.execute_if_current(command, args, || true)
+    }
+
+    fn execute_if_current(
+        &self,
+        command: &str,
+        mut args: Value,
+        current: impl FnOnce() -> bool,
+    ) -> io::Result<Value> {
+        if command == "start" {
+            Invocation::parse(command, &args, self.cfg.max_speech_text())?;
+            let status = self.request("status", &json!({}), Duration::from_secs(5))?;
+            args["session_id"] = json!(status["start_id"]
+                .as_str()
+                .ok_or_else(|| invalid("no session available for Start"))?);
+        }
+        if command == "say" && args["id"].is_null() {
+            let status = self.request("tts", &json!({}), Duration::from_secs(5))?;
+            args["id"] = json!(status["next_id"]
+                .as_str()
+                .ok_or_else(|| invalid("no current speech ID"))?);
+        }
+        if !current() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "superseded by Stop before dispatch",
+            ));
+        }
+        let reply = self.request(command, &args, Duration::from_secs(125))?;
+        if command != "stop" || reply["stop"] != "requested" {
+            return Ok(reply);
+        }
+        let id = reply["stop_id"].as_str().ok_or_else(|| {
+            io::Error::other(
+                "Stop requested; cleanup unknown because its observation ID is missing",
+            )
+        })?;
+        let end = Instant::now() + Duration::from_secs(17);
+        loop {
+            let remaining = end.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::other(format!(
+                    "Stop {id} requested; cleanup unknown after observation deadline"
+                )));
+            }
+            let status = self
+                .request("status", &json!({}), remaining.min(Duration::from_secs(2)))
+                .map_err(|error| {
+                    io::Error::other(format!("Stop {id} requested; cleanup unknown: {error}"))
+                })?;
+            if status["stop_id"] != id {
+                return Err(io::Error::other(format!(
+                    "Stop {id} requested; cleanup observation changed"
+                )));
+            }
+            match (status["stop"].as_str(), status["outcome"].as_str()) {
+                (Some("completed"), Some("completed")) if status["state"] == "idle" => {
+                    return Ok(status)
+                }
+                (Some("requested"), Some("accepted")) => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                _ => {
+                    return Err(io::Error::other(format!(
+                        "Stop {id} requested; cleanup uncertain: {status}"
+                    )))
+                }
+            }
+        }
+    }
 }
 
 fn run() -> io::Result<()> {
@@ -258,6 +358,10 @@ fn run() -> io::Result<()> {
             println!("{}", receipt.to_json());
             Ok(())
         });
+    }
+    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        print!("{HELP}");
+        return Ok(());
     }
     if args == ["selfcheck"] {
         let mut session = Session::new(Role::Production);
@@ -277,35 +381,22 @@ fn run() -> io::Result<()> {
         "validate" => {
             println!(
                 "{}",
-                json!({"valid":true,"role":cfg.role,"control_port":cfg.control_port,"remote_control_port":cfg.remote_control_port,"ssh_host":cfg.ssh_host})
+                json!({"valid":true,"role":cfg.role(),"control_port":cfg.control_port(),"remote_control_port":cfg.remote_control_port(),"ssh_host":cfg.ssh_host()})
             );
             return Ok(());
         }
         "agent" => return serve(cfg),
+        "tui" => return tui::run(io::stdin().lock(), io::stdout(), &LocalClient::new(&cfg)?),
         "cleanup" => return agent::cleanup_after_exit(cfg),
-        "tui" => {
-            return tui::run_with(io::stdin().lock(), io::stdout().lock(), |name, args| {
-                request(&cfg, name, args)
-            })
-        }
-        "ui" => {
-            println!("http://127.0.0.1:{}/", cfg.control_port);
-            return Ok(());
-        }
         "doctor" if cli.offline => {
             println!("{}", agent::doctor(&cfg)?);
             return Ok(());
         }
         _ => {}
     }
-    let response = request(&cfg, &cli.command, &cli.args.to_string())?;
+    let response = LocalClient::new(&cfg)?.execute(&cli.command, cli.args)?;
     if let Some(destination) = cli.destination {
-        if cli.command == "preview" {
-            return Err(invalid(
-                "preview file export is not yet available; use the authenticated preview view",
-            ));
-        }
-        splitcast_rs_core::state::atomic_file(&destination, &response)?;
+        splitcast_rs_core::state::atomic_file(&destination, response.to_string())?;
         println!("{}", json!({"path":destination.to_string_lossy()}));
     } else {
         println!("{response}");

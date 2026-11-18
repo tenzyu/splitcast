@@ -80,11 +80,15 @@ It has no `WantedBy` target and does not start at login. With
 failure. Changing the flag requires separate parity verification and explicit
 cutover approval. Neither flag value proves media or hardware correctness.
 
-The unit retains `KillMode=control-group`, a 20-second stop timeout,
+When enabled for the Rust candidate, the unit's `ExecStop` requests and
+observes authenticated Stop before systemd applies cgroup-wide termination.
+The unit retains `KillMode=control-group`, `SendSIGKILL=true`,
 `ExecStopPost` cleanup, `UMask=0077`, `CPUWeight=25`, `Nice=10`, and
-`MemoryMax=2G`. Failed starts restart after five seconds, at most three times
-per minute. Cleanup uses the selected package even when the start command is
-migration-gated. A manual start of a gated unit can therefore still run cleanup.
+`MemoryMax=2G`. Its stop timeout is 25 seconds. Failed Agent starts restart
+after five seconds, at most three times per minute. Each new Agent begins
+Idle and public output still requires a separate Start. Cleanup uses the
+selected package even when the start command is migration-gated. A manual
+start of a gated unit can therefore still run cleanup.
 
 ## NixOS prerequisites
 

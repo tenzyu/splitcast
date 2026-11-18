@@ -58,12 +58,12 @@ impl RequestTicket {
         match &mut *phase {
             Phase::Queued | Phase::Cancelled => {
                 *phase = Phase::Cancelled;
-                error_response("not_executed", "request cancelled before execution")
+                error_response(Failure::NotExecuted, "request cancelled before execution")
             }
             Phase::Executing { abandoned } => {
                 *abandoned = true;
                 error_response(
-                    "unknown",
+                    Failure::Unknown,
                     "execution started; inspect status and use explicit Stop",
                 )
             }
@@ -88,17 +88,66 @@ impl RequestTicket {
         )
     }
 }
-pub(crate) fn error_response(outcome: &str, message: &str) -> Response {
-    let code = if outcome == "unknown" {
-        "outcome_unknown"
-    } else {
-        "not_executed"
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Failure {
+    NotExecuted,
+    Unknown,
+}
+
+impl Failure {
+    pub(crate) fn outcome(self) -> &'static str {
+        match self {
+            Self::NotExecuted => "not_executed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+pub(crate) fn error_response(failure: Failure, message: &str) -> Response {
+    let code = match failure {
+        Failure::NotExecuted => "not_executed",
+        Failure::Unknown => "outcome_unknown",
     };
     (
         503,
-        serde_json::json!({"error":message,"code":code,"outcome":outcome}).to_string(),
+        serde_json::json!({"error":message,"code":code,"outcome":failure.outcome()}).to_string(),
     )
 }
+
+#[derive(Debug)]
+pub(crate) struct Rejected(pub(crate) &'static str);
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for Rejected {}
+
+pub(crate) fn rejected(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, Rejected(message))
+}
+
+pub(crate) fn command_failure(error: io::Error) -> Response {
+    let rejected = error.get_ref().is_some_and(|cause| {
+        cause.is::<Rejected>()
+            || matches!(
+                cause.downcast_ref::<crate::control::RemoteFailure>(),
+                Some(crate::control::RemoteFailure::NotExecuted)
+            )
+    });
+    let (failure, code) = if rejected {
+        (Failure::NotExecuted, "command_rejected")
+    } else {
+        (Failure::Unknown, "command_failed")
+    };
+    (
+        409,
+        serde_json::json!({"error":error.to_string(),"code":code,"outcome":failure.outcome()})
+            .to_string(),
+    )
+}
+
 #[derive(Clone)]
 pub(crate) struct Operation {
     shutdown: Arc<AtomicBool>,

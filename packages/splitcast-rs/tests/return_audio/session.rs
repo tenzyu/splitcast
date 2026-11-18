@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::process::CommandExt;
 
 fn script(path: &Path, body: String) {
     fs::write(
@@ -162,6 +163,12 @@ fn observed(dir: &Path, n: usize, pcm: &[u8]) -> u32 {
     let ledger = fs::read_to_string(dir.join("starts")).unwrap();
     let argv = ledger.lines().nth(n - 1).unwrap();
     assert!(argv.contains("--raw --format=s16 --rate=48000 --channels=2 --target="));
+    let volume = if std::env::var_os("SPLITCAST_RETURN_LAB").is_some() {
+        "--volume=1.00"
+    } else {
+        "--volume=0.60"
+    };
+    assert!(argv.contains(volume));
     assert!(argv.contains("node.dont-fallback = true node.dont-reconnect = true"));
     println!(
         "player input #{n}: {} PCM bytes sha256 {:x}",
@@ -185,12 +192,305 @@ fn discard_reply(agent: &Agent, cmd: &str, args: Value) {
     // Close without reading the response, including any audio it contains.
 }
 
+struct ClientProcess {
+    child: Child,
+    transcript: PathBuf,
+}
+
+impl ClientProcess {
+    fn spawn(mut command: Command, dir: &Path, label: &str, stdin: Stdio) -> Self {
+        let transcript = dir.join(format!("{label}.stdout"));
+        let child = command
+            .process_group(0)
+            .stdin(stdin)
+            .stdout(File::create(&transcript).unwrap())
+            .stderr(File::create(dir.join(format!("{label}.stderr"))).unwrap())
+            .spawn()
+            .unwrap();
+        Self { child, transcript }
+    }
+
+    fn send(&mut self, input: &str) {
+        let stdin = self.child.stdin.as_mut().unwrap();
+        stdin.write_all(input.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    fn text(&self) -> String {
+        fs::read_to_string(&self.transcript).unwrap()
+    }
+
+    fn finish(mut self) -> (bool, String) {
+        let mut status = None;
+        wait(|| {
+            status = self.child.try_wait().unwrap();
+            status.is_some()
+        });
+        (status.unwrap().success(), self.text())
+    }
+}
+
+impl Drop for ClientProcess {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            // SAFETY: the unreaped ClientProcess leader pins its private process group.
+            unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+            let _ = self.child.wait();
+        }
+    }
+}
+
+fn control_binary(dir: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_splitcast-rs-core"));
+    command.arg("--config").arg(dir.join("config.json"));
+    command
+}
+
+fn cli(dir: &Path, args: &[&str], label: &str) -> (bool, String) {
+    let mut command = control_binary(dir);
+    command.args(args);
+    ClientProcess::spawn(command, dir, label, Stdio::null()).finish()
+}
+
+fn assert_stop_proof(agent: &Agent, receipt: &Value) {
+    assert_eq!(receipt["stop"], "completed");
+    assert_eq!(receipt["outcome"], "completed");
+    assert_eq!(receipt["state"], "idle");
+    assert_eq!(receipt["children"], json!([]));
+    assert_eq!(receipt["remote_release_pending"], false);
+    assert!(receipt["stop_id"].as_str().is_some_and(|id| !id.is_empty()));
+    assert_eq!(receipt["stop_id"], agent.state("idle")["stop_id"]);
+}
+
+#[test]
+fn cli_and_tui_speak_and_wait_for_their_own_stop() {
+    let mut f = Fixture::with_speech(true, None);
+    let dir = f.root.join("capture");
+    let voice = Voice::new(f.ports[8]);
+    let samples = pcm(79, 4800);
+    fs::write(dir.join("hang"), b"").unwrap();
+    let (ok, _) = cli(&dir, &["prepare", "--speech-only"], "cli-prepare");
+    assert!(ok);
+    let (ok, _) = cli(
+        &dir,
+        &[
+            "start",
+            "--output",
+            "twitch-live",
+            "--duration-seconds",
+            "60",
+        ],
+        "cli-unconfirmed-public",
+    );
+    assert!(!ok);
+    f.capture.state("ready");
+
+    // This reservation provides an independent oracle for the ID the CLI
+    // must acquire from the Agent itself before sending its bare "say TEXT".
+    let id = next_id(&f.production);
+    let (ok, utterance) = cli(&dir, &["say", "fixture"], "cli-speak");
+    assert!(ok);
+    let utterance: Value = serde_json::from_str(&utterance).unwrap();
+    assert_eq!(utterance["id"], id);
+    voice.synthesize(&wav(&samples));
+    let cli_pid = observed(&dir, 1, &samples);
+    let (ok, _) = cli(&dir, &["say", "fixture", "--id", &id], "cli-stale");
+    assert!(!ok, "CLI accepted a consumed speech ID");
+    assert_eq!(
+        f.capture
+            .command("say", json!({"text":"fixture","id":id}))
+            .1["outcome"],
+        "not_executed"
+    );
+    assert_eq!(starts(&dir), [cli_pid]);
+    let (ok, stopped) = cli(&dir, &["stop"], "cli-stop");
+    assert!(ok);
+    let stopped: Value = serde_json::from_str(&stopped).unwrap();
+    assert_stop_proof(&f.capture, &stopped);
+    gone(cli_pid);
+    f.production.state("idle");
+
+    // Run the shipped terminal menu in a separate process and drive its
+    // stdin in operator order. Wait for returned PCM before requesting Stop.
+    let mut command = control_binary(&dir);
+    command.arg("tui");
+    let mut tui = ClientProcess::spawn(command, &dir, "tui", Stdio::piped());
+    tui.send("5\n");
+    wait(|| tui.text().contains("\"state\": \"ready\""));
+    let id = next_id(&f.production);
+    tui.send("14\n60\nno\n12\nfixture\n");
+    wait(|| tui.text().contains(&format!("\"id\": \"{id}\"")));
+    voice.synthesize(&wav(&samples));
+    let tui_pid = observed(&dir, 2, &samples);
+    tui.send("7\n");
+    wait(|| tui.text().contains("\"stop\": \"completed\""));
+    tui.send("0\n");
+    let (ok, transcript) = tui.finish();
+    assert!(ok);
+    assert!(!transcript.contains("\"output\": \"twitch-live\""));
+    let proof = f.capture.state("idle");
+    assert_stop_proof(&f.capture, &proof);
+    let tui_stop_id = proof["stop_id"].as_str().unwrap();
+    assert_ne!(stopped["stop_id"], tui_stop_id);
+    assert!(transcript.contains(&format!("\"stop_id\": \"{tui_stop_id}\"")));
+    gone(tui_pid);
+    f.production.state("idle");
+    assert_eq!(starts(&dir), [cli_pid, tui_pid]);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn tui_quit_keeps_stop_available_while_start_reply_is_held() {
+    tui_closes_without_stopping_an_admitted_start(true);
+}
+
+#[test]
+fn tui_eof_reports_and_joins_a_held_start_without_stopping() {
+    tui_closes_without_stopping_an_admitted_start(false);
+}
+
+fn tui_closes_without_stopping_an_admitted_start(quit: bool) {
+    let mut f = Fixture::new();
+    let dir = f.root.join("capture");
+    let production = f.root.join("production");
+    let hold = production.join("hold-start-ack");
+    f.capture.ok("prepare", json!({}));
+    fs::write(&hold, b"").unwrap();
+    let mut command = control_binary(&dir);
+    command.arg("tui");
+    let mut tui = ClientProcess::spawn(command, &dir, "tui-close", Stdio::piped());
+    tui.send("6\n");
+    wait(|| production.join("start-committed").exists());
+    let pids = f.pids();
+    if quit {
+        tui.send("0\n");
+        wait(|| {
+            tui.text()
+                .contains("Quit is unavailable while a command is pending. Stop is available.")
+        });
+    } else {
+        drop(tui.child.stdin.take().unwrap());
+        wait(|| {
+            tui.text()
+                .contains("Waiting for the pending command before closing this client.")
+        });
+    }
+    assert!(tui.child.try_wait().unwrap().is_none());
+    fs::remove_file(hold).unwrap();
+    wait(|| tui.text().contains("\"state\": \"running\""));
+    if quit {
+        tui.send("0\n");
+    }
+    let (ok, transcript) = tui.finish();
+    assert!(ok);
+    assert!(transcript.contains("Terminal closed. The Agent keeps its session."));
+    f.capture.state("running");
+    f.production.state("running");
+    let log = fs::read_to_string(production.join("obs-requests.log")).unwrap();
+    assert_eq!(log.lines().filter(|line| *line == "StartRecord").count(), 1);
+    assert!(!log.contains("StopRecord"));
+    f.capture.ok("stop", json!({}));
+    f.released(&pids);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+fn tui_can_stop_while_start_reply_is_held() {
+    let mut f = Fixture::new();
+    let dir = f.root.join("capture");
+    let production = f.root.join("production");
+    let hold = production.join("hold-start-ack");
+    f.capture.ok("prepare", json!({}));
+    fs::write(&hold, b"").unwrap();
+    let mut command = control_binary(&dir);
+    command.arg("tui");
+    let mut tui = ClientProcess::spawn(command, &dir, "tui-urgent-stop", Stdio::piped());
+    tui.send("6\n");
+    wait(|| production.join("start-committed").exists());
+    let pids = f.pids();
+    tui.send("7\n");
+    // The terminal must send Stop before the adapter releases Start's reply.
+    // A serialized menu waiting on Start cannot satisfy this assertion.
+    wait(|| {
+        let (code, status) = f.capture.command("status", json!({}));
+        match code {
+            200 => matches!(status["stop"].as_str(), Some("requested" | "completed")),
+            // A Status queued before Stop can lose its generation fence.
+            // A fresh Status is observation only and can be submitted again.
+            503 if status["outcome"] == "not_executed" => false,
+            _ => panic!("unexpected Stop observation response: {code} {status}"),
+        }
+    });
+    fs::remove_file(hold).unwrap();
+    wait(|| tui.text().contains("\"stop\": \"completed\""));
+    tui.send("0\n");
+    let (ok, transcript) = tui.finish();
+    assert!(ok);
+    let proof = f.capture.state("idle");
+    assert_stop_proof(&f.capture, &proof);
+    let stop_id = proof["stop_id"].as_str().unwrap();
+    assert!(transcript.contains(&format!("\"stop_id\": \"{stop_id}\"")));
+    f.production.state("idle");
+    f.released(&pids);
+    let obs_requests = fs::read_to_string(production.join("obs-requests.log")).unwrap();
+    assert_eq!(
+        obs_requests
+            .lines()
+            .filter(|method| *method == "StartRecord")
+            .count(),
+        1
+    );
+    assert!(!obs_requests.contains("StartStream"));
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
+#[test]
+#[ignore = "requires Node.js and a headless Chromium executable"]
+fn chromium_speaks_through_the_agent_and_observes_stop() {
+    let mut f = Fixture::with_speech(true, None);
+    let dir = f.root.join("capture");
+    let voice = Voice::new(f.ports[8]);
+    f.capture.ok("prepare", json!({"media":false}));
+    let mut command =
+        Command::new(std::env::var_os("SPLITCAST_TEST_NODE").unwrap_or_else(|| "node".into()));
+    command
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/return_audio/web.cjs"))
+        .arg(std::env::var_os("SPLITCAST_TEST_CHROMIUM").unwrap_or_else(|| "chromium".into()))
+        .arg(dir.join("browser-profile"))
+        .arg(format!("http://127.0.0.1:{}/", f.capture.port))
+        .arg(dir.join("token"));
+    let mut browser = ClientProcess::spawn(command, &dir, "chromium", Stdio::piped());
+    let first = pcm(87, 4800);
+    voice.synthesize(&wav(&first));
+    gone(observed(&dir, 1, &first));
+    let second = pcm(88, 4800);
+    fs::write(dir.join("hang"), b"").unwrap();
+    voice.synthesize(&wav(&second));
+    let pid = observed(&dir, 2, &second);
+    browser.send("stop\n");
+    let (ok, body) = browser.finish();
+    assert!(ok, "see {}", dir.join("chromium.stderr").display());
+    let receipt: Value = serde_json::from_str(&body).unwrap();
+    assert_stop_proof(&f.capture, &receipt["stop"]);
+    gone(pid);
+    f.production.state("idle");
+    assert_eq!(starts(&dir).len(), 2);
+    f.capture.shutdown();
+    f.production.shutdown();
+}
+
 #[test]
 fn return_faults_and_replay() {
     let mut f = Fixture::with_speech(true, None);
     let dir = f.root.join("capture");
     let voice = Voice::new(f.ports[8]);
-    f.capture.ok("prepare", json!({}));
+    let ready = f.capture.ok("prepare", json!({"media":false}));
+    assert_eq!(ready["children"], json!(["ssh"]));
+    assert_eq!(f.production.ok("status", json!({}))["children"], json!([]));
+    rejected(&f.capture, "start", json!({}));
     let id = next_id(&f.production);
     let args = json!({"text":"fixture","id":id});
     let actual = pcm(13, 4800);
@@ -264,7 +564,7 @@ fn return_faults_and_replay() {
     assert!(now.elapsed() < Duration::from_secs(5));
     gone(pid);
     fs::remove_file(dir.join("hang")).unwrap();
-    f.capture.ok("prepare", json!({}));
+    f.capture.ok("prepare", json!({"media":false}));
     rejected(&f.production, "say", json!({"text":"fixture","id":id}));
     let recovered = pcm(18, 4800);
     submit(&f.production, &voice, &recovered);
@@ -273,7 +573,8 @@ fn return_faults_and_replay() {
 
     // Lost pull reply: interrogate the real production Agent under a fresh test owner.
     let owner = json!({"_owner":"test-capture-lease"});
-    f.production.ok("prepare", owner.clone());
+    f.production
+        .ok("prepare", json!({"_owner":owner["_owner"],"media":false}));
     let expired_id = next_id(&f.production);
     wait(|| next_id(&f.production) != expired_id);
     rejected(
@@ -309,6 +610,16 @@ fn native_return() {
         .success());
 }
 
+fn reselect_capture(f: &mut Fixture, target: &str) {
+    f.capture.shutdown();
+    let dir = f.root.join("capture");
+    let config = dir.join("config.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    document["audio"]["tts_sink"] = json!(target);
+    fs::write(config, document.to_string()).unwrap();
+    f.capture = Agent::spawn(&dir, f.ports[0], f.ports[6], f.ports[7]);
+}
+
 #[test]
 #[ignore = "entry point for native_return's isolated private graph"]
 fn native_session() {
@@ -318,10 +629,10 @@ fn native_session() {
         PathBuf::from(std::env::var_os("PIPEWIRE_RUNTIME_DIR").unwrap()),
         lab
     );
-    let f = Fixture::with_speech(true, Some(&lab));
+    let mut f = Fixture::with_speech(true, Some(&lab));
     let voice = Voice::new(f.ports[8]);
     let dir = f.root.join("capture");
-    f.capture.ok("prepare", json!({}));
+    f.capture.ok("prepare", json!({"media":false}));
     let first = pcm(31, 48000);
     fs::write(lab.join("first"), &first).unwrap();
     let id = submit(&f.production, &voice, &first);
@@ -356,32 +667,23 @@ fn native_session() {
         .unwrap()
         .success());
     f.capture.ok("stop", json!({}));
-    f.capture.ok(
-        "routes",
-        json!({"settings":{"audio":{"tts_sink":"return.absent"}}}),
-    );
-    f.capture.ok("prepare", json!({}));
+    reselect_capture(&mut f, "return.absent");
+    f.capture.ok("prepare", json!({"media":false}));
     rejected(&f.production, "say", json!({"id":id,"text":"fixture"}));
     let missing = pcm(91, 48000);
     fs::write(lab.join("missing"), &missing).unwrap();
     submit(&f.production, &voice, &missing);
     gone(observed(&dir, 3, &missing));
     f.capture.ok("stop", json!({}));
-    f.capture.ok(
-        "routes",
-        json!({"settings":{"audio":{"tts_sink":"return.selected"}}}),
-    );
-    f.capture.ok("prepare", json!({}));
+    reselect_capture(&mut f, "return.selected");
+    f.capture.ok("prepare", json!({"media":false}));
     let recovered = pcm(77, 48000);
     fs::write(lab.join("recovered"), &recovered).unwrap();
     submit(&f.production, &voice, &recovered);
     gone(observed(&dir, 4, &recovered));
     f.capture.ok("stop", json!({}));
-    f.capture.ok(
-        "routes",
-        json!({"settings":{"audio":{"tts_sink":"return.vanish"}}}),
-    );
-    f.capture.ok("prepare", json!({}));
+    reselect_capture(&mut f, "return.vanish");
+    f.capture.ok("prepare", json!({"media":false}));
     let removed = pcm(79, 192000);
     fs::write(lab.join("removed"), &removed).unwrap();
     submit(&f.production, &voice, &removed);
