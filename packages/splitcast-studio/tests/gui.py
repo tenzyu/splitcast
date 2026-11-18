@@ -99,6 +99,7 @@ class Relay(http.server.ThreadingHTTPServer):
         self.records = []
         self.hold = None
         self.drop = None
+        self.chat_delta = False
         self.held = threading.Event()
         self.release = threading.Event()
         super().__init__(("127.0.0.1", 0), Handler)
@@ -125,6 +126,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             headers = {key: self.headers[key] for key in ("Host", "Origin", "Authorization")}
             code, body = exchange_http(self.server.upstream, headers, command, args)
+            if self.server.chat_delta and command == "chat" and code == 200:
+                # Inject one bounded delta at the authenticated relay boundary.
+                # The real Agent call above still verifies authority and routing.
+                page = {
+                    "enabled": True, "epoch": "fixture-epoch", "cursor": 1,
+                    "more": False, "reset": False, "overrun": False,
+                    "subscription": {"state": "subscribed", "notifications": 1,
+                                     "duplicates": 0, "dropped": 0, "reconnects": 0, "error": None},
+                    "messages": [] if args.get("after") == 1 else [
+                        {"cursor": 1, "id": "generated-1", "display_name": "fixture", "text": "generated delta"}
+                    ],
+                }
+                body = json.dumps(page).encode()
             if hold:
                 self.server.held.set()
                 self.server.release.wait(8)
@@ -299,6 +313,12 @@ class Studio:
         x, y = self.target(label)
         self.xdo("mousemove", "--window", self.window, x, y, "click", "1")
 
+    def drag(self, label, dx, dy):
+        x, y = self.target(label)
+        self.xdo("mousemove", "--window", self.window, x, y, "mousedown", "1")
+        self.xdo("mousemove_relative", "--", str(dx), str(dy))
+        self.xdo("mouseup", "1")
+
     def edit(self, label, value):
         self.click(label)
         self.xdo("key", "ctrl+a")
@@ -370,6 +390,29 @@ def verify():
         direct.wait("Agent draft · unsaved")
         budget = sample_idle(direct)
         assert not production_relay.times("preview-small"), "Idle preview request"
+        old_camera = okay("production", "scene")["draft"]["camera"]
+        direct.drag("Camera guide", -30, 14)
+        direct.click("Apply")
+        eventually(lambda: okay("production", "scene")["draft"]["camera"]["x"] < old_camera["x"],
+                   "offline camera guide moved in Agent draft")
+        cleanup(direct.process)
+
+        # A's owner-bound production fixture supplies a synthetic camera feed.
+        # Test the two-Agent Start with matching camera-free role configs, so no
+        # worker requires a camera device on the capture role.
+        cleanup(agents["production"])
+        work, config, agent_env = roles["production"]
+        production_config = json.loads(config.read_text())
+        production_config.pop("camera")
+        private_file(config, json.dumps(production_config))
+        agents["production"] = spawn(stack, [agent_bin, "--config", config, "agent"],
+                                     agent_env, work / "agent-restart.log")
+        direct = Studio(stack, root, studio_bin, "production-stage", production_relay.server_port,
+                        ports["production"], paths["production"], env)
+        direct.wait("Idle")
+        direct.edit("Overlay text", "Private fixture draft")
+        direct.click("Apply")
+        direct.wait("Agent draft · unsaved")
         cleanup(direct.process)
 
         forwarded = relay(stack, ports["capture"])
@@ -408,9 +451,20 @@ def verify():
         baseline = len(forwarded.times("chat"))
         time.sleep(4.1)
         assert len(forwarded.times("chat")) == baseline, "chat polled while hidden"
+        forwarded.chat_delta = True
         studio.click("Show chat")
+        studio.wait("chat=1")
 
         studio.edit("Overlay text", "Verified OBS edit")
+        other = okay("capture", "scene")
+        other["draft"]["overlay"]["text"] = "Concurrent Agent draft"
+        okay("capture", "scene-apply", {
+            "generation": other["generation"], "operation": "external-fixture-edit", "layout": other["draft"],
+        })
+        mark = len(studio.lines())
+        studio.click("Apply")
+        studio.wait("Conflict", after=mark)
+        studio.click("Keep local draft")
         studio.click("Apply")
         studio.wait("Applied · unsaved")
         studio.click("OBS readback")
@@ -426,8 +480,8 @@ def verify():
         studio.click("Apply")
         studio.wait("Outcome unknown", after=mark)
         assert forwarded.drop is None
-        studio.click("Read Agent draft")
         mark = len(studio.lines())
+        studio.click("Read Agent draft")
         studio.wait("Applied · unsaved", after=mark)
 
         forwarded.hold = "scene-apply"
@@ -445,17 +499,33 @@ def verify():
         studio.wait("Stop completed", after=mark)
         assert agent("capture")[1]["remote_release_pending"] is False
         assert agent("production")[1]["state"] == "idle"
+        assert agent("production")[1]["obs_shutdown"]["output_inactive_confirmed"]
+        ended_workers = [
+            Path("/proc") / file.read_text().strip()
+            for work, _, _ in roles.values() for file in work.glob("*.pid")
+        ]
+        assert ended_workers, "fixture recorded no owned worker"
+        eventually(lambda: all(not worker.exists() for worker in ended_workers), "owned workers exited")
         forwarded.release.set()
         time.sleep(0.5)
         assert not any("Applied · unsaved" in line for line in studio.lines()[mark:] if "Stop completed" in line)
         baseline = len(forwarded.times("preview-small"))
         time.sleep(2.3)
         assert len(forwarded.times("preview-small")) == baseline, "snapshot after Stop"
+        mark = len(studio.lines())
         cleanup(agents["capture"])
-        studio.wait("offline")  # The relay drops upstream failures; no stale phase.
+        studio.wait("offline", after=mark)  # The relay drops upstream failures; no stale phase.
         assert okay("production", "scene")["saved"] == saved["saved"]
-        print("GUI workflow passed: offline draft, authenticated forward, Start, preview bounds/visibility,"
-              " chat visibility, apply/readback/save, lost reply, independent Status/Stop, and disconnect", flush=True)
+        cleanup(studio.process)
+        direct = Studio(stack, root, studio_bin, "production-reload", production_relay.server_port,
+                        ports["production"], paths["production"], env)
+        direct.wait("Idle")
+        direct.click("Reload saved")
+        direct.wait("Draft matches saved layout")
+        assert okay("production", "scene")["draft"] == saved["saved"]
+        print("GUI workflow passed: offline draft and camera drag, authenticated forward, Start,"
+              " preview bounds/visibility, chat visibility and injected delta, generation conflict,"
+              " apply/readback/save/reload, lost and late replies, independent Status/Stop, and disconnect", flush=True)
         if not budget:
             raise AssertionError("release idle budget exceeded")
 

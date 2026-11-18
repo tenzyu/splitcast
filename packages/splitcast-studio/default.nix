@@ -4,12 +4,17 @@
   pkg-config,
   makeWrapper,
   fontconfig,
+  libx11,
   libxcb,
+  libxcursor,
+  libxext,
+  libxfixes,
+  libxi,
   libxkbcommon,
+  libxrandr,
   wayland,
-  vulkan-loader,
 }: let
-  runtimeLibraries = [fontconfig libxcb libxkbcommon wayland vulkan-loader];
+  runtimeLibraries = [libx11 libxcb libxcursor libxext libxfixes libxi libxkbcommon libxrandr wayland];
   subdir = "packages/splitcast-studio";
 in
   rustPlatform.buildRustPackage {
@@ -17,13 +22,13 @@ in
     version = "0.1.0";
     src = import ../../nix/source.nix {
       inherit lib;
-      extraFiles = [./Cargo.toml ./Cargo.lock ./src];
+      extraFiles = [./Cargo.toml ./Cargo.lock ./build.rs ./src];
     };
     cargoRoot = subdir;
     buildAndTestSubdir = subdir;
     cargoLock.lockFile = ./Cargo.lock;
     nativeBuildInputs = [pkg-config makeWrapper];
-    buildInputs = [libxcb libxkbcommon wayland];
+    buildInputs = [fontconfig libxcb libxkbcommon wayland];
     postInstall = ''
       wrapProgram "$out/bin/splitcast-studio" \
         --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibraries}

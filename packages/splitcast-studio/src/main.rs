@@ -1,22 +1,17 @@
-mod input;
 mod model;
 mod network;
 mod ui;
 mod wire;
 
-use std::{cell::Cell, io, path::PathBuf, process::ExitCode, rc::Rc};
+use std::{io, path::PathBuf, process::ExitCode};
 
-use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
+use crate::{network::Workers, wire::Endpoint};
 
-use crate::{
-    network::Workers,
-    ui::{Studio, TraceRender},
-    wire::Endpoint,
-};
+slint::include_modules!();
 
 const USAGE: &str = "Usage: splitcast-studio --token-file PATH --port PORT [--agent-port PORT]";
 
-fn run() -> io::Result<()> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
     let (mut path, mut port, mut agent_port) = (None, None, None);
     let mut trace = false;
@@ -40,53 +35,26 @@ fn run() -> io::Result<()> {
                 agent_port = Some(number(args.next()).ok_or_else(invalid)?)
             }
             Some("--trace-render") if !trace => trace = true,
-            _ => return Err(invalid()),
+            _ => return Err(invalid().into()),
         }
     }
     let port = port.ok_or_else(invalid)?;
     let endpoint = Endpoint::new(port, agent_port.unwrap_or(port), &path.ok_or_else(invalid)?)?;
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return Err(io::Error::other(
-            "SplitCast Studio requires a Linux display",
-        ));
+        return Err(io::Error::other("SplitCast Studio requires a Linux display").into());
     }
 
-    let (_workers, network, results) = Workers::start(endpoint)?;
-    let opened = Rc::new(Cell::new(false));
-    let window_opened = opened.clone();
-    Application::new().run(move |cx: &mut App| {
-        if trace {
-            cx.set_global(TraceRender);
-        }
-        let bounds = Bounds::centered(None, size(px(1110.), px(780.)), cx);
-        let result = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(960.), px(775.))),
-                app_id: Some("splitcast-studio".into()),
-                ..Default::default()
-            },
-            |window, cx| cx.new(|cx| Studio::new(network, results, trace, window, cx)),
-        );
-        if result.is_err() {
-            eprintln!("SplitCast Studio could not open a window");
-            cx.quit();
-        } else {
-            window_opened.set(true);
-            cx.on_window_closed(|cx| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-            cx.activate(true);
-        }
-    });
-    if opened.get() {
-        Ok(())
-    } else {
-        Err(io::Error::other("SplitCast Studio could not open a window"))
-    }
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .select()?;
+    let view = StudioWindow::new()?;
+    let (workers, network, results) = Workers::start(endpoint)?;
+    let result = ui::run(&view, network, results, trace);
+    drop(view);
+    drop(workers);
+    result?;
+    Ok(())
 }
 
 fn main() -> ExitCode {
