@@ -19,7 +19,6 @@ const ENCODED_LIMIT: usize = AUDIO_LIMIT.div_ceil(3) * 4;
 pub(crate) const REPLY_LIMIT: usize = ENCODED_LIMIT + 512;
 
 pub(crate) struct Source {
-    eventsub: Option<EventSub>,
     chat_admitted: u64,
     chat_rejected: u64,
     speech: Speech,
@@ -32,16 +31,7 @@ pub(crate) struct Source {
 impl Source {
     pub(crate) fn new(cfg: &Config, epoch: String) -> io::Result<Self> {
         let speech = Speech::new(cfg)?;
-        let eventsub = if cfg.eventsub_enabled {
-            Some(EventSub::start(
-                &cfg.tts_credentials_file,
-                cfg.tts_queue_limit.into(),
-            )?)
-        } else {
-            None
-        };
         Ok(Self {
-            eventsub,
             chat_admitted: 0,
             chat_rejected: 0,
             speech,
@@ -52,7 +42,7 @@ impl Source {
         })
     }
 
-    pub(crate) fn status(&mut self) -> io::Result<String> {
+    pub(crate) fn status(&mut self, eventsub: Option<&EventSub>) -> io::Result<String> {
         let now = Instant::now();
         if self.admission.as_ref().is_none_or(|(_, end)| *end <= now) {
             self.admission = Some((self.next_id()?, now + self.expiry));
@@ -60,7 +50,7 @@ impl Source {
         let mut status = self.speech.status();
         status["epoch"] = json!(self.epoch);
         status["next_id"] = json!(self.admission.as_ref().map(|(id, _)| id));
-        if let Some(eventsub) = &self.eventsub {
+        if let Some(eventsub) = eventsub {
             status["eventsub"] = eventsub.status();
             status["eventsub"]["admitted"] = json!(self.chat_admitted);
             status["eventsub"]["rejected"] = json!(self.chat_rejected);
@@ -87,14 +77,13 @@ impl Source {
         Ok(format!("{}-{}", self.epoch, self.issued))
     }
 
-    pub(crate) fn tick(&mut self) {
+    pub(crate) fn tick(&mut self, eventsub: Option<&EventSub>) {
         self.speech.tick();
         // Admit at most one notification per owner tick so control/Stop can
         // progress even while chat arrives faster than synthesis.
-        if let Some(chat) = self
-            .eventsub
-            .as_ref()
-            .and_then(|input| input.chat.try_recv().ok())
+        if let Some(chat) = eventsub
+            .and_then(|input| input.speech.as_ref())
+            .and_then(|speech| speech.try_recv().ok())
         {
             let admitted = self.next_id().and_then(|id| {
                 self.speech

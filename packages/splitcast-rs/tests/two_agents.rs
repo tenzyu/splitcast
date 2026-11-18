@@ -267,6 +267,10 @@ impl Fixture {
     }
 
     fn with_speech(speech: bool, native_lab: Option<&Path>) -> Self {
+        Self::with_options(speech, native_lab, false)
+    }
+
+    fn with_options(speech: bool, native_lab: Option<&Path>, camera: bool) -> Self {
         let root = std::env::current_dir().unwrap().join(format!(
             "../../artifacts/verification/two-agents-{}-{}",
             std::process::id(),
@@ -355,6 +359,13 @@ fi
             cfg["obs"]["password_file"] = json!(dir.join("password"));
             cfg["obs"]["recording_dir"] = json!(dir.join("recordings"));
             if role == "production" {
+                if camera {
+                    cfg["camera"] = json!({
+                        "location":"capture","input_format":"h264","encoder":"copy",
+                        "width":320,"height":180,"fps":15
+                    });
+                    cfg["obs"]["overlay_text"] = json!("legacy overlay");
+                }
                 let key = dir.join("virtual-stream-key");
                 private_file(&key, "isolated-fixture-key");
                 cfg["twitch"] = json!({
@@ -887,7 +898,8 @@ fn virtual_worker() {
                 }
                 let body = json!({"items":[
                     {"name":"game","ready":true,"bytesReceived":(n+1)*1024,"tracks":["H264","MPEG-4 Audio"]},
-                    {"name":"mic","ready":true,"bytesReceived":(n+1)*512,"tracks":["Opus"]}
+                    {"name":"mic","ready":true,"bytesReceived":(n+1)*512,"tracks":["Opus"]},
+                    {"name":"camera","ready":true,"bytesReceived":(n+1)*256,"tracks":["H264"]}
                 ]}).to_string();
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             }
@@ -900,13 +912,69 @@ fn virtual_worker() {
     }
 }
 
+#[derive(Default)]
+struct VirtualScene {
+    camera: Option<Value>,
+    camera_visible: bool,
+    overlay: Option<Value>,
+    overlay_text: Option<Value>,
+}
+
+impl VirtualScene {
+    fn item_list(&self) -> Value {
+        let mut items = vec![json!({
+            "sourceName":"GameFeed","sceneItemId":1,"sceneItemEnabled":true,
+            "sceneItemTransform":{"sourceWidth":1278.0,"sourceHeight":720.0}
+        })];
+        if let Some(transform) = &self.camera {
+            let mut transform = transform.clone();
+            transform["sourceWidth"] = json!(320.0);
+            transform["sourceHeight"] = json!(180.0);
+            items.push(json!({
+                "sourceName":"CameraFeed","sceneItemId":2,"sceneItemEnabled":self.camera_visible,
+                "sceneItemTransform":transform
+            }));
+        }
+        if let Some(transform) = &self.overlay {
+            items.push(json!({
+                "sourceName":"SplitCastOverlay","sceneItemId":3,"sceneItemEnabled":true,
+                "sceneItemTransform":transform
+            }));
+        }
+        json!({"sceneItems":items})
+    }
+
+    fn inputs(&self) -> Value {
+        let mut inputs = vec![
+            json!({"inputName":"GameFeed"}),
+            json!({"inputName":"MicProcessed"}),
+        ];
+        if self.camera.is_some() {
+            inputs.push(json!({"inputName":"CameraFeed"}));
+        }
+        if self.overlay_text.is_some() {
+            inputs.push(json!({"inputName":"SplitCastOverlay"}));
+        }
+        json!({"inputs":inputs})
+    }
+
+    fn input(&mut self, data: &Value) {
+        match data["inputName"].as_str().unwrap() {
+            "CameraFeed" => self.camera_visible = true,
+            "SplitCastOverlay" => self.overlay_text = Some(data["inputSettings"]["text"].clone()),
+            "GameFeed" | "MicProcessed" => {}
+            other => panic!("unexpected OBS input {other}"),
+        }
+    }
+}
+
 fn virtual_obs(dir: &Path) {
     let port: u16 = std::env::var("SPLITCAST_VIRTUAL_OBS")
         .unwrap()
         .parse()
         .unwrap();
     let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let state = Arc::new(Mutex::new((None, 0u64)));
+    let state = Arc::new(Mutex::new((None, 0u64, VirtualScene::default())));
     let log = Arc::new(Mutex::new(
         OpenOptions::new()
             .create(true)
@@ -937,13 +1005,74 @@ fn virtual_obs(dir: &Path) {
             let method = request["d"]["requestType"].as_str().unwrap();
             writeln!(log.lock().unwrap(), "{method}").unwrap();
             let mut state = state.lock().unwrap();
-            let (active, count) = &mut *state;
+            let (active, count, scene) = &mut *state;
+            let args = &request["d"]["requestData"];
+            let fault_path = dir.join("scene-fault");
+            let fault = fs::read_to_string(&fault_path).unwrap_or_default();
+            let mut result = true;
             let data = match method {
                 "GetVersion" => json!({"obsVersion":"virtual"}),
                 "GetSceneList" => json!({"scenes":[{"sceneName":"SplitCast"}]}),
-                "GetSceneItemId" => json!({"sceneItemId":1}),
-                "GetSceneItemTransform" => json!({"sceneItemTransform":{"sourceWidth":1280,"sourceHeight":720}}),
-                "GetInputList" => json!({"inputs":[{"inputName":"GameFeed"},{"inputName":"MicProcessed"},{"inputName":"Overlay"}]}),
+                "GetSceneItemId" => json!({"sceneItemId":match args["sourceName"].as_str().unwrap() {
+                    "GameFeed" => 1, "CameraFeed" => 2, "SplitCastOverlay" => 3,
+                    other => panic!("unexpected scene item {other}"),
+                }}),
+                "GetSceneItemTransform" => {
+                    let (width, height) = match args["sceneItemId"].as_u64().unwrap() {
+                        1 => (1278, 720), 2 => (320, 180), other => panic!("unexpected transform {other}"),
+                    };
+                    json!({"sceneItemTransform":{"sourceWidth":width,"sourceHeight":height}})
+                }
+                "GetVideoSettings" => json!({"baseWidth":1280,"baseHeight":720}),
+                "GetSceneItemList" => scene.item_list(),
+                "GetInputList" => scene.inputs(),
+                "CreateInput" | "SetInputSettings" => { scene.input(args); json!({}) }
+                "GetInputSettings" => {
+                    assert_eq!(args["inputName"], "SplitCastOverlay");
+                    json!({"inputSettings":{"text":scene.overlay_text}})
+                }
+                "RemoveInput" => {
+                    assert_eq!(args["inputName"], "SplitCastOverlay");
+                    scene.overlay = None;
+                    scene.overlay_text = None;
+                    json!({})
+                }
+                "SetSceneItemTransform" => {
+                    match args["sceneItemId"].as_u64().unwrap() {
+                        2 => scene.camera = Some(args["sceneItemTransform"].clone()),
+                        3 => scene.overlay = Some(args["sceneItemTransform"].clone()),
+                        other => panic!("unexpected transform edit {other}"),
+                    }
+                    if fault == "lose-transform-reply" {
+                        fs::remove_file(&fault_path).unwrap();
+                        return;
+                    }
+                    json!({})
+                }
+                "SetSceneItemEnabled" => {
+                    assert_eq!(args["sceneItemId"], 2);
+                    if fault == "reject-visibility" {
+                        fs::remove_file(&fault_path).unwrap();
+                        result = false;
+                    } else {
+                        scene.camera_visible = args["sceneItemEnabled"].as_bool().unwrap();
+                    }
+                    json!({})
+                }
+                "GetSourceScreenshot" => {
+                    assert_eq!(args["sourceName"], "SplitCast");
+                    assert_eq!(args["imageFormat"], "png");
+                    assert!(matches!((args["imageWidth"].as_u64(), args["imageHeight"].as_u64()), (Some(480),Some(270)) | (Some(960),Some(540))));
+                    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+                    let png = if fault == "oversize-preview" {
+                        let mut decoded = STANDARD.decode(png).unwrap();
+                        decoded[16..20].copy_from_slice(&481u32.to_be_bytes());
+                        STANDARD.encode(decoded)
+                    } else {
+                        png.to_owned()
+                    };
+                    json!({"imageData":format!("data:image/png;base64,{png}")})
+                }
                 "StartRecord" | "StartStream" => {
                     assert!(active.is_none());
                     *active = Some(if method == "StartRecord" { "GetRecordStatus" } else { "GetStreamStatus" });
@@ -968,10 +1097,17 @@ fn virtual_obs(dir: &Path) {
                     }
                     status
                 }
-                "SetInputSettings" | "SetInputAudioSyncOffset" | "SetInputAudioMonitorType" | "SetCurrentProgramScene" => json!({}),
+                "SetInputAudioSyncOffset" | "SetInputAudioMonitorType" | "SetCurrentProgramScene" => json!({}),
                 other => panic!("unexpected OBS request {other}"),
             };
              drop(state);
+             if method == "SetSceneItemTransform" && dir.join("hold-scene-ack").exists() {
+                 fs::write(dir.join("scene-transform-committed"), "OBS transform accepted").unwrap();
+                 let end = Instant::now() + LIMIT;
+                 while dir.join("hold-scene-ack").exists() && Instant::now() < end {
+                     thread::sleep(Duration::from_millis(10));
+                 }
+             }
              if method == "StartRecord" && dir.join("hold-start-ack").exists() {
                  fs::write(dir.join("start-committed"), "output active; acknowledgment pending").unwrap();
                  let end = Instant::now() + LIMIT;
@@ -979,9 +1115,282 @@ fn virtual_obs(dir: &Path) {
                      thread::sleep(Duration::from_millis(10));
                  }
              }
-             if socket.send(Message::Text(json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":true},"responseData":data}}).to_string().into())).is_err() { return; }
+             if socket.send(Message::Text(json!({"op":7,"d":{"requestId":request["d"]["requestId"],"requestStatus":{"result":result,"code":if result {100} else {600}},"responseData":data}}).to_string().into())).is_err() { return; }
         }
         });
         }
     });
+}
+
+fn scene_args(scene: &Value, operation: &str) -> Value {
+    json!({"generation":scene["generation"],"operation":operation})
+}
+
+fn scene_edit(scene: &Value, operation: &str, layout: &Value) -> Value {
+    let mut args = scene_args(scene, operation);
+    args["layout"] = layout.clone();
+    args
+}
+
+#[test]
+fn studio_scene_edits_observe_partial_obs_effects_and_persist_only_verified_layouts() {
+    let mut fixture = Fixture::with_options(false, None, true);
+    let agent = &fixture.production;
+    let root = fixture.root.join("production");
+    let layout_file = root.join("state/production/studio-scene-v1.json");
+    let fault = root.join("scene-fault");
+    let initial = agent.ok("scene", json!({}));
+    assert_eq!(initial["mode"], "draft");
+    assert_eq!(initial["draft"]["overlay"]["text"], "legacy overlay");
+    assert_eq!(
+        initial["draft"]["camera"],
+        json!({"x":952,"y":8,"width":320,"height":180,"visible":true})
+    );
+    assert!(initial["sources"].is_null());
+    assert!(splitcast_rs_core::control::request(
+        agent.port,
+        agent.port,
+        "wrong-local-bearer",
+        "scene-apply",
+        &scene_edit(&initial, "unauthenticated", &initial["draft"]).to_string(),
+        LIMIT
+    )
+    .is_err());
+    assert_eq!(
+        agent.command("preview-small", json!({})).1["outcome"],
+        "not_executed"
+    );
+    let mut layout = initial["draft"].clone();
+    layout["camera"]["visible"] = false.into();
+    layout["overlay"] = json!({"text":"画面","x":24,"y":32});
+    let rejected = agent.command("scene-apply", {
+        let mut args = scene_edit(&initial, "old-owner", &layout);
+        args["_owner"] = json!("released-owner");
+        args
+    });
+    assert_eq!(rejected.1["outcome"], "not_executed");
+
+    let (first, second) = thread::scope(|scope| {
+        let a =
+            scope.spawn(|| agent.command("scene-apply", scene_edit(&initial, "racing-a", &layout)));
+        let b =
+            scope.spawn(|| agent.command("scene-apply", scene_edit(&initial, "racing-b", &layout)));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert!(matches!((first.0, second.0), (200, 409) | (409, 200)));
+    let draft = agent.ok("scene", json!({}));
+    assert_eq!(draft["draft"], layout);
+    assert_eq!(draft["operation"]["state"], "draft");
+    assert_eq!(draft["persistence"], "unsaved");
+    assert!(!layout_file.exists());
+    assert_eq!(
+        agent
+            .command("scene-save", scene_args(&draft, "pre-start-save"))
+            .1["outcome"],
+        "not_executed"
+    );
+
+    let owner = "fixture-production-owner";
+    agent.ok("prepare", json!({"_owner":owner}));
+    agent.ok("start", json!({"_owner":owner}));
+    let before = agent.ok("scene", json!({}));
+    assert_ne!(before["generation"], draft["generation"]);
+    assert_eq!(before["mode"], "live");
+    assert_eq!(before["applied"], layout);
+    assert_eq!(
+        before["sources"],
+        json!({"game":{"width":1278,"height":720},"camera":{"width":320,"height":180}})
+    );
+    assert_eq!(
+        agent
+            .command("scene-apply", scene_edit(&before, "unowned", &layout))
+            .1["outcome"],
+        "not_executed"
+    );
+    let with_owner = |mut args: Value| {
+        args["_owner"] = json!(owner);
+        args
+    };
+    for name in ["preview", "preview-small"] {
+        assert!(agent.ok(name, json!({}))["image"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+    }
+    fs::write(&fault, "oversize-preview").unwrap();
+    assert_ne!(agent.command("preview-small", json!({})).0, 200);
+    assert_eq!(agent.command("preview", json!({})).0, 200);
+
+    layout["camera"]["x"] = 128.into();
+    layout["camera"]["visible"] = true.into();
+    layout["overlay"]["text"] = "changed".into();
+    fs::write(&fault, "lose-transform-reply").unwrap();
+    let lost = agent.command(
+        "scene-apply",
+        with_owner(scene_edit(&before, "lost", &layout)),
+    );
+    assert_eq!(lost.1["outcome"], "unknown");
+    let uncertain = agent.ok("scene", json!({}));
+    assert_eq!(
+        uncertain["operation"],
+        json!({"id":"lost","state":"unknown"})
+    );
+    assert!(uncertain["applied"].is_null());
+    assert_eq!(uncertain["draft"], layout);
+    assert_eq!(
+        agent
+            .command(
+                "scene-apply",
+                with_owner(scene_edit(&before, "stale", &layout))
+            )
+            .1["outcome"],
+        "not_executed"
+    );
+    assert_eq!(
+        agent
+            .command(
+                "scene-save",
+                with_owner(scene_args(&uncertain, "unsafe-save"))
+            )
+            .1["outcome"],
+        "not_executed"
+    );
+    let observed = agent.ok(
+        "scene-reconcile",
+        with_owner(scene_args(&uncertain, "read-lost")),
+    );
+    assert_eq!(observed["applied"]["camera"]["x"], 128);
+    assert_eq!(observed["applied"]["camera"]["visible"], false);
+    assert_eq!(observed["applied"]["overlay"]["text"], "画面");
+
+    layout["camera"]["x"] = 144.into();
+    fs::write(&fault, "reject-visibility").unwrap();
+    let partial = agent.command(
+        "scene-apply",
+        with_owner(scene_edit(&observed, "partial", &layout)),
+    );
+    assert_eq!(partial.1["outcome"], "unknown");
+    let state = agent.ok("scene", json!({}));
+    let observed = agent.ok(
+        "scene-reconcile",
+        with_owner(scene_args(&state, "read-partial")),
+    );
+    assert_eq!(observed["applied"]["camera"]["x"], 144);
+    assert_eq!(observed["applied"]["camera"]["visible"], false);
+    assert_eq!(observed["operation"]["state"], "reconciled");
+
+    let applied = agent.ok(
+        "scene-apply",
+        with_owner(scene_edit(&observed, "explicit-edit", &layout)),
+    );
+    assert_eq!(applied["applied"], layout);
+    assert_eq!(applied["persistence"], "unsaved");
+    fs::create_dir(&layout_file).unwrap();
+    assert_ne!(
+        agent
+            .command("scene-save", with_owner(scene_args(&applied, "save-fail")))
+            .0,
+        200
+    );
+    let failing_save = agent.ok("scene", json!({}));
+    assert_eq!(
+        failing_save["operation"],
+        json!({"id":"save-fail","state":"failed"})
+    );
+    assert_eq!(failing_save["applied"], layout);
+    assert_eq!(failing_save["persistence"], "unsaved");
+    assert!(layout_file.is_dir());
+    fs::remove_dir(&layout_file).unwrap();
+
+    let saved = agent.ok("scene-save", with_owner(scene_args(&failing_save, "save")));
+    assert_eq!(saved["saved"], layout);
+    assert_eq!(saved["persistence"], "saved");
+    assert_eq!(
+        fs::metadata(&layout_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let pids = fixture.pids();
+    agent.ok("stop", json!({"_owner":owner}));
+    fixture.released(&pids);
+    let stopped = agent.ok("scene", json!({}));
+    assert_ne!(stopped["generation"], saved["generation"]);
+    assert!(stopped["applied"].is_null());
+    assert_eq!(stopped["draft"], layout);
+    let mut disposable = layout.clone();
+    disposable["overlay"] = json!({"text":null,"x":16,"y":16});
+    let edited = agent.ok(
+        "scene-apply",
+        scene_edit(&stopped, "draft-only", &disposable),
+    );
+    let reloaded = agent.ok("scene-reload", scene_args(&edited, "reload"));
+    assert_eq!(reloaded["draft"], layout);
+    assert_eq!(reloaded["persistence"], "saved");
+
+    fixture.production.shutdown();
+    fixture.production = Agent::spawn(&root, fixture.ports[1], fixture.ports[6], fixture.ports[7]);
+    let restarted = fixture.production.ok("scene", json!({}));
+    assert_ne!(restarted["generation"], reloaded["generation"]);
+    assert_eq!(restarted["draft"], layout);
+    assert_eq!(restarted["saved"], layout);
+    assert_eq!(restarted["persistence"], "saved");
+}
+
+#[test]
+fn studio_scene_proxy_preserves_stop_under_withheld_obs_acknowledgment() {
+    let mut fixture = Fixture::new();
+    fixture.capture.ok("prepare", json!({}));
+    assert_eq!(fixture.capture.ok("chat", json!({}))["enabled"], false);
+    let ready = fixture.capture.ok("scene", json!({}));
+    assert_eq!(ready["mode"], "draft");
+    fixture.capture.ok("start", json!({}));
+    let live = fixture.capture.ok("scene", json!({}));
+    assert_eq!(live["mode"], "live");
+    assert_ne!(live["generation"], ready["generation"]);
+    assert_eq!(
+        fixture.capture.ok("preview-small", json!({}))["image"],
+        fixture.production.ok("preview-small", json!({}))["image"]
+    );
+
+    let dir = fixture.root.join("production");
+    let hold = dir.join("hold-scene-ack");
+    fs::write(&hold, "hold").unwrap();
+    let mut layout = live["draft"].clone();
+    layout["overlay"] = json!({"text":"pending","x":32,"y":16});
+    let port = fixture.capture.port;
+    let token = fixture.capture.token.clone();
+    let args = scene_edit(&live, "pending-edit", &layout).to_string();
+    let edit = thread::spawn(move || {
+        splitcast_rs_core::control::request(port, port, &token, "scene-apply", &args, LIMIT)
+    });
+    let end = Instant::now() + Duration::from_secs(4);
+    while !dir.join("scene-transform-committed").exists() {
+        assert!(
+            Instant::now() < end,
+            "scene edit did not reach its OBS write"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pids = fixture.pids();
+    let requested = Instant::now();
+    let (code, ack) = fixture.capture.command("stop", json!({}));
+    assert!(matches!(code, 200 | 202), "{ack}");
+    assert!(requested.elapsed() <= Duration::from_millis(500));
+    let error = edit.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("outcome unknown"), "{error}");
+    fs::remove_file(hold).unwrap();
+    let stopped = fixture.capture.wait_for_stop();
+    assert_eq!(stopped["stop_id"], ack["stop_id"]);
+    assert_eq!(
+        fixture.production.state("idle")["obs_shutdown"]["output_inactive_confirmed"],
+        true
+    );
+    fixture.released(&pids);
+    let after = fixture.production.ok("scene", json!({}));
+    assert_ne!(after["generation"], live["generation"]);
+    assert_eq!(after["mode"], "draft");
+    assert!(after["applied"].is_null());
+    assert!(after["saved"].is_null());
+    fixture.capture.shutdown();
+    fixture.production.shutdown();
 }

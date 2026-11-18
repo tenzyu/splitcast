@@ -1,9 +1,8 @@
 # Studio control contract
 
-This is the A-to-B implementation checkpoint. Only the legacy commands exist
-at the checkpoint. The rest of this document specifies the wire and state
-contract both implementations will use. Later wire changes will be called out
-explicitly for B. The Agent remains the owner of all session and OBS effects.
+The A-to-B checkpoint `df0768f` pinned the wire contract before
+implementation. Pinned command names, arguments and response fields are
+unchanged. The Agent owns the session and OBS effects.
 
 ## Transport and authority
 
@@ -15,7 +14,7 @@ in memory. Never put it in a URL. Read legacy status with `GET /api/status`.
 Existing Stop admission, `stop_id`, and completion observation still apply.
 
 Production holds the chat and layout. A prepared capture Agent forwards all
-six new commands using its existing authenticated production forward and
+seven Studio commands using its existing authenticated production forward and
 current `_owner`; clients talking to capture omit `_owner`. Idle draft editing
 and reload before Prepare require direct access to the production Agent.
 Direct production reads can use the bearer without an owner. A supplied owner
@@ -92,7 +91,7 @@ Response:
   client and backoff when idle or contended. No hidden or always-on polling
   is required. A waiting HTTP subscription would hold scarce parser slots,
   and a persistent connection would require its own admission and cleanup.
-  The delta uses neither. Stop keeps its independent privileged admission.
+  The delta uses neither. Stop keeps its independent priority admission.
 
 ## Scene
 
@@ -116,8 +115,8 @@ is null for absent, or a nonblank single line of up to 80 Unicode scalar
 values. Null overlay uses the default origin (16, 16). Legacy
 `obs.overlay_text` seeds the default layout, as do the existing camera
 upper-right quarter-size box and former overlay bounds. A saved layout is
-loaded from the private production state directory and takes precedence over
-the config defaults when valid. Config files are never rewritten.
+loaded from `studio-scene-v1.json` in the private production state
+directory and takes precedence over the config defaults when valid. Config files are never rewritten.
 
 | Command | Args | Meaning |
 | --- | --- | --- |
@@ -176,8 +175,13 @@ applying an edit with a configured camera:
   `unknown` when persistence cannot be confirmed. Before-rename failure
   leaves the previous file in place. A directory sync failure after rename
   can leave a visible new file with unknown durability. Reload reconciles
-  the visible file without changing OBS. Saving a valid observed draft can
-  replace a malformed file once the underlying error is resolved.
+  the visible file and confirms its directory when durability was uncertain.
+  A malformed file puts persistence in the unknown state and leaves the
+  current draft available. Saving a valid observed draft can replace the
+  file once the underlying error is resolved. The save checks cancellation
+  immediately before rename. An admitted filesystem commit can finish while
+  Stop is pending, and cleanup completion follows the owner's return from
+  that commit.
 
 ## Preview
 
@@ -187,7 +191,11 @@ request and `{"image":"data:image/png;base64,…"}` response. For Studio,
 requests 480×270 from the owned Running OBS scene, and rejects a missing,
 oversize or invalid PNG header and dimensions outside 480×270. The encoded
 image is capped at 768 KiB. The command uses one bounded OBS screenshot RPC
-over the existing authenticated, cancellation-aware path. Idle or Ready
+over the existing authenticated, cancellation-aware path. Live scene operations
+have a five-second OBS network budget from connection through readback. Idle or Ready
 can edit a draft without OBS and cannot request a small screenshot. A client
 can request a new snapshot explicitly after an edit. This contract has no
 preview-only Start or continuously running preview workload.
+
+The scene-item fields and screenshot aspect behavior follow the pinned
+[OBS WebSocket protocol](https://github.com/obsproject/obs-websocket/blob/1fcb95b15aa88b1b7e9bda3f9c8650e314377169/docs/generated/protocol.md).
