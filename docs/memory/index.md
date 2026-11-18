@@ -18,6 +18,7 @@ Load [MEMORY.md](../../MEMORY.md) once for the mission and permission boundary; 
 
 ## Evidence and memory maintenance
 * [Evidence IDs](evidence.md) — Sxx/Exx identity and original artifact boundaries
+* [Real VOICEVOX checkpoint](../evidence/real-voicevox-physical-return.md) — production-local synthesis and remaining physical return gates
 * [Current-main verification](../verification.md) — separate CI, virtual, generated media and physical acceptance
 * [Dreaming protocol](dreaming.md) — re-check note versus source, merge contradictions and prune redundant text
 * [Update protocol](update-protocol.md) — annotate corrections without overwriting failed results
