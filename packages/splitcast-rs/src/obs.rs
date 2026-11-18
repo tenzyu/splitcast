@@ -380,6 +380,7 @@ impl Obs {
         source: &str,
         width: u16,
         height: u16,
+        crop: u16,
     ) -> io::Result<bool> {
         let id = self.scene_item(source)?;
         let response = response_data(&self.call(
@@ -387,15 +388,21 @@ impl Obs {
             &json!({"sceneName":"SplitCast","sceneItemId":id}).to_string(),
         )?)?;
         let transform = &response["sceneItemTransform"];
-        Ok(transform["sourceWidth"].as_f64() == Some(f64::from(width))
-            && transform["sourceHeight"].as_f64() == Some(f64::from(height)))
+        let matches = |key: &str, requested: u16| {
+            transform[key].as_f64().is_some_and(|actual| {
+                actual == f64::from(requested)
+                    || (crop != 0 && actual == f64::from(requested.saturating_sub(crop).max(1)))
+            })
+        };
+        Ok(matches("sourceWidth", width) && matches("sourceHeight", height))
     }
     pub(crate) fn source_geometry_ready(&mut self, cfg: &Config) -> io::Result<bool> {
         Ok(
-            self.source_geometry_matches("GameFeed", cfg.width, cfg.height)?
+            // Native GSR KMS can trim an even pixel pair at the screen edge.
+            self.source_geometry_matches("GameFeed", cfg.width, cfg.height, 2)?
                 && match &cfg.camera {
                     Some(camera) => {
-                        self.source_geometry_matches("CameraFeed", camera.width, camera.height)?
+                        self.source_geometry_matches("CameraFeed", camera.width, camera.height, 0)?
                     }
                     None => true,
                 },
