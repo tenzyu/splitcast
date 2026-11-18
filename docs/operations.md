@@ -109,8 +109,7 @@ Start only the reviewed opt-in candidate and its owned workers. Check actual dec
 
 ### Production display preflight and stop conditions
 
-The [PR #16 OBS receipt](evidence/pr16-obs.md) binds the patched OBS 32.1.2
-package. The first physical recording finalized after 117 late renders in
+The PR #16 receipt binds the patched OBS 32.1.2 package. The first physical recording finalized after 117 late renders in
 645 attempts (18.1%), then OBS exited with SIGSEGV. The generated 60 fps
 Xvfb/llvmpipe and x264 comparison reproduced the SIGTERM crash with
 74/600 late renders and 0/601 output-thread skips. SIGINT exited zero with
@@ -118,7 +117,7 @@ Xvfb/llvmpipe and x264 comparison reproduced the SIGTERM crash with
 software runs exited normally and lack a warmup-trimmed counter series.
 The separate 30 fps generated cases logged 3/393 render drops for normal
 and 398 frames drawn with no lag line for camera.
-[Managed physical evidence](evidence/pr16-managed-acceptance.md)
+[OBS receipt](evidence/pr16-obs.md) · [Managed physical evidence](evidence/pr16-managed-acceptance.md)
 
 Before a hardware trial, record the authorized display, driver, GPU, exact
 OBS package and source identity, trial process/service ownership, allowed
@@ -177,13 +176,13 @@ the quarantine. The original failure stays in the receipt.
    owners before capture. Keep any missing instrument or authorization
    BLOCKED. Complete the display preflight and a private recording first.
 2. Use OFF 1 / ON / OFF 2 in that order with the same replay hash and
-   restart cue. OFF arms have no trial media workers; ON runs the exact
+   restart cue. OFF arms have no trial media workers. ON runs the exact
    intended game/camera/mic/OBS path at the agreed output settings. Match
    versions, resolution/refresh, workload, the authorized renderer without
    Vulkan/Zink, focus, input and audio route, and thermal/load conditions.
    Count per-frame gameplay times over the same replay-aligned 60 seconds
-   in each arm using the same
-   validated observer that preserves Direct Scanout and audio. Save raw
+   in each arm using the same validated observer that preserves Direct
+   Scanout and audio. Save raw
    samples, start alignment, missing events, p50/p95/p99, and measurement
    uncertainty. Use nearest-rank p99. For each matched bracket require
    `p99_ON - min(p99_OFF1, p99_OFF2) <= 1 ms`, including uncertainty.
@@ -203,15 +202,16 @@ the quarantine. The original failure stays in the receipt.
    instance identity, active output and increasing duration, and all four
    cumulative counters. Compute
    `100 * ΔrenderSkippedFrames / ΔrenderTotalFrames` from the warm
-   baseline to the final sample; require **≤1%**. Split the receipt on any
+   baseline to the final sample. Require **≤1%**. Split the receipt on any
    reconnect or session change. A missing sample, reset/wrap, impossible
    delta or zero attempts makes that window unmeasurable. Report output
    skips, total attempts and attempted minus skipped frames independently
    from render misses. Require actual output progress and independent
    full decode. Classify the hardware stage before applying the gate.
    [OBS GetStats implementation](https://github.com/obsproject/obs-websocket/blob/1fcb95b15aa88b1b7e9bda3f9c8650e314377169/src/utils/Obs_ObjectHelper.cpp) · [Generated measurement contract](media-acceptance.md#observable-assertions)
-4. Independently decode game and camera at the production observation
-   point. Associate unique source markers with their capture-side times
+4. Record the physical A/V arm to a private MKV with separate audio
+   tracks. Independently decode game and camera at the production
+   observation point. Associate unique source markers with their capture-side times
    and production observation times on one clock or a calibrated common
    reference. For example, timestamp the source events and decoded
    production monitor on a single external measurement clock, or measure
