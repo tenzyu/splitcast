@@ -4,11 +4,15 @@ mod network;
 mod ui;
 mod wire;
 
-use std::{io, path::PathBuf, process::ExitCode};
+use std::{cell::Cell, io, path::PathBuf, process::ExitCode, rc::Rc};
 
-use gpui::{px, size, App, Application, Bounds, WindowBounds, WindowOptions};
+use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
 
-use crate::{network::Workers, ui::Studio, wire::Endpoint};
+use crate::{
+    network::Workers,
+    ui::{Studio, TraceRender},
+    wire::Endpoint,
+};
 
 const USAGE: &str = "Usage: splitcast-studio --token-file PATH --port PORT [--agent-port PORT]";
 
@@ -48,13 +52,17 @@ fn run() -> io::Result<()> {
     }
 
     let (_workers, network, results) = Workers::start(endpoint)?;
-    let mut opened = false;
+    let opened = Rc::new(Cell::new(false));
+    let window_opened = opened.clone();
     Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1110.), px(752.)), cx);
+        if trace {
+            cx.set_global(TraceRender);
+        }
+        let bounds = Bounds::centered(None, size(px(1110.), px(780.)), cx);
         let result = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(960.), px(740.))),
+                window_min_size: Some(size(px(960.), px(775.))),
                 app_id: Some("splitcast-studio".into()),
                 ..Default::default()
             },
@@ -64,12 +72,21 @@ fn run() -> io::Result<()> {
             eprintln!("SplitCast Studio could not open a window");
             cx.quit();
         } else {
-            opened = true;
+            window_opened.set(true);
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
             cx.activate(true);
         }
-        let _ = opened;
     });
-    Ok(())
+    if opened.get() {
+        Ok(())
+    } else {
+        Err(io::Error::other("SplitCast Studio could not open a window"))
+    }
 }
 
 fn main() -> ExitCode {

@@ -281,6 +281,8 @@ impl EntityInputHandler for Field {
 impl Render for Field {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
+        let trace = cx.has_global::<crate::ui::TraceRender>();
+        let label = self.placeholder;
         let focus = self.focus.clone();
         let text: SharedString = if self.text.is_empty() {
             self.placeholder.into()
@@ -307,7 +309,7 @@ impl Render for Field {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    this.focus.focus(window, cx);
+                    this.focus.focus(window);
                     let position = if this.text.is_empty() {
                         0
                     } else {
@@ -342,6 +344,9 @@ impl Render for Field {
                         window.text_system().shape_line(text, px(13.), &[run], None)
                     },
                     move |bounds, line, window, cx| {
+                        if trace {
+                            crate::ui::trace_target(label, bounds);
+                        }
                         let focused = focus.is_focused(window);
                         let caret_x = line.x_for_index(caret);
                         let scroll = if focused {

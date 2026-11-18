@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 use splitcast_rs_core::Output;
 
 use crate::wire::{
-    ChatPage, Failure, Layout, Message, Mode, OperationState, Persistence, Phase, Scene, Status,
-    StopReply,
+    ChatPage, Failure, Layout, Message, Mode, OperationState, Persistence, Scene, SceneAction,
+    Status, StopReply,
 };
 
 pub(crate) const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
@@ -150,14 +150,14 @@ pub(crate) struct Chat {
     pub messages: VecDeque<Message>,
     pub epoch: Option<String>,
     pub cursor: u64,
-    label: Option<String>,
+    label: Option<&'static str>,
     gap: bool,
     delay: Option<Duration>,
 }
 
 impl Chat {
-    pub(crate) fn label(&self) -> &str {
-        self.label.as_deref().unwrap_or("Awaiting chat history")
+    pub(crate) fn label(&self) -> &'static str {
+        self.label.unwrap_or("Awaiting chat history")
     }
 
     pub(crate) fn gap(&self) -> bool {
@@ -169,7 +169,7 @@ impl Chat {
         let old_gap = self.gap;
         let mut changed = false;
         let (label, more) = match result {
-            Err(error) => (error.label().to_owned(), false),
+            Err(error) => (error.label(), false),
             Ok(page) => {
                 if self.epoch != page.epoch || page.reset || page.overrun {
                     changed = !self.messages.is_empty();
@@ -195,10 +195,10 @@ impl Chat {
                     None if !page.enabled => "Chat disabled on production",
                     None => "No active chat session",
                 };
-                (label.to_owned(), page.more)
+                (label, page.more)
             }
         };
-        changed |= old_label.as_ref() != Some(&label) || old_gap != self.gap;
+        changed |= old_label != Some(label) || old_gap != self.gap;
         self.label = Some(label);
         let delay = if more {
             Duration::ZERO
@@ -218,7 +218,8 @@ pub(crate) struct Editor {
     pub draft: Layout,
     pub dirty: bool,
     pub conflict: bool,
-    pub uncertain: Option<String>,
+    pub uncertain: Option<(String, SceneAction)>,
+    pub needs_observation: bool,
     pub notice: Option<&'static str>,
 }
 
@@ -233,11 +234,14 @@ impl Editor {
         }
     }
 
-    pub(crate) fn observe(&mut self, scene: Box<Scene>, submitted: Option<&str>) {
+    pub(crate) fn observe(&mut self, scene: Box<Scene>, submitted: Option<(&str, SceneAction)>) {
         let observed = scene.operation.as_ref();
-        let matched = submitted.is_some_and(|id| observed.is_some_and(|op| op.id == id));
-        let expected = self.uncertain.as_deref();
-        let recovered = expected.is_some_and(|id| observed.is_some_and(|op| op.id == id));
+        let matched = submitted.is_some_and(|(id, _)| observed.is_some_and(|op| op.id == id));
+        let expected = self
+            .uncertain
+            .as_ref()
+            .map(|(id, action)| (id.as_str(), *action));
+        let recovered = expected.is_some_and(|(id, _)| observed.is_some_and(|op| op.id == id));
         let successful = observed.is_some_and(|op| {
             matches!(
                 op.state,
@@ -248,7 +252,8 @@ impl Editor {
                     | OperationState::Reloaded
             )
         });
-        if (matched || recovered) && successful {
+        let action = submitted.or(expected).map(|(_, action)| action);
+        if (matched || recovered) && successful && action != Some(SceneAction::Reconcile) {
             self.dirty = false;
             self.conflict = false;
         } else if self.dirty {
@@ -273,10 +278,11 @@ impl Editor {
             _ => None,
         };
         self.uncertain = if submitted.is_some() && !matched {
-            submitted.map(str::to_owned)
+            submitted.map(|(id, action)| (id.to_owned(), action))
         } else {
             None
         };
+        self.needs_observation = false;
         self.scene = Some(scene);
     }
 
@@ -334,6 +340,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::Phase;
 
     fn status() -> Status {
         serde_json::from_value(json!({

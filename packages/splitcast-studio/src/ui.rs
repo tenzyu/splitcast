@@ -4,8 +4,8 @@ use std::{
 };
 
 use gpui::{
-    div, img, point, prelude::*, px, rgb, uniform_list, App, Context, Div, Entity, FontWeight,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels, Point,
+    canvas, div, img, prelude::*, px, rgb, uniform_list, App, Context, Div, Entity, FontWeight,
+    Global, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels, Point,
     RenderImage, Subscription, Task, Window,
 };
 use splitcast_rs_core::Output;
@@ -102,7 +102,7 @@ impl Fields {
 enum Control {
     Lifecycle,
     ReadScene,
-    ChangeScene(String),
+    ChangeScene(String, SceneAction),
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +116,18 @@ struct Drag {
     pointer: Point<Pixels>,
     start: (f32, f32),
     scale: f32,
+}
+
+pub(crate) struct TraceRender;
+impl Global for TraceRender {}
+
+pub(crate) fn trace_target(label: &'static str, bounds: gpui::Bounds<Pixels>) {
+    let center = bounds.center();
+    eprintln!(
+        "studio-target {label}|{}|{}",
+        f32::from(center.x).round(),
+        f32::from(center.y).round()
+    );
 }
 
 pub(crate) struct Studio {
@@ -158,6 +170,14 @@ impl Studio {
         cx: &mut Context<Self>,
     ) -> Self {
         window.set_window_title("SplitCast Studio");
+        if trace {
+            if let Some(gpu) = window.gpu_specs() {
+                eprintln!(
+                    "studio-renderer software={} {} / {} {}",
+                    gpu.is_software_emulated, gpu.device_name, gpu.driver_name, gpu.driver_info
+                );
+            }
+        }
         let now = Instant::now();
         let fields = Fields::new(cx);
         let editor = Editor::default();
@@ -424,9 +444,8 @@ impl Studio {
                         self.mode = None;
                     }
                 }
-                let changed = self.status.as_ref() != Some(&status)
-                    || self.status_error.take().is_some()
-                    || !was_fresh;
+                let had_error = self.status_error.take().is_some();
+                let changed = self.status.as_ref() != Some(&status) || had_error || !was_fresh;
                 if previous_phase != Some((status.role, status.state)) || !was_fresh {
                     self.read_scene = true;
                 }
@@ -459,24 +478,31 @@ impl Studio {
                 self.invalidate_status();
             }
             (Some(Control::ReadScene), Ok(Reply::Scene(scene))) => {
+                let first_scene = self.editor.scene.is_none();
                 self.editor.observe(scene, None);
-                if !self.editor.dirty {
+                if first_scene || !self.editor.dirty {
                     self.fields.sync(&self.editor.draft, cx);
                 }
                 self.valid_fields = self.fields.parse(&self.editor.draft, cx).is_some();
             }
-            (Some(Control::ChangeScene(id)), Ok(Reply::Scene(scene))) => {
-                self.editor.observe(scene, Some(&id));
+            (Some(Control::ChangeScene(id, action)), Ok(Reply::Scene(scene))) => {
+                self.editor.observe(scene, Some((&id, action)));
                 if !self.editor.dirty {
                     self.fields.sync(&self.editor.draft, cx);
                 }
             }
-            (Some(Control::ChangeScene(id)), Err(error)) => {
+            (Some(Control::ChangeScene(id, action)), Err(error)) => {
                 if matches!(error, Failure::Unknown) {
-                    self.editor.uncertain = Some(id);
+                    self.editor.uncertain = Some((id, action));
                 }
                 if error == Failure::Conflict {
                     self.editor.conflict = true;
+                }
+                if matches!(error, Failure::Rejected | Failure::Conflict) {
+                    // The capture forward can anonymize a generation rejection.
+                    // Observe before enabling writes based on a stale scene.
+                    self.editor.needs_observation = true;
+                    self.read_scene = true;
                 }
                 self.editor.notice = Some(error.label());
             }
@@ -488,6 +514,7 @@ impl Studio {
     fn lifecycle(&mut self, call: Call, cx: &mut Context<Self>) {
         if self.send(Lane::Control, call, 0) {
             self.control = Some(Control::Lifecycle);
+            self.stop = Stop::None;
             self.mode = None;
             self.command_note = Some("Waiting for Agent…");
             self.read_scene = false;
@@ -500,8 +527,8 @@ impl Studio {
             return;
         }
         self.epoch = self.network.supersede();
-        if let Some(Control::ChangeScene(ref id)) = self.control {
-            self.editor.uncertain = Some(id.clone());
+        if let Some(Control::ChangeScene(ref id, action)) = self.control {
+            self.editor.uncertain = Some((id.clone(), action));
         }
         self.mode = None;
         self.command_note = None;
@@ -551,7 +578,7 @@ impl Studio {
             layout: (action == SceneAction::Apply).then(|| self.editor.draft.clone()),
         };
         if self.send(Lane::Control, request, 0) {
-            self.control = Some(Control::ChangeScene(id));
+            self.control = Some(Control::ChangeScene(id, action));
             self.editor.notice = Some("Waiting for Agent scene…");
             self.read_scene = false;
             cx.notify();
@@ -562,13 +589,14 @@ impl Studio {
         self.ready_to_act()
             && self.scene_phase()
             && self.editor.uncertain.is_none()
+            && !self.editor.needs_observation
             && !self.read_scene
     }
 
     fn input_changed(&mut self, cx: &mut Context<Self>) {
         // A pending scene mutation owns the submitted values. Fields are
         // temporarily omitted from the editor until that request is settled.
-        if matches!(self.control, Some(Control::ChangeScene(_))) {
+        if matches!(self.control, Some(Control::ChangeScene(..))) {
             return;
         }
         let draft = self.fields.parse(&self.editor.draft, cx);
@@ -847,7 +875,7 @@ impl Studio {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    if !matches!(this.control, Some(Control::ChangeScene(_))) {
+                    if !matches!(this.control, Some(Control::ChangeScene(..))) {
                         this.drag = Some(Drag {
                             guide,
                             pointer: event.position,
@@ -948,7 +976,7 @@ impl Studio {
                     uniform_list(
                         "chat",
                         self.chat.messages.len(),
-                        cx.processor(|this, range, _, _| {
+                        cx.processor(|this, range: std::ops::Range<usize>, _, _| {
                             // The newest retained message is at the top. GPUI asks
                             // for visible rows only, with one fixed height per row.
                             range
@@ -994,7 +1022,7 @@ impl Studio {
         let applied = scene
             .and_then(|scene| scene.applied.as_ref())
             .filter(|_| live);
-        let editing = !matches!(self.control, Some(Control::ChangeScene(_)));
+        let editing = !matches!(self.control, Some(Control::ChangeScene(..)));
         let game = match scene {
             Some(scene) => format!("Fixed  ·  {} × {}", scene.canvas.width, scene.canvas.height),
             None => "Fixed".into(),
@@ -1149,7 +1177,7 @@ impl Studio {
                         .when(self.editor.conflict, |row| {
                             row.child(button(
                                 "Keep local draft",
-                                editing && self.editor.valid(),
+                                editing && self.editor.valid() && !self.editor.needs_observation,
                                 cx,
                                 |this, _, cx| {
                                     this.editor.conflict = false;
@@ -1187,7 +1215,6 @@ impl Render for Studio {
             .flex_col()
             .gap(px(12.))
             .p(px(14.))
-            .overflow_y_scroll()
             .tab_group()
             .on_mouse_move(cx.listener(Self::drag))
             .on_mouse_up(
@@ -1197,7 +1224,6 @@ impl Render for Studio {
             .child(self.top(cx))
             .child(
                 row()
-                    .items_stretch()
                     .gap(px(12.))
                     .child(self.preview(cx))
                     .child(self.chat(cx)),
@@ -1279,4 +1305,16 @@ fn button(
                 .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
         })
         .child(label)
+        .when(enabled && cx.has_global::<TraceRender>(), |button| {
+            button.relative().child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), _, _| trace_target(label, bounds),
+                )
+                .absolute()
+                .top(px(0.))
+                .left(px(0.))
+                .size_full(),
+            )
+        })
 }

@@ -61,6 +61,9 @@ impl Endpoint {
         }
         .map_err(|error| match error {
             ureq::Error::ConnectionFailed => Failure::Disconnected,
+            ureq::Error::Io(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                Failure::Disconnected
+            }
             _ => Failure::Unknown,
         })?;
 
