@@ -12,8 +12,8 @@ Load [MEMORY.md](../../MEMORY.md) once for the mission and permission boundary; 
 
 ## Implementation and acceptance
 * [Which revision implements it?](proposed-revisions.md) — main, #18, the #19/#20 stack, CI and local integration lineage
-* [Prepare 409](proposed-revisions.md#prepare-returns-409) · [Studio loses focus](proposed-revisions.md#chat-or-preview-stalls-after-focus-transfer) · [Advancing bytes, stale content](proposed-revisions.md#bytes-advance-while-the-scene-ages) — choose one diagnosis and follow its pinned test
-* [What proves Stop?](open-risks.md#stop-admission-and-release) — queued-generation fence, matching ticket, owner release, OBS exit and remaining resources
+* [Prepare 409](proposed-revisions.md#prepare-returns-409) · [Studio loses focus](proposed-revisions.md#chat-or-preview-stalls-after-focus-transfer) · [Chat backoff and preview read rate](proposed-revisions.md#visible-reader-scheduling) · [Advancing bytes, stale content](proposed-revisions.md#bytes-advance-while-the-scene-ages) — choose one diagnosis and follow its pinned test
+* [What proves Stop?](open-risks.md#stop-admission-and-release) — [already queued activation](open-risks.md#already-queued-activation), matching ticket, owner release, OBS exit and remaining resources
 * [Physical state](session-state.md) — merged #16 receipts, speech-only versus on-air, outstanding host gates
 * [Completed environment discovery](environment-gap.md) — **deprecated** historical investigation, not a fresh task
 * [PoC handoff](../handoff/poc-20261117.md) — dated November 17 attempts and then-missing Twitch inputs
