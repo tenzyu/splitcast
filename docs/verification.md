@@ -8,6 +8,18 @@ The [audio return receipt](evidence/audio-return.md) records the two-Agent softw
 
 [S33](evidence/dreaming-retrieval-20261118.md) records the source identities, two-reader comparison, documentation checks and their limits. The [question set and scoring criteria](evidence/retrieval-questions.md) are for evaluation outside normal startup.
 
+### PR #21 integration with main
+
+`git merge --no-commit --no-ff 07f74ac6f89d03c9b0ac5ebfb014e6a4be8c1376` exited 1 with a content conflict in this file. The resolution retained the retrieval record and the incoming Studio control, Studio Native, and runtime performance sections. The local checks below ran on the clean merge commit `be3f144ef56664caa37a8d0eb0c5dc12ce4e47ec` with convergence work unit `pr21-merge-main-07f74ac`.
+
+| Exact command | Observed result |
+| --- | --- |
+| `python3 tools/ci/check_docs.py` | Exit 0. Checked 54 Markdown files and 327 local links with zero broken links or OKF issues. Receipt `attempt-000001`. |
+| `python3 tools/ci/convergence.py wiki scan --summary` | Exit 0. Zero broken links or scan errors. The dependency comparison flagged 11 stale candidates, all unbaselined. Receipt `attempt-000002`. |
+| `nix develop -c cargo run -p splitcast-xtask -- verify` | Exit 0. All 10 checks passed with Rust 1.95.0. Receipt `attempt-000003`, artifact `artifacts/verification/runs/1795004411996892116/`. |
+
+Virtual, generated-media, standalone Studio GUI, and physical acceptance were outside this local run.
+
 ## 2026-11-18 Studio control contract (A)
 
 The [A-to-B contract](studio-control-contract.md) was pinned at
