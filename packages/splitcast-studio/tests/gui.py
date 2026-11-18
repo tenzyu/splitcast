@@ -67,7 +67,7 @@ def spawn(stack, args, env, log):
     return process
 
 
-def http(port, headers, command=None, args=None):
+def exchange_http(port, headers, command=None, args=None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=12)
     try:
         if command is None:
@@ -85,7 +85,7 @@ def http(port, headers, command=None, args=None):
 
 def request(port, token, command=None, args=None):
     host = f"127.0.0.1:{port}"
-    status, body = http(port, {
+    status, body = exchange_http(port, {
         "Host": host, "Origin": f"http://{host}", "Authorization": f"Bearer {token}"
     }, command, args)
     return status, json.loads(body)
@@ -124,7 +124,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         drop = self.server.drop == command and command is not None
         try:
             headers = {key: self.headers[key] for key in ("Host", "Origin", "Authorization")}
-            code, body = http(self.server.upstream, headers, command, args)
+            code, body = exchange_http(self.server.upstream, headers, command, args)
             if hold:
                 self.server.held.set()
                 self.server.release.wait(8)
