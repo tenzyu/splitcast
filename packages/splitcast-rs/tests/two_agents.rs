@@ -1063,13 +1063,12 @@ fn virtual_obs(dir: &Path) {
                     assert_eq!(args["sourceName"], "SplitCast");
                     assert_eq!(args["imageFormat"], "png");
                     assert!(matches!((args["imageWidth"].as_u64(), args["imageHeight"].as_u64()), (Some(480),Some(270)) | (Some(960),Some(540))));
-                    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+                    // RGBA scanlines with filter byte 0 and valid IDAT and CRCs.
+                    // Keep the oversized case decodable as well so it tests dimensions alone.
                     let png = if fault == "oversize-preview" {
-                        let mut decoded = STANDARD.decode(png).unwrap();
-                        decoded[16..20].copy_from_slice(&481u32.to_be_bytes());
-                        STANDARD.encode(decoded)
+                        "iVBORw0KGgoAAAANSUhEUgAAAeEAAAABCAYAAADpeRY4AAAAGklEQVR4nGNQaHj4fxSP4lE8ikfxKB7F9McAXu+yvc2RzNkAAAAASUVORK5CYII="
                     } else {
-                        png.to_owned()
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQaHj4HwAExgKBNCGZBwAAAABJRU5ErkJggg=="
                     };
                     json!({"imageData":format!("data:image/png;base64,{png}")})
                 }
