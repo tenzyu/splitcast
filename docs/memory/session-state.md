@@ -44,16 +44,13 @@ The trial began from `origin/main` `3b2a051efc1c5f8c483d8f7f453d49f6216c7f2d`. B
 
 The capture host reported 1366×768 at 60.003 Hz and fullscreen Direct Scanout while osu! used the operator's 1280×720 internal configuration. The trial used the NixOS-generated `gsr-kms-server` wrapper in its own time-limited runtime directory. Only that helper received `CAP_SYS_ADMIN`. The existing wrapper symlink and system profile were checked before and after.
 
-The next performance trial needs matched starts of the same playable replay in
-OFF/ON/OFF conditions and an independent source/content marker. Measure
-frame and scheduling tails on the same workload. For the next trial, require
-an upper measured p99 gameplay frame-time increase of at most 1 ms, no
-observed Direct Scanout or local game-audio interruption, and at most 1%
-late production renders after warmup. Record uncertainty alongside frame-time
-and input/audio observations. The production NVIDIA GPU is present and idle at
-preflight. The software OBS run's 18.1% rendering lag warrants an isolated
-hardware-backed OBS trial before repeating 60 fps acceptance. The source
-and runtime remain gated from autostart.
+The original trial left matched replay starts and an independent source marker
+outstanding. It recorded targets of at most 1 ms p99 gameplay frame-time
+increase, uninterrupted Direct Scanout and local game audio, and at most 1%
+late production renders after warmup. The NVIDIA GPU was present and idle at
+preflight. The 18.1% software result motivated the later isolated NVIDIA
+trials. The follow-up above records which of those checks ran and their
+outcomes.
 
 The physical camera and bandwidth-test receipts both use binary SHA-256
 `a67e43c757c32bc9341ae6007220b276a0a9a7d3d1110ec385305d9518ee9620`

@@ -2,7 +2,7 @@
 
 Preserve osu! gameplay and its local audio while offloading selected game A/V, the HyperX trial microphone through RNNoise, private OBS recording and VOICEVOX playback. Capture and production are separate roles. SplitCast coordinates native workers and authenticated sessions.
 
-**Current PoC.** The 2026-11-18 JST trial recorded real osu! through GSR, SSH, MediaMTX and OBS. An actual Twitch chat message triggered VOICEVOX and the operator heard the return. Rendering stalls, shutdown failure and the incomplete workload comparison are recorded alongside those passes. [Current state and source-bound evidence](docs/memory/session-state.md)
+**Current PoC.** On 2026-11-18 JST the two hosts recorded real osu!, camera and SoloCast/RNNoise. Independent decoding confirmed the public Twitch archive, and both media sessions verified Stop and OBS exit. The operator heard an actual Twitch chat message through VOICEVOX in a separate speech session. NVIDIA OBS, gameplay frame times and physical A/V timing remain open. The original render stalls and SIGSEGV are retained. [Current state and source-bound evidence](docs/memory/session-state.md)
 
 The current scope includes optional camera, Web and TUI controls, and Twitch RTMPS output. Private recording remains the default. [Operation and configuration](docs/operations.md)
 
