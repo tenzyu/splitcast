@@ -197,6 +197,12 @@ fn connection(
             return;
         }
     };
+    if request.method == "GET" {
+        if let Some((mime, body)) = crate::web::asset(&request.path) {
+            let _ = control::reply_bytes(stream, 200, mime, body);
+            return;
+        }
+    }
     let invocation = if request.method == "GET" && request.path == "/api/status" {
         Ok(Invocation {
             command: Command::Status,

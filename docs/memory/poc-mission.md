@@ -8,14 +8,10 @@ sources:
 ---
 # SplitCast PoC mission
 
-> **Software update (S28):** The [return acceptance receipt](../evidence/audio-return.md) covers the actual Agent protocol and selected native player on an isolated graph. The physical mission and performance gates below remain open.
-
-> **Historical implementation boundary (S26):** Main `ed7fe60` includes finite local fixture playback from PR #9, **not** a functioning returned-audio path. The current resume point is [the PoC handoff](../handoff/poc-20261117.md), corrected by [S26](../evidence/dreaming-main-20261117.md), rather than the completed environment-gap discovery.
-
-Updated 2026-11-17. **User goal, not deployment authorization.** Start the next
-environment-gap session at [the gap handoff](environment-gap.md), not an old
-release checklist. This page integrates S02–S07, S12, S20 and S21 from
-[the source register](evidence.md); historical records remain unchanged.
+Follow [the current acceptance record](session-state.md) for observed results
+and open gates. The PoC includes selected game A/V and microphone, optional
+camera, Web and terminal controls, private recording, Twitch broadcast, and
+physical speech return.
 
 ## Why SplitCast exists
 
@@ -25,19 +21,17 @@ CPU/GPU work, memory traffic, heat, power and scheduling interference on the
 capture host. Failure of streaming, networking or the production host must not
 block, restart, reschedule or otherwise impair gameplay or local game audio.
 
-**A separate required return path** sends speech or other audio computed on the
-production host back to local playback on the capture host. This is a renewed
-user requirement in S21, not an implemented or accepted feature. A synthesis
-component and a configurable sink do not establish delivery or playback.
+**A separate return path** delivers production-local VOICEVOX speech to the
+explicitly selected capture-host PipeWire sink. Twitch chat originated a real
+utterance and the operator heard it. [Current acceptance record](session-state.md)
 
-Ultra Low Latency and Ultra Lightweight are goals. No numeric target or achieved
-physical result is adopted here. Three budgets must stay separate:
+Three budgets govern acceptance.
 
 | Budget | Question | Evidence currently available |
 | --- | --- | --- |
-| Gameplay interference | What changes in input/audio/frame tails and shared-resource pressure relative to the game-only baseline? | Historical scanout/graph observations E01; no accepted capture-on competitive non-inferiority result. |
-| Media freshness and continuity | How old is decoded content, and does it arrive with usable cadence and audio? | E16 is production-only synthetic ingress, local scene age and sampled game A/V, not live freshness enforcement or a deployment latency budget. S22 tightens the oracle; see [the follow-up](../evidence/pr3-review-20261117.md). |
-| Returned-audio latency and isolation | How long from a production-generated utterance/event to capture-host playback, and what happens on failure? | Not accepted. No transport, TTS-first sequence, expiry budget or latency number is selected by S21. |
+| Gameplay interference | What changes in input/audio/frame tails and shared-resource pressure relative to the game-only baseline? | Direct Scanout and local game audio survived sampled trials. Matched-workload acceptance remains open. |
+| Media freshness and continuity | How old is decoded content, and does it arrive with usable cadence and audio? | Production-only fixtures measure content and cadence. Real game recording is decodable and contains replay motion. Production render lag and physical A/V alignment remain open. |
+| Returned-audio latency and isolation | How long from a production-generated utterance/event to capture-host playback, and what happens on failure? | The real trial retained the 10-second truncation failure and complete playback under 25 seconds. No cross-host latency estimate was taken. [Physical receipt](../evidence/real-voicevox-physical-return.md) |
 
 ## Responsibility and dependency boundaries
 
@@ -66,7 +60,7 @@ local optional playback <---------------- computed speech/other returned audio
   typed command/validation contract remains useful; it does not require every
   PoC to add clients, GUI features, route graphs or persistent distributed state.
 
-## Current implementation is not the target's proof
+## Earlier source checkpoint
 
 Source checkpoint: PR #3 original head `8486e819ed6d95329a3bcfede4593a831747b300`;
 media execution belongs to `42a64e41990eb3a411dcd68e3412ccceac574112`.
@@ -74,7 +68,7 @@ Current follow-up changes are identified in [S22's receipt](../evidence/pr3-revi
 
 | Source fact at that checkpoint | What it means for the goal |
 | --- | --- |
-| [`agent.rs::prepare`](../../packages/splitcast-rs/src/agent.rs) refuses enabled EventSub, TTS or remote TTS mixing. Speech commands do not complete delivery/playback. | The required return path is missing, not optional merely because the current candidate refuses it. Preserve refusal until implemented and accepted separately. |
+| At the PR #3 checkpoint, Prepare refused enabled EventSub, TTS or remote TTS mixing. | PRs #13–#15 subsequently established owner-scoped speech delivery and physical playback. The live chat trial validated EventSub with the configured identity. |
 | [`media.rs::game/mic/tunnel`](../../packages/splitcast-rs/src/media.rs) launches GSR H.264/AAC, FFmpeg Opus, and loopback SSH local forwards for control/RTMP/RTSP. | The capture host still encodes; TCP/SSH freshness, overhead and cross-host clocks remain unaccepted. Current forwards are not a returned-audio implementation. |
 | [`obs.rs`](../../packages/splitcast-rs/src/obs.rs) configures OBS input decoding, composition and final encoding; [`media.rs::rnnoise`](../../packages/splitcast-rs/src/media.rs) feeds private production Pulse. | Existing dependencies implement the heavy production path. The software video mode is for the device-free fixture; hardware defaults do not establish competitive non-regression. |
 | [`tools/media_acceptance.py`](../../tools/media_acceptance.py) generates ingress on the production side. | It proves actual production integration only. It bypasses capture Agent, GSR acquisition and SSH. A stronger oracle does not expand that scope. |
@@ -104,6 +98,5 @@ Current follow-up changes are identified in [S22's receipt](../evidence/pr3-revi
   the observed output, not the control acknowledgement or a nominal setting.
 
 See [D01/D02/D06/D14 and dated D15/D16](decisions.md),
-[evidence scopes](evidence.md), [open risks](open-risks.md) and
-[the unique next-session entry](environment-gap.md). Private host mappings,
+[evidence scopes](evidence.md) and [open risks](open-risks.md). Private host mappings,
 access details and raw logs remain outside the public Wiki.

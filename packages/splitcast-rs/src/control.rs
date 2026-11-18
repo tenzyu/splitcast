@@ -200,14 +200,16 @@ fn recv_until(
     if h.get("origin").is_some_and(|o| o != &origin) {
         return Err(err("same-origin mismatch"));
     }
-    if h.get("origin") != Some(&origin) {
-        return Err(err("same-origin request required"));
-    }
-    let bearer = h
-        .get("authorization")
-        .ok_or_else(|| err("bearer token required"))?;
-    if !same(bearer, &format!("Bearer {token}")) {
-        return Err(err("invalid bearer token"));
+    if parts[0] != "GET" || crate::web::asset(parts[1]).is_none() {
+        if h.get("origin") != Some(&origin) {
+            return Err(err("same-origin request required"));
+        }
+        let bearer = h
+            .get("authorization")
+            .ok_or_else(|| err("bearer token required"))?;
+        if !same(bearer, &format!("Bearer {token}")) {
+            return Err(err("invalid bearer token"));
+        }
     }
     let count = if parts[0] == "POST" {
         if h.get("content-type").map(String::as_str) != Some("application/json") {
@@ -264,7 +266,7 @@ fn reply_bytes_until(
         503 => "Service Unavailable",
         _ => "Conflict",
     };
-    write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n\r\n", body.len())?;
+    write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\n\r\n", body.len())?;
     stream.write_all(body)?;
     stream.flush()
 }
@@ -439,8 +441,9 @@ mod tests {
 
     #[test]
     fn all_control_endpoints_require_loopback_origin_and_token() {
-        assert!(exchange("", "GET", "/", "").is_err());
+        assert!(exchange("", "GET", "/", "").is_ok());
         assert!(exchange("", "GET", "/api/status", "").is_err());
+        assert!(exchange("", "GET", "/app.js?extra", "").is_err());
         assert!(exchange("Origin: https://evil.invalid\r\n", "GET", "/", "").is_err());
         assert!(exchange("Host: evil.invalid\r\n", "GET", "/", "").is_err());
     }

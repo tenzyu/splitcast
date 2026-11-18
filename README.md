@@ -1,16 +1,20 @@
 # SplitCast
 
-SplitCast runs private OBS production on a second Linux host while osu! renders, handles input and plays its game audio on the capture host.
+SplitCast runs OBS production on a second Linux host while osu! renders, handles input and plays its game audio on the capture host.
 
 ```text
 osu! Direct Scanout + selected game audio → GSR/H.264/AAC → SSH → MediaMTX → OBS
 Selected ALSA microphone → FFmpeg/Opus → SSH → FFmpeg/RNNoise → private Pulse → OBS
+Selected V4L2 camera → FFmpeg/H.264 → OBS picture-in-picture
+OBS → private recording or Twitch RTMPS
 Twitch EventSub → VOICEVOX → owner-scoped SSH return → selected PipeWire playback
 ```
 
-The native CLI and two Agents arrange the lifecycle around these native tools. Prepare establishes the authenticated session. Media Prepare includes the private media receiver. Start owns video acquisition, the mic, private PulseAudio, OBS and a bounded recording. Speech-only Prepare opens a single control forward.
+The two Agents arrange the lifecycle around these native tools. Media Prepare establishes the authenticated session and its private receiver. Start owns video acquisition, the mic, the optional camera, private PulseAudio, OBS and one bounded output. Speech-only Prepare opens a single control forward.
 
-**Status.** The live two-host trial produced a decodable osu! recording and played an actual Twitch chat message on the capture host. Recording cadence under production rendering load, independently identified physical mic output, gameplay non-regression and clean OBS process exit remain acceptance gates. [Current evidence](docs/memory/session-state.md)
+Use the CLI, `splitcast --config FILE tui`, or the Web client at the Agent's loopback control address. All three use the same authenticated commands. Private recording is the default. Twitch bandwidth test and public broadcast are separate output selections. [Operation and configuration](docs/operations.md)
+
+**Status.** The live two-host trial produced a decodable osu! recording and played an actual Twitch chat message on the capture host. Follow-up trials verified physical camera composition, authenticated Web and TUI control, and Twitch private and public ingest. Production render cadence, independently identified physical mic output, gameplay non-regression and clean OBS exit remain acceptance gates. [Current evidence](docs/memory/session-state.md)
 
 ## Build and verify
 

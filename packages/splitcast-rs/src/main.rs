@@ -9,6 +9,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
+mod tui;
+
 static SIGNALLED: AtomicBool = AtomicBool::new(false);
 extern "C" fn signal_shutdown(_: i32) {
     SIGNALLED.store(true, Ordering::Relaxed);
@@ -142,7 +144,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
             i += 1;
         }
     }
-    let config=config.ok_or_else(||invalid("usage: splitcast --config FILE.toml agent|doctor|devices|routes|prepare|start|stop|status"))?;
+    let config=config.ok_or_else(||invalid("usage: splitcast --config FILE.toml agent|doctor|devices|routes|prepare|start|stop|status|tui"))?;
     if args.is_empty() {
         return Err(invalid("command required"));
     }
@@ -151,7 +153,7 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
     let mut destination = None;
     let mut offline = false;
     match command.as_str() {
-        "agent" | "validate" | "cleanup" | "stop" | "status" | "heartbeat" | "devices" => {}
+        "agent" | "validate" | "cleanup" | "stop" | "status" | "heartbeat" | "devices" | "tui" => {}
         "prepare" if args == ["--speech-only"] => {
             args.clear();
             payload["media"] = json!(false);
@@ -167,7 +169,9 @@ fn parse(mut args: Vec<String>) -> io::Result<Cli> {
             let output = if args.first().map(String::as_str) == Some("--output") {
                 args.remove(0);
                 if args.is_empty() {
-                    return Err(invalid("--output requires recording"));
+                    return Err(invalid(
+                        "--output requires recording, twitch-test, or twitch-live",
+                    ));
                 }
                 args.remove(0)
             } else if args.first().is_some_and(|s| s == "recording") {
@@ -271,6 +275,11 @@ fn run() -> io::Result<()> {
             return Ok(());
         }
         "agent" => return serve(cfg),
+        "tui" => {
+            return tui::run(io::stdin().lock(), io::stdout().lock(), |name, args| {
+                request(&cfg, name, args)
+            })
+        }
         "cleanup" => return agent::cleanup_after_exit(cfg),
         "doctor" if cli.offline => {
             println!("{}", agent::doctor(&cfg)?);

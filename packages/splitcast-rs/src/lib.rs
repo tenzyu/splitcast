@@ -19,3 +19,4 @@ mod eventsub;
 mod request;
 mod return_audio;
 mod server;
+mod web;

@@ -41,6 +41,7 @@ pub struct MediaObservation {
     pub bytes_received: u64,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
+    track_count: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -55,23 +56,30 @@ pub enum FeedKind {
     #[default]
     Game,
     Mic,
+    Camera,
 }
 
-pub struct ReceiveMonitor([(&'static str, MediaProgress); 2]);
-
-impl Default for ReceiveMonitor {
-    fn default() -> Self {
-        Self([
-            ("game", MediaProgress::new(FeedKind::Game)),
-            ("mic", MediaProgress::new(FeedKind::Mic)),
-        ])
-    }
+pub struct ReceiveMonitor {
+    game: MediaProgress,
+    mic: MediaProgress,
+    camera: Option<MediaProgress>,
 }
 
 impl ReceiveMonitor {
+    pub fn new(camera: bool) -> Self {
+        Self {
+            game: MediaProgress::new(FeedKind::Game),
+            mic: MediaProgress::new(FeedKind::Mic),
+            camera: camera.then(|| MediaProgress::new(FeedKind::Camera)),
+        }
+    }
+
     pub fn observe(&mut self, document: &str, now: Instant) -> io::Result<bool> {
         let mut healthy = true;
-        for (name, progress) in &mut self.0 {
+        for (name, progress) in [("game", &mut self.game), ("mic", &mut self.mic)]
+            .into_iter()
+            .chain(self.camera.iter_mut().map(|progress| ("camera", progress)))
+        {
             let sample = parse_media_observation(document, name)?;
             healthy &= progress.observe_at(&sample, now);
         }
@@ -105,6 +113,9 @@ impl MediaObservation {
                         && self.audio_codec.as_deref() == Some("MPEG-4 Audio")
                 }
                 FeedKind::Mic => self.audio_codec.as_deref() == Some("Opus"),
+                FeedKind::Camera => {
+                    self.video_codec.as_deref() == Some("H264") && self.track_count == 1
+                }
             }
     }
 }
@@ -174,6 +185,7 @@ pub fn parse_media_observation(json: &str, path: &str) -> io::Result<MediaObserv
         bytes_received,
         video_codec,
         audio_codec,
+        track_count: tracks.len(),
     })
 }
 pub fn run(exe: &str, args: &[&str]) -> io::Result<String> {
@@ -314,6 +326,11 @@ pub fn rnnoise(cfg: &Config) -> io::Result<Vec<String>> {
         "1".into(),
         "-f".into(),
         "pulse".into(),
+        // Keep the private playback buffer below the startup continuity budget.
+        "-buffer_duration".into(),
+        "100".into(),
+        "-prebuf".into(),
+        "1920".into(), // 20 ms at 48 kHz, mono s16le.
         "-stream_name".into(),
         "SplitCast processed microphone".into(),
         "-device".into(),
@@ -321,6 +338,81 @@ pub fn rnnoise(cfg: &Config) -> io::Result<Vec<String>> {
         "SplitCast processed microphone".into(),
     ])
 }
+pub(crate) fn camera(cfg: &Config) -> io::Result<Option<Vec<String>>> {
+    use std::os::unix::fs::FileTypeExt;
+    let Some(camera) = cfg
+        .camera
+        .as_ref()
+        .filter(|camera| camera.location == cfg.role)
+    else {
+        return Ok(None);
+    };
+    if !camera
+        .device
+        .metadata()
+        .is_ok_and(|m| m.file_type().is_char_device())
+    {
+        return Err(err("selected V4L2 camera is unavailable"));
+    }
+    let mut args = strings(&["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error"]);
+    if let Some(render) = camera
+        .render_device
+        .as_ref()
+        .filter(|_| camera.encoder == "h264_vaapi")
+    {
+        args.extend(strings(&["-vaapi_device", &render.to_string_lossy()]));
+    }
+    args.extend(strings(&[
+        "-f",
+        "v4l2",
+        "-input_format",
+        &camera.input_format,
+        "-video_size",
+        &format!("{}x{}", camera.width, camera.height),
+        "-framerate",
+        &camera.fps.to_string(),
+        "-i",
+        &camera.device.to_string_lossy(),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-c:v",
+        &camera.encoder,
+    ]));
+    match camera.encoder.as_str() {
+        "h264_vaapi" => args.extend(strings(&["-vf", "format=nv12,hwupload"])),
+        "libx264" => args.extend(strings(&[
+            "-pix_fmt",
+            "yuv420p",
+            "-threads",
+            "1",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+        ])),
+        _ => {}
+    }
+    if camera.encoder != "copy" {
+        args.extend(strings(&[
+            "-b:v",
+            "2M",
+            "-g",
+            &camera.fps.to_string(),
+            "-bf",
+            "0",
+        ]));
+    }
+    args.extend(strings(&[
+        "-f",
+        "rtsp",
+        "-rtsp_transport",
+        "tcp",
+        &format!("rtsp://127.0.0.1:{}/camera", cfg.rtsp),
+    ]));
+    Ok(Some(args))
+}
+
 pub fn tunnel(cfg: &Config, media: bool) -> Vec<String> {
     let mut a = vec!["ssh".into()];
     if let Some(file) = &cfg.ssh_config {
@@ -361,11 +453,18 @@ pub fn receiver(cfg: &Config) -> io::Result<Vec<String>> {
     fs::create_dir_all(root)?;
     let filename = root.join("mediamtx-rs.json");
     // All ports come from bounded unsigned integers and never from user shell.
-    let contents = format!(
-        r#"{{"logLevel":"warn","readTimeout":"5s","writeTimeout":"5s","writeQueueSize":128,"rtsp":true,"rtspAddress":"127.0.0.1:{}","rtspTransports":["tcp"],"rtmp":true,"rtmpAddress":"127.0.0.1:{}","api":true,"apiAddress":"127.0.0.1:{}","hls":false,"webrtc":false,"srt":false,"metrics":false,"pprof":false,"playback":false,"paths":{{"game":{{"source":"publisher"}},"mic":{{"source":"publisher"}}}}}}"#,
-        cfg.rtsp, cfg.rtmp, cfg.api
-    );
-    fs::write(&filename, contents)?;
+    let mut contents = serde_json::json!({
+        "logLevel":"warn","readTimeout":"5s","writeTimeout":"5s","writeQueueSize":128,
+        "rtsp":true,"rtspAddress":format!("127.0.0.1:{}",cfg.rtsp),"rtspTransports":["tcp"],
+        "rtmp":true,"rtmpAddress":format!("127.0.0.1:{}",cfg.rtmp),
+        "api":true,"apiAddress":format!("127.0.0.1:{}",cfg.api),
+        "hls":false,"webrtc":false,"srt":false,"metrics":false,"pprof":false,"playback":false,
+        "paths":{"game":{"source":"publisher"},"mic":{"source":"publisher"}}
+    });
+    if cfg.camera.is_some() {
+        contents["paths"]["camera"] = serde_json::json!({"source":"publisher"});
+    }
+    fs::write(&filename, contents.to_string())?;
     Ok(vec![
         "mediamtx".into(),
         filename.to_string_lossy().to_string(),
@@ -375,6 +474,7 @@ pub fn ready_output(buf: &str, name: &str) -> bool {
     let kind = match name {
         "game" => FeedKind::Game,
         "mic" => FeedKind::Mic,
+        "camera" => FeedKind::Camera,
         _ => return false,
     };
     parse_media_observation(buf, name).is_ok_and(|o| o.usable(kind))
@@ -456,11 +556,31 @@ pub(crate) fn devices_operation(
         }
     }
     result["errors"] = json!(errors);
+    let mut cameras: Vec<_> = fs::read_dir("/dev/v4l/by-id")
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.path().into_os_string().into_string().ok())
+        .collect();
+    cameras.sort();
+    result["cameras"] = json!(cameras);
     Ok(result)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_requires_only_one_h264_track() {
+        assert!(ready_output(
+            r#"{"items":[{"name":"camera","ready":true,"bytesReceived":200,"tracks":["H264"]}]}"#,
+            "camera"
+        ));
+        assert!(!ready_output(
+            r#"{"items":[{"name":"camera","ready":true,"bytesReceived":200,"tracks":["H264","G711"]}]}"#,
+            "camera"
+        ));
+    }
     #[test]
     fn receiver_api_needs_no_external_http_tool() {
         use std::{

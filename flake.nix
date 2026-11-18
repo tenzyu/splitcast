@@ -21,6 +21,7 @@
       default = splitcast;
       inherit splitcast;
       splitcast-rs-core = splitcast;
+      splitcast-web = splitcast;
       splitcast-obs = splitcast.obs;
       splitcast-obs-stock-candidate = pkgs.obs-studio.override {browserSupport = false;};
       splitcast-voicevox = voicevoxPkgs.voicevox-engine;

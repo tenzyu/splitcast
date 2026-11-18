@@ -231,6 +231,25 @@ pub enum ObsVideoMode {
 }
 
 #[derive(Clone, Debug)]
+pub struct Twitch {
+    pub ingest_host: String,
+    pub key_file: PathBuf,
+    pub allow_public: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Camera {
+    pub location: String,
+    pub device: PathBuf,
+    pub input_format: String,
+    pub encoder: String,
+    pub render_device: Option<PathBuf>,
+    pub width: u16,
+    pub height: u16,
+    pub fps: u16,
+}
+
+#[derive(Clone, Debug)]
 pub struct Config {
     pub document: String,
     pub role: String,
@@ -266,7 +285,10 @@ pub struct Config {
     pub obs_video_mode: ObsVideoMode,
     pub obs_port: u16,
     pub obs_password: PathBuf,
+    pub obs_bitrate: u16,
     pub recording_dir: PathBuf,
+    pub twitch: Option<Twitch>,
+    pub camera: Option<Camera>,
     pub tts_enabled: bool,
     pub voicevox_url: String,
     pub tts_speaker: u16,
@@ -363,6 +385,51 @@ impl Config {
         {
             return Err(error("EventSub requires production with speech enabled"));
         }
+        let twitch = if filename.get("twitch").is_some() {
+            if role != "production" {
+                return Err(error("Twitch broadcast settings belong to production"));
+            }
+            let key_file = path(get(filename, ".twitch.key_file")?);
+            if !key_file.is_absolute() {
+                return Err(error("Twitch key file must have an absolute path"));
+            }
+            Some(Twitch {
+                ingest_host: get(filename, ".twitch.ingest_host")?,
+                key_file,
+                allow_public: filename["twitch"]["allow_public"] == true,
+            })
+        } else {
+            None
+        };
+        let camera = if filename.get("camera").is_some() {
+            let location = get(filename, ".camera.location")?;
+            let device = filename["camera"]["device"].as_str().unwrap_or("");
+            let input_format = get(filename, ".camera.input_format")?;
+            let encoder = get(filename, ".camera.encoder")?;
+            let render_device = filename["camera"]["render_device"]
+                .as_str()
+                .map(PathBuf::from);
+            if role == location && device.is_empty() {
+                return Err(error("the camera host requires an explicit stable device"));
+            }
+            if (encoder == "copy") != (input_format == "h264")
+                || (role == location && encoder == "h264_vaapi" && render_device.is_none())
+            {
+                return Err(error("camera format and encoder do not match"));
+            }
+            Some(Camera {
+                location,
+                device: device.into(),
+                input_format,
+                encoder,
+                render_device,
+                width: number(filename, ".camera.width", 160, 3840)?,
+                height: number(filename, ".camera.height", 120, 2160)?,
+                fps: number(filename, ".camera.fps", 1, 60)?,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             document: document.clone(),
             role,
@@ -406,7 +473,10 @@ impl Config {
             },
             obs_port: number(filename, ".obs.websocket_port", 1024, 65535)?,
             obs_password: path(get(filename, ".obs.password_file")?),
+            obs_bitrate: number(filename, ".obs.bitrate_kbps", 1000, 10000)?,
             recording_dir: path(get(filename, ".obs.recording_dir")?),
+            twitch,
+            camera,
             tts_enabled: boolean(filename, ".tts.enabled")?,
             voicevox_url: get(filename, ".tts.voicevox_url")?,
             tts_speaker: number(filename, ".tts.speaker", 0, 10000)?,
@@ -434,6 +504,27 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_requires_a_stable_device_only_on_its_selected_role() {
+        let mut config: Value =
+            serde_json::from_str(include_str!("../tests/example.json")).unwrap();
+        config["camera"] = serde_json::json!({
+            "location":"capture","input_format":"mjpeg","encoder":"libx264",
+            "width":320,"height":180,"fps":15
+        });
+        let parse = |value: &Value| Config::parse(value.to_string().as_bytes());
+        assert!(parse(&config).is_err());
+        config["camera"]["device"] = "/dev/video0".into();
+        assert!(parse(&config).is_err());
+        config["camera"]["device"] = "/dev/v4l/by-id/usb-example-video-index0".into();
+        assert!(parse(&config).is_ok());
+        config["role"] = "production".into();
+        config["camera"].as_object_mut().unwrap().remove("device");
+        assert!(parse(&config).is_ok());
+        config["camera"]["encoder"] = "copy".into();
+        assert!(parse(&config).is_err());
+    }
 
     #[test]
     fn explicit_software_video_mode_is_accepted() {

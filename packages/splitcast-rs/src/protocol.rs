@@ -4,12 +4,16 @@ use std::io;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Output {
     Recording,
+    TwitchTest,
+    TwitchLive,
 }
 
 impl Output {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Recording => "recording",
+            Self::TwitchTest => "twitch-test",
+            Self::TwitchLive => "twitch-live",
         }
     }
 }
@@ -165,6 +169,8 @@ impl Invocation {
                     .unwrap_or("recording")
                 {
                     "recording" => Output::Recording,
+                    "twitch-test" => Output::TwitchTest,
+                    "twitch-live" => Output::TwitchLive,
                     _ => return Err(invalid()),
                 },
             ),

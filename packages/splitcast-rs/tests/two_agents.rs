@@ -46,11 +46,22 @@ impl Agent {
                 .spawn()
                 .unwrap(),
             port,
-            token: format!("virtual-{role}-private-token"),
+            token: fs::read_to_string(dir.join("token")).unwrap(),
             evidence: dir.to_path_buf(),
         };
         let end = Instant::now() + LIMIT;
-        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+        while !splitcast_rs_core::control::request(
+            port,
+            port,
+            &agent.token,
+            "status",
+            "{}",
+            Duration::from_millis(500),
+        )
+        .ok()
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .is_some_and(|body| body["role"] == role && body["state"] == "idle")
+        {
             assert!(
                 agent.child.try_wait().unwrap().is_none(),
                 "{role} exited: {}",
@@ -305,7 +316,8 @@ fi
                 fs::write(&path, text).unwrap();
                 fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
             }
-            private_file(&dir.join("token"), &format!("virtual-{role}-private-token"));
+            let fixture_id = root.file_name().unwrap().to_str().unwrap();
+            private_file(&dir.join("token"), &format!("virtual-{fixture_id}-{role}"));
             private_file(&dir.join("password"), PASSWORD);
             let mut cfg: Value = serde_json::from_str(include_str!("agent-example.json")).unwrap();
             cfg["role"] = json!(role);

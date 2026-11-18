@@ -116,6 +116,13 @@ splitcast --config ./capture.toml status
 splitcast --config ./capture.toml stop
 ```
 
+For the KMS trial, build the exact helper through NixOS
+`programs.gpu-screen-recorder` and restrict it to the capture user in a
+time-limited system unit. Record the active generation and current wrapper
+link before activation and verify both again after release. The trial
+used the NixOS-generated wrapper in a separate runtime directory under
+`/run/wrappers`.
+
 Keep the capture window visible on its authorized Direct Scanout output.
 Abort if scanout or the selected local game-audio links are lost. The Agent
 attempts normal finalization after 20 seconds and GNU timeout bounds the OBS
@@ -141,6 +148,67 @@ specific WSS subscription. `tts` reports separate subscription,
 admission and synthesis observations.
 [Twitch chat authorization](https://dev.twitch.tv/docs/eventsub/reference/chat#channel-chat-message) ·
 [Twitch device flow](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#device-code-grant-flow)
+
+### Camera and controls
+
+Use `splitcast --config FILE devices` to discover stable V4L2 paths.
+To enable the camera, configure the same location and video geometry on both
+Agents. Keep `device` on the role that opens it. Choose a format and frame rate
+reported by that device. The camera appears in the upper-right OBS inset.
+
+```toml
+[camera]
+location = "capture"
+device = "/dev/v4l/by-id/usb-example-video-index0"
+width = 320
+height = 180
+fps = 15
+input_format = "yuyv422"
+encoder = "libx264"
+```
+
+For native H.264 select `input_format = "h264"` and `encoder = "copy"`. When
+selecting `h264_vaapi`, specify the corresponding `render_device` on the
+camera host. Omit the camera section on both roles when the session has no
+camera. Speech-only Prepare leaves camera and media workers idle.
+
+Open `http://127.0.0.1:17870/` for the example capture Agent and enter its
+local control bearer. The browser holds the bearer in the current page only.
+Use the Web preview to examine the actual OBS composition. Run
+`splitcast --config FILE tui` for the terminal menu. While a terminal
+command is in flight, send Stop from a second terminal or from Web.
+
+### Twitch output
+
+Put the channel stream key in a private file owned by the production Agent
+user. Use a runtime path, with mode 0600, outside the Nix store. Configure
+the official RTMPS ingest host for the region on production.
+
+```toml
+[twitch]
+ingest_host = "apn10.contribute.live-video.net"
+key_file = "/run/user/1000/splitcast/stream-key"
+allow_public = false
+```
+
+At Start choose `--output twitch-test` to send an OBS stream to Twitch
+Inspector with viewing disabled. After authorizing publication on the
+selected channel, set `allow_public = true` on production and select
+`--output twitch-live`. Twitch chat authorization and the stream key are
+independent credentials. The production Agent requests Stop after 12 seconds
+for public output and 20 seconds for recording or bandwidth testing. Starting
+from OBS launch, the separate worker timeout sends TERM at 18 seconds for
+public output or 28 seconds for the other outputs, with a one-second kill
+fallback. Keep the runtime profile in a private trial directory and use a
+service with core dumps disabled.
+
+After Stop, confirm completed cleanup, including release of the private
+OBS profile. If the enclosing service had to be terminated, let its
+`ExecStopPost` run after the cgroup is empty, or run
+`splitcast --config FILE cleanup` after independently verifying worker
+termination. Dispose of the trial key file after verification.
+[Twitch broadcast documentation](https://dev.twitch.tv/docs/video-broadcast/) ·
+[Twitch ingest directory](https://ingest.twitch.tv/ingests)
 
 ## Stop and rollback
 

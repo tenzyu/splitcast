@@ -7,6 +7,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -42,6 +43,12 @@ fn transport(cfg: &config::Config, media: bool) -> Value {
             "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
             "ports":{"rtmp":cfg.rtmp,"rtsp":cfg.rtsp}
         });
+        if let Some(camera) = &cfg.camera {
+            contract["media"]["camera"] = json!({
+                "location":camera.location,"codec":"H264","width":camera.width,
+                "height":camera.height,"fps":camera.fps
+            });
+        }
     }
     if cfg.tts_enabled {
         contract["speech_return"] = json!({"version":1,"expiry_seconds":cfg.tts_expiry_seconds});
@@ -70,6 +77,18 @@ pub fn cleanup_after_exit(cfg: config::Config) -> io::Result<()> {
     let agent = Agent::new(cfg)?;
     if agent.cfg.role == "production" {
         crate::audio::cleanup_socket(&agent.cfg)?;
+        for entry in fs::read_dir(&agent.cfg.state_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.strip_prefix("obs-session-"))
+                    .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                fs::remove_dir_all(entry.path())?;
+            }
+        }
     }
     Ok(())
 }
@@ -87,7 +106,9 @@ struct Agent {
     last_health: Instant,
     output_observation: Option<obs::OutputStatus>,
     media_prepared: bool,
-    recording_deadline: Option<Instant>,
+    output_deadline: Option<Instant>,
+    obs_output: Option<Output>,
+    obs_state: Option<PathBuf>,
     speech_source: Option<return_audio::Source>,
     speech_receiver: Option<return_audio::Receiver>,
 }
@@ -132,7 +153,9 @@ impl Agent {
             last_health: Instant::now(),
             output_observation: None,
             media_prepared: false,
-            recording_deadline: None,
+            output_deadline: None,
+            obs_output: None,
+            obs_state: None,
             speech_source: None,
             speech_receiver: None,
         })
@@ -303,18 +326,25 @@ impl Agent {
         self.last_heartbeat = Instant::now();
         Ok(())
     }
-    fn start(&mut self, which: &str, owner: Option<&OwnerId>) -> io::Result<()> {
+    fn start(&mut self, output: Output, owner: Option<&OwnerId>) -> io::Result<()> {
         self.checkpoint()?;
-        if which != "recording" {
-            return Err(err("recording output required"));
-        }
         self.guard_lease(owner)?;
         if self.session.state() == Lifecycle::Running {
-            return if self.session.output().map(Output::as_str) == Some(which) {
+            return if self.session.output() == Some(output) {
                 Ok(())
             } else {
                 Err(err("stop before changing outputs"))
             };
+        }
+        if self.cfg.role == "production" && output != Output::Recording {
+            let twitch = self
+                .cfg
+                .twitch
+                .as_ref()
+                .ok_or_else(|| err("Twitch is not configured on production"))?;
+            if output == Output::TwitchLive && !twitch.allow_public {
+                return Err(err("public Twitch output is disabled on production"));
+            }
         }
         if self.session.state() == Lifecycle::Idle {
             if owner.is_some() {
@@ -331,32 +361,45 @@ impl Agent {
             return Err(err("stop the speech-only session before starting media"));
         }
         let outcome = (|| -> io::Result<()> {
+            if !media::missing_tools(&self.cfg, true, true).is_empty() {
+                return Err(err("required native media executables are missing"));
+            }
+            let camera = media::camera(&self.cfg)?;
             if self.cfg.role == "capture" {
-                if !media::missing_tools(&self.cfg, true, true).is_empty() {
-                    return Err(err("required capture executables are missing"));
-                }
                 let game = media::game(&self.cfg)?;
                 let microphone = media::mic(&self.cfg, self.operation.as_ref())?;
                 self.spawn(Worker::Game, game)?;
                 self.spawn(Worker::Microphone, microphone)?;
-                self.remote_request(&Command::Start(Output::Recording))?;
+                if let Some(argv) = camera {
+                    self.spawn(Worker::Camera, argv)?;
+                }
+                self.remote_request(&Command::Start(output))?;
             } else {
-                let mut monitor = media::ReceiveMonitor::default();
+                if let Some(argv) = camera {
+                    self.spawn(Worker::Camera, argv)?;
+                }
+                let mut monitor = media::ReceiveMonitor::new(self.cfg.camera.is_some());
                 self.wait_ready(|| {
                     media::receive_operation(&self.cfg, self.operation.as_ref())
                         .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
                 })?;
-                if !media::missing_tools(&self.cfg, true, true).is_empty() {
-                    return Err(err("required production media executables are missing"));
-                }
                 self.spawn(Worker::AudioServer, crate::audio::server(&self.cfg)?)?;
                 self.wait_ready(|| {
                     crate::audio::ready_operation(&self.cfg, self.operation.as_ref())
                         .unwrap_or(false)
                 })?;
+                let obs_state = self
+                    .cfg
+                    .state_dir
+                    .join(format!("obs-session-{}", rand_hex()?));
+                fs::create_dir(&obs_state)?;
+                self.obs_state = Some(obs_state.clone());
                 self.spawn(
                     Worker::Obs,
-                    crate::audio::client(&self.cfg, obs::launch_args(&self.cfg)?),
+                    crate::audio::client(
+                        &self.cfg,
+                        obs::launch_args(&self.cfg, &obs_state, output)?,
+                    ),
                 )?;
                 self.wait_ready(|| {
                     self.obs()
@@ -378,14 +421,18 @@ impl Agent {
                         .and_then(|mut o| o.game_decoded(&self.cfg))
                         .unwrap_or(false)
                 })?;
-                self.recording_deadline = Some(Instant::now() + Duration::from_secs(20));
-                o.start()?;
+                o.configure_output(&self.cfg, output)?;
+                let seconds = if output == Output::TwitchLive { 12 } else { 20 };
+                self.output_deadline = Some(Instant::now() + Duration::from_secs(seconds));
+                // A missing Start reply can leave the requested OBS output active.
+                self.obs_output = Some(output);
+                o.start(output)?;
                 self.wait_ready(|| {
                     media::receive_operation(&self.cfg, self.operation.as_ref())
                         .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
                         && self
                             .obs()
-                            .and_then(|mut o| o.observe())
+                            .and_then(|mut o| o.observe(output))
                             .is_ok_and(|status| {
                                 status.active
                                     && status.bytes.is_some_and(|bytes| bytes > 0)
@@ -393,7 +440,7 @@ impl Agent {
                             })
                 })?;
                 self.receive_monitor = Some(monitor);
-                self.output_observation = Some(self.obs()?.observe()?);
+                self.output_observation = Some(self.obs()?.observe(output)?);
             }
             Ok(())
         })();
@@ -402,7 +449,7 @@ impl Agent {
         }
         self.checkpoint().map_err(|e| self.fail(e))?;
         self.session
-            .start(Output::Recording)
+            .start(output)
             .map_err(|_| err("start lifecycle error"))?;
         self.last_health = Instant::now();
         if let Some(o) = owner {
@@ -421,7 +468,7 @@ impl Agent {
         result
     }
     fn cleanup_owned(&mut self) -> io::Result<()> {
-        self.recording_deadline = None;
+        self.output_deadline = None;
         self.receive_monitor = None;
         self.output_observation = None;
         self.speech_source.take(); // cancels and joins any synthesis worker
@@ -435,8 +482,11 @@ impl Agent {
                 }
             }
         }
-        if self.cfg.role == "production" && self.children.contains(Worker::Obs) {
-            failed |= self.obs().and_then(|mut o| o.stop()).is_err();
+        if let Some(output) = self
+            .obs_output
+            .filter(|_| self.children.contains(Worker::Obs))
+        {
+            failed |= self.obs().and_then(|mut o| o.stop(output)).is_err();
         }
         if self.session.remote_owner().is_some() {
             let release = (|| -> io::Result<()> {
@@ -481,6 +531,16 @@ impl Agent {
             }
         }
         failed |= self.children.stop_all(Duration::from_millis(200)).is_err();
+        if !self.children.contains(Worker::Obs) {
+            self.obs_output = None;
+            if let Some(directory) = &self.obs_state {
+                match fs::remove_dir_all(directory) {
+                    Ok(()) => self.obs_state = None,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => self.obs_state = None,
+                    Err(_) => failed = true,
+                }
+            }
+        }
         if self.cfg.role == "production" && crate::audio::cleanup_socket(&self.cfg).is_err() {
             failed = true;
         }
@@ -530,11 +590,11 @@ impl Agent {
     fn tick(&mut self) {
         self.expire_lease();
         if self
-            .recording_deadline
+            .output_deadline
             .is_some_and(|end| end <= Instant::now())
         {
             if self.stop(None).is_err() {
-                self.warn("recording budget elapsed; cleanup is incomplete");
+                self.warn("output budget elapsed; cleanup is incomplete");
             }
             return;
         }
@@ -573,7 +633,11 @@ impl Agent {
                     {
                         return Ok(false);
                     }
-                    let current = self.obs()?.observe()?;
+                    let output = self
+                        .session
+                        .output()
+                        .ok_or_else(|| err("owned output unavailable"))?;
+                    let current = self.obs()?.observe(output)?;
                     let progressing = self.output_observation.as_ref().is_some_and(|previous| {
                         current.active
                             && current
@@ -654,7 +718,7 @@ impl Agent {
             Command::Heartbeat=>{self.renew_lease(owner.ok_or_else(||err("production owner required"))?)?;Ok(self.status())},
             Command::Doctor=>doctor(&self.cfg),
             Command::Prepare{media}=>{self.prepare(owner, media)?;Ok(self.status())},
-            Command::Start(output)=>{self.start(output.as_str(),owner)?;Ok(self.status())},
+            Command::Start(output)=>{self.start(output,owner)?;Ok(self.status())},
             Command::Stop=>{self.stop(owner)?;Ok(self.status())},
             Command::Diagnostics=>Ok(json!({"version":1,"role":self.cfg.role,"state":json_state(self.session.state()),"output":self.session.output().map(Output::as_str),"children":self.children.names(),"mic_muted":self.mic_muted,"retries":0}).to_string()),
             Command::Routes{media}=>Ok(json!({"transport": transport(&self.cfg,media)}).to_string()),
@@ -1058,10 +1122,10 @@ mod tests {
         let mut agent = prepared_agent();
         agent.session.start(Output::Recording).unwrap();
         assert!(
-            agent.start("recording", None).is_ok(),
+            agent.start(Output::Recording, None).is_ok(),
             "repeated recording start was refused"
         );
-        assert!(agent.start("twitch", None).is_err());
+        assert!(agent.start(Output::TwitchLive, None).is_err());
         assert_eq!(agent.session.output(), Some(Output::Recording));
     }
 

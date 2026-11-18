@@ -30,7 +30,7 @@ AUDIO_SECONDS = 45
 AUDIO_FREQUENCIES = tuple(440 + 40 * second for second in range(AUDIO_SECONDS))
 GAME_AUDIO = "aevalsrc='0.18*sin(2*PI*(440+40*floor(t))*t)':s=48000"
 MIC_AUDIO = "aevalsrc=0.15*(sin(2*PI*180*t)+0.5*sin(2*PI*360*t)+0.3*sin(2*PI*540*t)):s=48000"
-CASES = ("normal", "frozen", "delay", "disconnect", "stall", "worker-death")
+CASES = ("normal", "camera", "frozen", "delay", "disconnect", "stall", "worker-death")
 LIMITS = {
     "record_seconds": 10,
     "duration_min": 9,
@@ -410,7 +410,7 @@ class Run:
         finally:
             os.close(read_fd)
 
-    def prepare(self):
+    def prepare(self, *, camera=False):
         ports = free_ports(6)
         self.port = ports[0]
         self.ports = ports
@@ -431,6 +431,9 @@ class Run:
         config["obs"].update({"binary": "obs", "websocket_port": ports[5], "video_mode": "software",
                               "password_file": str(self.directory / "password"),
                               "recording_dir": str(self.directory / "recordings")})
+        if camera:
+            config["camera"] = {"location": "capture", "width": 320, "height": 180,
+                                "fps": 15, "input_format": "h264", "encoder": "copy"}
         self.config = config
         write_json(self.directory / "config.json", config)
         self.agent = self.spawn("agent", [str(self.binary), "--config", str(self.directory / "config.json"), "agent"])
@@ -518,6 +521,8 @@ class Run:
         pulse = self.directory / "state/production/production-audio/native.sock"
         if pulse.exists():
             errors.append("private Pulse socket survives")
+        if list((self.directory / "state/production").glob("obs-session-*")):
+            errors.append("private OBS profile survives")
         write_json(self.directory / "commands.json", self.commands)
         write_json(self.directory / "cleanup.json", {"errors": errors, "children": [
             {"name": name, "pid": child.pid, "returncode": child.poll()} for name, child in self.children]})
@@ -699,9 +704,15 @@ def scenario(directory, binary, case, epoch):
     result = {"case": case, "result": "FAIL", "limits": LIMITS}
     try:
         run.display()
-        run.prepare()
+        run.prepare(camera=case == "camera")
         source = Source(run, epoch, frozen=case == "frozen",
                         backlog_seconds=LIMITS["backlog_delay_seconds"] if case == "delay" else 0)
+        if case == "camera":
+            run.spawn("camera", ["ffmpeg", "-v", "error", "-nostdin", "-re", "-f", "lavfi",
+                                 "-i", "color=red:s=320x180:r=15", "-an", "-c:v", "libx264",
+                                 "-threads", "1", "-preset", "ultrafast", "-tune", "zerolatency",
+                                 "-t", str(LIMITS["source_seconds"]), "-f", "rtsp", "-rtsp_transport", "tcp",
+                                 f"rtsp://127.0.0.1:{run.ports[3]}/camera"])
         require(run.control("start", {"output": "recording"})["state"] == "running", "Start did not reach Running")
         run.observe_resources()
         samples, counters = [], []
@@ -774,6 +785,14 @@ def scenario(directory, binary, case, epoch):
                     "live scene exceeded freshness envelope")
             result["decoded"] = inspect_recording(run, recordings[0], epoch,
                                                    fault_tail=case in ("disconnect", "stall", "worker-death"))
+        if case == "camera":
+            pixel = run.tool(["ffmpeg", "-v", "error", "-ss", "2", "-i", str(recordings[0]),
+                              "-vf", "crop=2:2:1100:96", "-frames:v", "1", "-pix_fmt", "rgb24",
+                              "-f", "rawvideo", "pipe:1"])
+            require(len(pixel) == 12, "camera crop missing from decoded recording")
+            require(all(r > 210 and g < 40 and b < 40 for r, g, b in zip(pixel[::3], pixel[1::3], pixel[2::3])),
+                    "camera fixture colour missing from the expected scene inset")
+            result["camera_composition"] = {"pixel": [1100, 96], "rgb": list(pixel[:3])}
         if case == "normal":
             delayed = directory / "bad-av-offset.mkv"
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-itsoffset",

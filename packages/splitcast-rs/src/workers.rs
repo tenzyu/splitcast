@@ -6,6 +6,7 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Worker {
     Game,
+    Camera,
     Microphone,
     Rnnoise,
     Obs,
@@ -17,6 +18,7 @@ impl Worker {
     pub fn name(self) -> &'static str {
         match self {
             Self::Game => "game",
+            Self::Camera => "camera",
             Self::Microphone => "mic",
             Self::Rnnoise => "rnnoise",
             Self::Obs => "obs",
