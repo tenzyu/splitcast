@@ -106,8 +106,10 @@ class WaylandStudio(gui.Studio):
     def edit(self, label, value):
         self.click(label)
         env = {name: value for name, value in self.env.items() if name != "WAYLAND_DEBUG"}
-        subprocess.run(["wtype", "-M", "ctrl", "-k", "a", "-m", "ctrl", "--", value],
-                       env=env, check=True, timeout=5)
+        # Clear the bounded overlay field using editing keys. The virtual
+        # keyboard's generated keymap can deliver Ctrl+A as ordinary text.
+        keys = ["-k", "End"] + ["-k", "BackSpace"] * 80
+        subprocess.run(["wtype", *keys, "--", value], env=env, check=True, timeout=5)
         time.sleep(0.15)
 
 
@@ -270,6 +272,9 @@ for_window [app_id="^splitcast-focus-fixture$"] floating enable, move position 1
             studio.wait("active=false | chat=128", after=mark, seconds=6)
         except AssertionError:
             assert studio.process.poll() is None, studio.lines()[-10:]
+        else:
+            gui.eventually(lambda: len(relay.times("preview-small")) > preview_at,
+                           "preview while Studio is visible and unfocused", seconds=3)
         _, after_tree = focused_elsewhere()
         store(self.evidence / "unfocused-tree-after.json", after_tree)
         after = self.screenshot(studio.env, "unfocused-after")

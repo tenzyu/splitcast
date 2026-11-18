@@ -397,9 +397,9 @@ def verify(studio_bin=None, *, display=display, studio_type=Studio, idle=sample_
         direct.wait("Idle")
         direct.wait("Local draft")
         direct.click("Apply")
-        eventually(lambda: okay("production", "scene")["draft"]["overlay"]["text"] == "Private fixture draft",
-                   "offline draft applied in Idle")
         direct.wait("Agent draft · unsaved")
+        applied = okay("production", "scene")["draft"]["overlay"]["text"]
+        assert applied == "Private fixture draft", f"offline draft after Apply: {applied!r}"
         budget = idle(direct)
         assert not production_relay.times("preview-small"), "Idle preview request"
         old_camera = okay("production", "scene")["draft"]["camera"]

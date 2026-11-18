@@ -44,22 +44,28 @@ includes the Agent's release of its remote ownership obligation. An unknown
 result calls for inspecting Status or reading the Agent scene before issuing
 another command. Closing Studio leaves the Agent session active.
 
-The preview requests owned OBS snapshots only in a Running session while
-the window is active and both Preview and Scene Editor are shown. The
-display accepts at most 480 × 270 pixels, at most once per second. The
+The preview requests owned OBS snapshots in a Running session while Studio
+is visible and both Preview and Scene Editor are shown. The display accepts
+at most 480 × 270 pixels, at most once per second. The
 camera and overlay outlines are draft placement guides. Confirmed
-coordinates appear as OBS readback in the editor. Chat fetches one cursor
-delta at a time in its active view, backs off on empty deltas, and retains
-at most 128 rows.
+coordinates appear as OBS readback in the editor. Visible chat fetches one
+cursor delta at a time, backs off on empty pages, and retains at most
+128 rows. Both readers continue when another application has keyboard
+focus. They pause when Studio is hidden, when the window backend reports
+occlusion, or when their panels are closed. The pinned Winit backend does
+not report compositor occlusion on Wayland.
 
 ## Local development
 
 ```sh
 nix develop .#studio -c cargo test --manifest-path packages/splitcast-studio/Cargo.toml --locked
+nix develop .#studio-wayland-test -c python3 packages/splitcast-studio/tests/wayland.py --evidence artifacts/studio-wayland/replay
 nix develop .#studio-test -c python3 packages/splitcast-studio/tests/gui.py
 ```
 
-The GUI fixture runs its own authenticated Xvfb display, local Agents and
-stand-in workers. Its display trace contains status labels, redraw events
-and test coordinates. The [verification record](../../docs/verification.md)
+The Wayland fixture launches its own headless Sway compositor with Pixman
+and Xwayland disabled. It tests a focus handoff to a second native client
+while both windows are visible, captures the chat region, and records
+process PSS and CPU. Both GUI fixtures use isolated Agents and local
+stand-in workers. The [verification record](../../docs/verification.md)
 tracks the measured environment and gates.
