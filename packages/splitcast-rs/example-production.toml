@@ -45,7 +45,8 @@ password_file = "~/.config/splitcast/obs.password"
 recording_dir = "~/Videos/SplitCast"
 bitrate_kbps = 6000
 video_mode = "hardware" # NVIDIA-backed isolated display and OBS encoder required.
-separate_audio_tracks = true # Private MKV tracks 1 mix, 2 game, 3 processed mic.
+separate_audio_tracks = true
+# overlay_text = "テスト中だよー"  # Install Noto Sans CJK JP on production. # Private MKV tracks 1 mix, 2 game, 3 processed mic.
 
 [tts]
 enabled = false # Enable on both hosts with the same expiry for speech return.

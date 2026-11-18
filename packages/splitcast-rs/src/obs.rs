@@ -451,6 +451,30 @@ impl Obs {
             "SetInputAudioMonitorType",
             "{\"inputName\":\"MicProcessed\",\"monitorType\":\"OBS_MONITORING_TYPE_NONE\"}",
         )?;
+        if let Some(text) = &cfg.overlay_text {
+            self.input(
+                "SplitCastOverlay",
+                "text_ft2_source_v2",
+                json!({
+                    "text": text, "from_file": false,
+                    "font": {"face": "Noto Sans CJK JP", "style": "Bold", "size": 32, "flags": 1},
+                    "outline": true, "drop_shadow": true,
+                }),
+            )?;
+            let id = self.scene_item("SplitCastOverlay")?;
+            self.call(
+                "SetSceneItemTransform",
+                &json!({
+                    "sceneName":"SplitCast","sceneItemId":id,"sceneItemTransform":{
+                        "alignment":5,"positionX":16,"positionY":16,
+                        "boundsType":"OBS_BOUNDS_SCALE_INNER","boundsAlignment":5,
+                        "boundsWidth": cfg.width.saturating_mul(3)/4 - 32,
+                        "boundsHeight": 64
+                    }
+                })
+                .to_string(),
+            )?;
+        }
         self.call("SetCurrentProgramScene", "{\"sceneName\":\"SplitCast\"}")?;
         Ok(())
     }

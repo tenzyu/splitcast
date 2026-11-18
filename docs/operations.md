@@ -237,6 +237,13 @@ accepts an explicit `--id`. Concurrent speech can invalidate the ID. If
 admission is rejected, inspect `tts` status before deciding whether to
 submit a new utterance. A lost response leaves speech admission unknown.
 
+### Broadcast overlay
+
+On production, install the Noto Sans CJK JP font and set `obs.overlay_text`
+to one line of up to 80 characters, for example `テスト中だよー`. The Agent
+adds the text to the upper-left of the OBS scene during Start. Inspect it in
+Web preview during a private recording before selecting public output.
+
 ### Twitch output
 
 Put the channel stream key in a private file owned by the production Agent

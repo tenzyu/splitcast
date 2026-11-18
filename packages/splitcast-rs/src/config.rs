@@ -279,6 +279,7 @@ pub struct Config {
     pub(crate) obs_password: PathBuf,
     pub(crate) obs_bitrate: u16,
     pub(crate) separate_audio_tracks: bool,
+    pub(crate) overlay_text: Option<String>,
     pub(crate) recording_dir: PathBuf,
     pub(crate) twitch: Option<Twitch>,
     pub(crate) camera: Option<Camera>,
@@ -348,6 +349,20 @@ impl Config {
         }
         let filename = &value;
         let role = get(filename, ".role")?;
+        let overlay_text = filename["obs"]["overlay_text"]
+            .as_str()
+            .map(|text| {
+                if role != "production"
+                    || text.trim().is_empty()
+                    || text.chars().any(char::is_control)
+                {
+                    return Err(error(
+                        "OBS overlay text must be a nonempty single line on production",
+                    ));
+                }
+                Ok(text.to_owned())
+            })
+            .transpose()?;
         let ssh_host = get(filename, ".peer.ssh_host")?;
         if ssh_host.len() > 253
             || !ssh_host
@@ -486,6 +501,7 @@ impl Config {
             obs_password: path(get(filename, ".obs.password_file")?),
             obs_bitrate: number(filename, ".obs.bitrate_kbps", 1000, 10000)?,
             separate_audio_tracks: filename["obs"]["separate_audio_tracks"] == true,
+            overlay_text,
             recording_dir: path(get(filename, ".obs.recording_dir")?),
             twitch,
             camera,
