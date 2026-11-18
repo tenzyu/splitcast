@@ -4,6 +4,10 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-18 repository skill verification
+
+[S34](evidence/wiki-context-skill.md) records T3 discovery, matched reader answers, independent scoring, measured cost and the scoped checks.
+
 ## 2026-11-18 agent retrieval verification
 
 [S33](evidence/dreaming-retrieval-20261118.md) records the source identities, two-reader comparison, documentation checks and their limits. The [question set and scoring criteria](evidence/retrieval-questions.md) are for evaluation outside normal startup.

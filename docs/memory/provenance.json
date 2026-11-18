@@ -28,7 +28,7 @@
     },
     "docs/memory/evidence.md": {
       "kind": "reference",
-      "sources": ["docs/verification.md", "docs/evidence/dreaming-retrieval-20261118.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/evidence/real-voicevox-physical-return.md"]
+      "sources": ["docs/verification.md", "docs/evidence/dreaming-retrieval-20261118.md", "docs/evidence/wiki-context-skill.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/evidence/real-voicevox-physical-return.md"]
     },
     "docs/memory/log.md": {
       "kind": "reference",
@@ -36,7 +36,7 @@
     },
     "docs/memory/open-risks.md": {
       "kind": "current",
-      "sources": ["docs/design-review.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/verification.md", "packages/splitcast-rs/src/process.rs", "packages/splitcast-rs/src/obs.rs", "packages/splitcast-rs/tests/two_agents.rs", "docs/virtual-control-design.md", "docs/operations.md"]
+      "sources": ["docs/design-review.md", "docs/evidence/pr16-managed-acceptance.md", "docs/evidence/pr16-obs.md", "docs/verification.md", "packages/splitcast-rs/src/agent.rs", "packages/splitcast-rs/src/lifecycle.rs", "packages/splitcast-rs/src/process.rs", "packages/splitcast-rs/src/obs.rs", "packages/splitcast-rs/tests/two_agents.rs", "docs/virtual-control-design.md", "docs/operations.md"]
     },
     "docs/memory/proposed-revisions.md": {
       "kind": "current",
