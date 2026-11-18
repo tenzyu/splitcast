@@ -19,6 +19,8 @@ from PIL import Image, ImageChops, ImageDraw
 
 import gui
 
+OUTPUT_SIZE = (1740, 920)
+
 
 def store(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
@@ -48,40 +50,56 @@ def command(env, commands):
     assert result and all(item["success"] for item in result), (commands, result)
 
 
-def attach_virtual_pointer(stack, display):
-    # Keep a Wayland virtual pointer attached for the lifetime of the fixture.
-    # Sway's cursor IPC drives that seat without opening any input device.
-    peer = stack.enter_context(socket.socket(socket.AF_UNIX))
-    peer.settimeout(5)
-    peer.connect(str(display))
-    stream = stack.enter_context(peer.makefile("rb"))
+class VirtualPointer:
+    """The fixture's private zwlr_virtual_pointer_v1 uses its fallback seat."""
+    pointer = 5
 
-    def send(sender, opcode, payload):
-        peer.sendall(struct.pack("=II", sender, ((8 + len(payload)) << 16) | opcode) + payload)
+    def __init__(self, stack, display):
+        self.peer = stack.enter_context(socket.socket(socket.AF_UNIX))
+        self.peer.settimeout(5)
+        self.peer.connect(str(display))
+        stream = stack.enter_context(self.peer.makefile("rb"))
+        registry, callback, manager = 2, 3, 4
+        self.send(1, 1, struct.pack("=I", registry))  # wl_display.get_registry
+        self.send(1, 0, struct.pack("=I", callback))  # wl_display.sync
+        interface = b"zwlr_virtual_pointer_manager_v1\0"
+        global_name = None
+        while True:
+            sender, header = struct.unpack("=II", stream.read(8))
+            opcode, length = header & 0xffff, header >> 16
+            body = stream.read(length - 8)
+            if sender == callback:  # wl_callback.done
+                break
+            if sender == registry and opcode == 0:  # wl_registry.global
+                name, size = struct.unpack_from("=II", body)
+                if body[8:8 + size] == interface:
+                    global_name = name
+        assert global_name is not None, "private compositor lacks the Wayland virtual pointer protocol"
+        padded = interface + bytes(-len(interface) % 4)
+        self.send(registry, 0, struct.pack("=II", global_name, len(interface)) + padded
+                  + struct.pack("=II", 1, manager))  # wl_registry.bind, version 1
+        self.send(manager, 0, struct.pack("=II", 0, self.pointer))  # create_virtual_pointer
 
-    registry, callback, manager, pointer = 2, 3, 4, 5
-    send(1, 1, struct.pack("=I", registry))  # wl_display.get_registry
-    send(1, 0, struct.pack("=I", callback))  # wl_display.sync
-    interface = b"zwlr_virtual_pointer_manager_v1\0"
-    global_name = None
-    while True:
-        sender, header = struct.unpack("=II", stream.read(8))
-        opcode, length = header & 0xffff, header >> 16
-        body = stream.read(length - 8)
-        if sender == callback:  # wl_callback.done
-            break
-        if sender == registry and opcode == 0:  # wl_registry.global
-            name, size = struct.unpack_from("=II", body)
-            if body[8:8 + size] == interface:
-                global_name = name
-    assert global_name is not None, "private compositor lacks the Wayland virtual pointer protocol"
-    padded = interface + bytes(-len(interface) % 4)
-    send(registry, 0, struct.pack("=II", global_name, len(interface)) + padded
-         + struct.pack("=II", 1, manager))  # wl_registry.bind, version 1
-    send(manager, 0, struct.pack("=II", 0, pointer))  # create_virtual_pointer, fallback seat
+    def send(self, sender, opcode, payload=b""):
+        self.peer.sendall(struct.pack("=II", sender, ((8 + len(payload)) << 16) | opcode) + payload)
+
+    def event(self, opcode, *args):
+        milliseconds = (time.monotonic_ns() // 1_000_000) & 0xffffffff
+        self.send(self.pointer, opcode, struct.pack("=" + "I" * (len(args) + 1), milliseconds, *args))
+        self.send(self.pointer, 4)  # frame
+
+    def move(self, x, y):
+        self.event(1, x, y, *OUTPUT_SIZE)  # motion_absolute
+
+    def button(self, pressed):
+        self.event(2, 272, int(pressed))  # button, Linux BTN_LEFT
 
 
 class WaylandStudio(gui.Studio):
+    def __init__(self, *args, pointer):
+        self.pointer = pointer
+        super().__init__(*args)
+
     def focus_window(self):
         self.window = gui.eventually(lambda: window(self.env, self.process.pid),
                                      "native Studio xdg_toplevel")
@@ -94,14 +112,16 @@ class WaylandStudio(gui.Studio):
         return rect["x"] + client["x"] + x, rect["y"] + client["y"] + y
 
     def click(self, label):
-        x, y = self.point(label)
-        command(self.env, f"seat seat0 cursor set {x} {y}; "
-                          "seat seat0 cursor press button1; seat seat0 cursor release button1")
+        self.pointer.move(*self.point(label))
+        self.pointer.button(True)
+        self.pointer.button(False)
 
     def drag(self, label, dx, dy):
         x, y = self.point(label)
-        command(self.env, f"seat seat0 cursor set {x} {y}; seat seat0 cursor press button1; "
-                          f"seat seat0 cursor set {x + dx} {y + dy}; seat seat0 cursor release button1")
+        self.pointer.move(x, y)
+        self.pointer.button(True)
+        self.pointer.move(x + dx, y + dy)
+        self.pointer.button(False)
 
     def edit(self, label, value):
         self.click(label)
@@ -125,8 +145,9 @@ class Acceptance:
 <dir>{os.environ["SPLITCAST_TEST_FONTS"]}</dir><cachedir>{root / "font-cache"}</cachedir>
 </fontconfig>""")
         config = root / "sway.conf"
-        config.write_text("""xwayland disable
-output * mode 1740x920
+        width, height = OUTPUT_SIZE
+        config.write_text(f"""xwayland disable
+output * mode {width}x{height}
 focus_follows_mouse no
 default_border none
 default_floating_border none
@@ -158,11 +179,11 @@ for_window [app_id="^splitcast-focus-fixture$"] floating enable, move position 1
         outputs = sway(env, "-t", "get_outputs")
         active = [item for item in outputs if item["active"]]
         assert len(active) == 1 and active[0]["name"].startswith("HEADLESS-"), active
-        assert (active[0]["rect"]["width"], active[0]["rect"]["height"]) == (1740, 920)
+        assert (active[0]["rect"]["width"], active[0]["rect"]["height"]) == OUTPUT_SIZE
         store(self.evidence / "outputs.json", outputs)
         # The headless backend has no physical seat devices. Keep a native
         # virtual keyboard attached so wl_keyboard enter/leave are observable.
-        attach_virtual_pointer(stack, display)
+        self.pointer = VirtualPointer(stack, display)
         keyboard = gui.spawn(stack, ["wtype", "-k", "Shift_L", "-s", "300000"], env,
                              self.evidence / "virtual-keyboard.log")
         gui.eventually(lambda: {"keyboard", "pointer"} <= {
@@ -177,6 +198,9 @@ for_window [app_id="^splitcast-focus-fixture$"] floating enable, move position 1
 
         stack.callback(preserve)
         return env
+
+    def studio(self, *args):
+        return WaylandStudio(*args, pointer=self.pointer)
 
     def sample(self, studio, name):
         # Use one-second PSS samples and process (all threads) CPU ticks.
@@ -346,7 +370,7 @@ def main():
     source["sha256"] = {path.name: digest(path) for path in (binary, wrapped) if path.is_file()}
     store(evidence / "source.json", source)
     test = Acceptance(evidence)
-    gui.verify(str(binary), display=test.display, studio_type=WaylandStudio,
+    gui.verify(str(binary), display=test.display, studio_type=test.studio,
                idle=test.idle, unfocused=test.unfocused)
 
 
