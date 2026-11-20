@@ -895,7 +895,9 @@ fn delayed_prepare_control_case(command: &str, test_name: &str) {
         })),
     };
     let args = if command == "prepare" {
-        json!({"_owner":"lease-owner"})
+        let routes = response(send(port, "routes", json!({})));
+        let revision = routes["prepare_id"].as_str().unwrap();
+        json!({"_owner":format!("{revision}-{:032x}", 1)})
     } else {
         json!({})
     };
