@@ -271,7 +271,7 @@ fn connection(
         matches!(invocation.command, Command::Status).then(|| invocation.owner.clone());
     let observe_cleanup = || {
         let owner = status_owner.as_ref()?;
-        match config.control.status_during_cleanup(owner.as_ref()) {
+        match config.control.try_status_during_cleanup(owner.as_ref()) {
             Ok(status) => status.map(|body| (200, body)),
             Err(error) => Some((409, serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string())),
         }

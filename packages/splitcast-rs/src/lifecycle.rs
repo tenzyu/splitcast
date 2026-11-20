@@ -3,7 +3,7 @@ use crate::protocol::{OwnerId, RemoteOwner, StopProof};
 use crate::request::{error_response, rejected, Failure, RequestTicket, Response};
 use crate::supervision::{Fault, MAX_SAMPLE_AGE};
 use crate::Output;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 use std::{fmt, io};
 
@@ -570,11 +570,17 @@ impl SessionControl {
     pub(crate) fn stop_completed(&self) -> bool {
         matches!(self.lock().stop, Some(StopRecord::Completed { .. }))
     }
-    pub(crate) fn status_during_cleanup(
+    pub(crate) fn try_status_during_cleanup(
         &self,
         owner: Option<&OwnerId>,
     ) -> std::io::Result<Option<String>> {
-        let state = self.lock();
+        // A queued Status may already have a completed response. Probing
+        // cleanup metadata must never wait for the control lock and delay it.
+        let state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => return Ok(None),
+        };
         let Some(intent) = state.pending_stop() else {
             let Phase::Failed {
                 authority,
@@ -943,12 +949,15 @@ impl Session {
         {
             return Err(Self::error(&state.phase, "fail"));
         }
-        state
-            .advance_generation()
-            .map_err(|_| Self::error(&state.phase, "control generation exhausted"))?;
+        let compensating = state.phase.observation_fault(Instant::now());
+        if compensating.is_some() {
+            state
+                .advance_generation()
+                .map_err(|_| Self::error(&state.phase, "control generation exhausted"))?;
+        }
         state.phase = Phase::Failed {
             authority: state.phase.authority().unwrap().clone(),
-            compensating: state.phase.observation_fault(Instant::now()),
+            compensating,
         };
         Ok(())
     }
@@ -1112,7 +1121,8 @@ mod tests {
         intent.since = Instant::now() - STOP_OBSERVATION_BUDGET;
         drop(state);
         let snapshot: serde_json::Value =
-            serde_json::from_str(&control.status_during_cleanup(None).unwrap().unwrap()).unwrap();
+            serde_json::from_str(&control.try_status_during_cleanup(None).unwrap().unwrap())
+                .unwrap();
         assert_eq!(snapshot["state"], "stopping");
         assert_eq!(snapshot["cleanup"], "unknown");
         assert_eq!(snapshot["outcome"], "unknown");
@@ -1189,7 +1199,7 @@ mod tests {
         session.stopped().unwrap();
         let pending: serde_json::Value = serde_json::from_str(
             &control
-                .status_during_cleanup(Some(&owner))
+                .try_status_during_cleanup(Some(&owner))
                 .unwrap()
                 .unwrap(),
         )
