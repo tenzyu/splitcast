@@ -348,6 +348,29 @@ impl Agent {
         self.last_heartbeat = Instant::now();
         Ok(())
     }
+    fn receive_snapshot(&self) -> io::Result<media::ReceiveSnapshot> {
+        media::receive_snapshot(
+            self.cfg.api,
+            self.cfg.camera.is_some(),
+            self.operation.as_ref(),
+        )
+    }
+    fn observe_output(&mut self) -> io::Result<bool> {
+        let profile = self
+            .obs_profile
+            .as_mut()
+            .ok_or_else(|| err("owned OBS profile unavailable"))?;
+        let (output, progress) = profile
+            .output_progress_mut()
+            .ok_or_else(|| err("owned OBS output unavailable"))?;
+        let sample = obs::read_output_status(
+            self.cfg.obs_port,
+            &self.cfg.obs_password,
+            output,
+            self.operation.as_ref(),
+        )?;
+        Ok(progress.observe(sample))
+    }
     fn start(&mut self, start: Start, owner: Option<&OwnerId>) -> io::Result<()> {
         let output = start.output();
         self.checkpoint()?;
@@ -421,8 +444,9 @@ impl Agent {
                 }
                 let mut monitor = media::ReceiveMonitor::new(self.cfg.camera.is_some());
                 self.wait_ready(|| {
-                    media::receive_operation(&self.cfg, self.operation.as_ref())
-                        .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
+                    self.receive_snapshot().is_ok_and(|snapshot| {
+                        monitor.observe(&snapshot, Instant::now()).unwrap_or(false)
+                    })
                 })?;
                 self.spawn(Worker::AudioServer, crate::audio::server(&self.cfg)?)?;
                 self.wait_ready(|| {
@@ -476,21 +500,18 @@ impl Agent {
                     .expect("profile allocated before launching OBS")
                     .request_start(&mut o, output)?;
                 self.wait_ready(|| {
-                    media::receive_operation(&self.cfg, self.operation.as_ref())
-                        .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
-                        && self
-                            .obs()
-                            .and_then(|mut o| o.output_ready(output))
-                            .unwrap_or(false)
+                    self.receive_snapshot().is_ok_and(|snapshot| {
+                        monitor.observe(&snapshot, Instant::now()).unwrap_or(false)
+                    }) && obs::read_output_status(
+                        self.cfg.obs_port,
+                        &self.cfg.obs_password,
+                        output,
+                        self.operation.as_ref(),
+                    )
+                    .is_ok_and(|sample| sample.ready())
                 })?;
                 self.receive_monitor = Some(monitor);
-                let mut studio = self.obs()?;
-                if !self
-                    .obs_profile
-                    .as_mut()
-                    .expect("profile allocated before launching OBS")
-                    .observe(&mut studio)?
-                {
+                if !self.observe_output()? {
                     return Err(err(
                         "OBS output counters were not ready before confirming Start",
                     ));
@@ -660,20 +681,17 @@ impl Agent {
             {
                 self.last_health = Instant::now();
                 let health = (|| -> io::Result<bool> {
-                    let snapshot = media::receive_operation(&self.cfg, self.operation.as_ref())?;
+                    let snapshot = self.receive_snapshot()?;
                     if !self
                         .receive_monitor
                         .as_mut()
                         .ok_or_else(|| err("receive monitor unavailable"))?
-                        .observe(&snapshot, Instant::now())?
+                        .observe(&snapshot, Instant::now())
+                        .map_err(io::Error::other)?
                     {
                         return Ok(false);
                     }
-                    let mut studio = self.obs()?;
-                    self.obs_profile
-                        .as_mut()
-                        .ok_or_else(|| err("owned OBS profile unavailable"))?
-                        .observe(&mut studio)
+                    self.observe_output()
                 })();
                 if !matches!(health, Ok(true)) {
                     let _ = self.fail(err("incoming media or OBS output stopped progressing; output stopped without automatic publication"));

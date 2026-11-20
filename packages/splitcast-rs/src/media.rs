@@ -2,6 +2,9 @@
 //! codecs / GSR / FFmpeg. No game injection, no glReadPixels or frame capture
 //! in the official osu! process. All arguments are passed as argv, not shell.
 use crate::config::Config;
+use crate::request::Operation;
+use serde_json::Value;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -32,160 +35,183 @@ pub(crate) fn command_operation(
     Ok(String::from_utf8_lossy(&r.stdout).trim().to_string())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MediaObservation {
-    pub ready: bool,
-    pub bytes_received: u64,
-    pub video_codec: Option<String>,
-    pub audio_codec: Option<String>,
-    track_count: usize,
+// Prepare checks API availability before any publishers are required.
+pub(crate) fn receive_operation(cfg: &Config, operation: Option<&Operation>) -> io::Result<String> {
+    Ok(decode_paths_document(&read_paths(cfg.api, operation)?)?.to_string())
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct MediaProgress {
-    previous_bytes: Option<u64>,
-    observed_at: Option<Instant>,
-    kind: FeedKind,
+pub(crate) fn receive_snapshot(
+    api_port: u16,
+    require_camera: bool,
+    operation: Option<&Operation>,
+) -> io::Result<ReceiveSnapshot> {
+    ReceiveSnapshot::decode(&read_paths(api_port, operation)?, require_camera)
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub enum FeedKind {
-    #[default]
-    Game,
-    Mic,
-    Camera,
-}
-
-pub struct ReceiveMonitor {
-    game: MediaProgress,
-    mic: MediaProgress,
-    camera: Option<MediaProgress>,
-}
-
-impl ReceiveMonitor {
-    pub fn new(camera: bool) -> Self {
-        Self {
-            game: MediaProgress::new(FeedKind::Game),
-            mic: MediaProgress::new(FeedKind::Mic),
-            camera: camera.then(|| MediaProgress::new(FeedKind::Camera)),
-        }
-    }
-
-    pub fn observe(&mut self, document: &str, now: Instant) -> io::Result<bool> {
-        let mut healthy = true;
-        for (name, progress) in [("game", &mut self.game), ("mic", &mut self.mic)]
-            .into_iter()
-            .chain(self.camera.iter_mut().map(|progress| ("camera", progress)))
-        {
-            let sample = parse_media_observation(document, name)?;
-            healthy &= progress.observe_at(&sample, now);
-        }
-        Ok(healthy)
-    }
-}
-
-#[cfg(test)]
-pub fn receive_snapshot(cfg: &Config) -> io::Result<String> {
-    receive_operation(cfg, None)
-}
-pub(crate) fn receive_operation(
-    cfg: &Config,
-    operation: Option<&crate::request::Operation>,
-) -> io::Result<String> {
+fn read_paths(api_port: u16, operation: Option<&Operation>) -> io::Result<Vec<u8>> {
     let timeout = match operation {
         Some(operation) => operation
             .deadline(Duration::from_secs(2))?
             .saturating_duration_since(Instant::now()),
         None => Duration::from_secs(2),
     };
-    crate::http::get_json(cfg.api, "/v3/paths/list", timeout, 1024 * 1024).map(|v| v.to_string())
+    crate::http::get_body(api_port, "/v3/paths/list", timeout, 1024 * 1024)
 }
 
-impl MediaObservation {
-    fn usable(&self, kind: FeedKind) -> bool {
-        self.ready
-            && self.bytes_received > 0
-            && match kind {
-                FeedKind::Game => {
-                    self.video_codec.as_deref() == Some("H264")
-                        && self.audio_codec.as_deref() == Some("MPEG-4 Audio")
-                }
-                FeedKind::Mic => self.audio_codec.as_deref() == Some("Opus"),
-                FeedKind::Camera => {
-                    self.video_codec.as_deref() == Some("H264") && self.track_count == 1
-                }
-            }
-    }
+fn decode_paths_document(body: &[u8]) -> io::Result<Value> {
+    serde_json::from_slice(body).map_err(|_| err("invalid loopback JSON"))
 }
 
-impl MediaProgress {
-    pub fn new(kind: FeedKind) -> Self {
-        Self {
-            kind,
-            ..Self::default()
-        }
-    }
-    #[cfg(test)]
-    pub fn observe(&mut self, sample: &MediaObservation) -> bool {
-        self.observe_at(sample, Instant::now())
-    }
-    pub fn observe_at(&mut self, sample: &MediaObservation, now: Instant) -> bool {
-        let progressing = self
-            .previous_bytes
-            .is_some_and(|n| sample.bytes_received > n);
-        let recent = self.observed_at.is_some_and(|then| {
-            now.checked_duration_since(then)
-                .is_some_and(|d| d <= Duration::from_secs(3))
-        });
-        self.previous_bytes = Some(sample.bytes_received);
-        self.observed_at = Some(now);
-        sample.usable(self.kind) && progressing && recent
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReceivePathError {
+    Absent,
+    Ambiguous,
+    InvalidReadiness,
+    InvalidByteCounter,
+    MissingTracks,
+    InvalidTrack,
+}
+
+impl fmt::Display for ReceivePathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Absent => "media path absent",
+            Self::Ambiguous => "ambiguous media path",
+            Self::InvalidReadiness => "media readiness missing",
+            Self::InvalidByteCounter => "invalid media byte counter",
+            Self::MissingTracks => "media tracks missing",
+            Self::InvalidTrack => "invalid media track",
+        })
     }
 }
 
-pub fn parse_media_observation(json: &str, path: &str) -> io::Result<MediaObservation> {
-    if json.len() > 1024 * 1024 {
-        return Err(err("MediaMTX response too large"));
+impl std::error::Error for ReceivePathError {}
+
+enum FeedKind {
+    Game,
+    Mic,
+    Camera,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FeedSample {
+    bytes_received: u64,
+    usable: bool,
+}
+
+type FeedObservation = Result<FeedSample, ReceivePathError>;
+
+/// The required feed observations from one receiver response.
+#[derive(Debug)]
+pub(crate) struct ReceiveSnapshot {
+    game: FeedObservation,
+    mic: FeedObservation,
+    camera: Option<FeedObservation>,
+}
+
+impl ReceiveSnapshot {
+    fn decode(body: &[u8], require_camera: bool) -> io::Result<Self> {
+        let document = decode_paths_document(body)?;
+        let paths = document["items"]
+            .as_array()
+            .ok_or_else(|| err("MediaMTX items required"))?;
+        Ok(Self {
+            game: parse_feed(paths, FeedKind::Game),
+            mic: parse_feed(paths, FeedKind::Mic),
+            camera: require_camera.then(|| parse_feed(paths, FeedKind::Camera)),
+        })
     }
-    let document: serde_json::Value =
-        serde_json::from_str(json).map_err(|_| err("invalid MediaMTX JSON"))?;
-    let paths = document["items"]
-        .as_array()
-        .ok_or_else(|| err("MediaMTX items required"))?;
-    let mut matches = paths.iter().filter(|p| p["name"].as_str() == Some(path));
-    let item = matches.next().ok_or_else(|| err("media path absent"))?;
+}
+
+fn parse_feed(paths: &[Value], kind: FeedKind) -> FeedObservation {
+    let name = match kind {
+        FeedKind::Game => "game",
+        FeedKind::Mic => "mic",
+        FeedKind::Camera => "camera",
+    };
+    let mut matches = paths.iter().filter(|p| p["name"].as_str() == Some(name));
+    let item = matches.next().ok_or(ReceivePathError::Absent)?;
     if matches.next().is_some() {
-        return Err(err("ambiguous media path"));
+        return Err(ReceivePathError::Ambiguous);
     }
     let ready = item["ready"]
         .as_bool()
-        .ok_or_else(|| err("media readiness missing"))?;
+        .ok_or(ReceivePathError::InvalidReadiness)?;
     let bytes_received = item["bytesReceived"]
         .as_u64()
-        .ok_or_else(|| err("invalid media byte counter"))?;
+        .ok_or(ReceivePathError::InvalidByteCounter)?;
     let tracks = item["tracks"]
         .as_array()
-        .ok_or_else(|| err("media tracks missing"))?;
+        .ok_or(ReceivePathError::MissingTracks)?;
     if tracks.iter().any(|v| !v.is_string()) {
-        return Err(err("invalid media track"));
+        return Err(ReceivePathError::InvalidTrack);
     }
-    let video_codec = tracks
-        .iter()
-        .filter_map(|v| v.as_str())
-        .find(|v| *v == "H264")
-        .map(str::to_owned);
-    let audio_codec = tracks
-        .iter()
-        .filter_map(|v| v.as_str())
-        .find(|v| matches!(*v, "MPEG-4 Audio" | "Opus"))
-        .map(str::to_owned);
-    Ok(MediaObservation {
-        ready,
+    let contains_h264 = || tracks.iter().any(|track| track == "H264");
+    let first_audio_codec = || {
+        tracks
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|v| matches!(*v, "MPEG-4 Audio" | "Opus"))
+    };
+    let codecs_match = match kind {
+        FeedKind::Game => contains_h264() && first_audio_codec() == Some("MPEG-4 Audio"),
+        FeedKind::Mic => first_audio_codec() == Some("Opus"),
+        FeedKind::Camera => tracks.len() == 1 && contains_h264(),
+    };
+    Ok(FeedSample {
         bytes_received,
-        video_codec,
-        audio_codec,
-        track_count: tracks.len(),
+        usable: ready && bytes_received > 0 && codecs_match,
     })
+}
+
+#[derive(Default)]
+struct FeedProgress {
+    previous: Option<(u64, Instant)>,
+}
+
+impl FeedProgress {
+    fn observe(&mut self, sample: FeedSample, now: Instant) -> bool {
+        let previous = self.previous.replace((sample.bytes_received, now));
+        sample.usable
+            && previous.is_some_and(|(bytes, at)| {
+                sample.bytes_received > bytes
+                    && now
+                        .checked_duration_since(at)
+                        .is_some_and(|age| age <= Duration::from_secs(3))
+            })
+    }
+}
+
+pub(crate) struct ReceiveMonitor {
+    game: FeedProgress,
+    mic: FeedProgress,
+    camera: Option<FeedProgress>,
+}
+
+impl ReceiveMonitor {
+    pub(crate) fn new(require_camera: bool) -> Self {
+        Self {
+            game: FeedProgress::default(),
+            mic: FeedProgress::default(),
+            camera: require_camera.then(FeedProgress::default),
+        }
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        snapshot: &ReceiveSnapshot,
+        now: Instant,
+    ) -> Result<bool, ReceivePathError> {
+        // Readiness retries keep each typed sample up to the first path error,
+        // including samples whose counters or codecs make them unusable.
+        let mut healthy = self.game.observe(snapshot.game?, now);
+        healthy &= self.mic.observe(snapshot.mic?, now);
+        if let Some(camera) = &mut self.camera {
+            let sample = snapshot.camera.ok_or(ReceivePathError::Absent)??;
+            healthy &= camera.observe(sample, now);
+        }
+        Ok(healthy)
+    }
 }
 pub fn game(cfg: &Config) -> io::Result<Vec<String>> {
     if cfg.target.is_empty() || cfg.game_audio.is_empty() {
@@ -464,16 +490,6 @@ pub fn receiver(cfg: &Config) -> io::Result<Vec<String>> {
         filename.to_string_lossy().to_string(),
     ])
 }
-#[cfg(test)]
-pub fn ready_output(buf: &str, name: &str) -> bool {
-    let kind = match name {
-        "game" => FeedKind::Game,
-        "mic" => FeedKind::Mic,
-        "camera" => FeedKind::Camera,
-        _ => return false,
-    };
-    parse_media_observation(buf, name).is_ok_and(|o| o.usable(kind))
-}
 pub(crate) fn missing_tools(cfg: &Config, media: bool, start: bool) -> Vec<String> {
     let mut req = Vec::new();
     if cfg.role == "capture" {
@@ -561,17 +577,151 @@ pub(crate) fn devices_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn feed(name: &str, bytes: u64, tracks: Value) -> Value {
+        json!({"name": name, "ready": true, "bytesReceived": bytes, "tracks": tracks})
+    }
+
+    fn feeds(game: u64, mic: u64, camera: u64) -> [Value; 3] {
+        [
+            feed("game", game, json!(["H264", "MPEG-4 Audio"])),
+            feed("mic", mic, json!(["Opus"])),
+            feed("camera", camera, json!(["H264"])),
+        ]
+    }
+
+    fn snapshot(items: &[Value], camera: bool) -> ReceiveSnapshot {
+        ReceiveSnapshot::decode(json!({"items": items}).to_string().as_bytes(), camera).unwrap()
+    }
 
     #[test]
-    fn camera_requires_only_one_h264_track() {
-        assert!(ready_output(
-            r#"{"items":[{"name":"camera","ready":true,"bytesReceived":200,"tracks":["H264"]}]}"#,
-            "camera"
-        ));
-        assert!(!ready_output(
-            r#"{"items":[{"name":"camera","ready":true,"bytesReceived":200,"tracks":["H264","G711"]}]}"#,
-            "camera"
-        ));
+    fn snapshot_requires_a_json_array_of_paths() {
+        for body in [b"{".as_slice(), b"\xff"] {
+            assert_eq!(
+                ReceiveSnapshot::decode(body, false)
+                    .unwrap_err()
+                    .to_string(),
+                "invalid loopback JSON"
+            );
+        }
+        for body in [b"{}".as_slice(), br#"{"items":{}}"#] {
+            assert_eq!(
+                ReceiveSnapshot::decode(body, false)
+                    .unwrap_err()
+                    .to_string(),
+                "MediaMTX items required"
+            );
+        }
+        let empty = ReceiveSnapshot::decode(br#"{"items":[]}"#, false).unwrap();
+        assert_eq!(empty.game.unwrap_err(), ReceivePathError::Absent);
+        assert_eq!(empty.mic.unwrap_err(), ReceivePathError::Absent);
+        assert!(empty.camera.is_none());
+    }
+
+    #[test]
+    fn required_paths_are_unique_and_fields_are_typed() {
+        use ReceivePathError::*;
+
+        let [game, mic, camera] = feeds(4, 4, 4);
+        for (field, bad, expected) in [
+            ("ready", json!("true"), InvalidReadiness),
+            ("bytesReceived", json!("4"), InvalidByteCounter),
+            ("bytesReceived", json!(-1), InvalidByteCounter),
+            ("bytesReceived", json!(4.0), InvalidByteCounter),
+            ("tracks", Value::Null, MissingTracks),
+            ("tracks", json!(["H264", false]), InvalidTrack),
+        ] {
+            let mut row = game.clone();
+            row[field] = bad;
+            assert_eq!(snapshot(&[row], false).game.unwrap_err(), expected);
+        }
+        let malformed = json!({"name": "game"});
+        assert_eq!(
+            snapshot(std::slice::from_ref(&malformed), false)
+                .game
+                .unwrap_err(),
+            InvalidReadiness
+        );
+        assert_eq!(
+            snapshot(&[malformed, game], false).game.unwrap_err(),
+            Ambiguous
+        );
+        assert_eq!(
+            snapshot(&[mic.clone(), mic], false).mic.unwrap_err(),
+            Ambiguous
+        );
+        assert_eq!(
+            snapshot(&[camera.clone(), camera], true)
+                .camera
+                .unwrap()
+                .unwrap_err(),
+            Ambiguous
+        );
+    }
+
+    #[test]
+    fn codecs_and_optional_camera_follow_the_existing_feed_rules() {
+        let [game, mic, camera] = feeds(4, 4, 4);
+        let required = snapshot(&[game.clone(), mic.clone(), camera], true);
+        assert!(required.game.unwrap().usable);
+        assert!(required.mic.unwrap().usable);
+        assert!(required.camera.unwrap().unwrap().usable);
+
+        for (kind, name, tracks, usable) in [
+            (
+                FeedKind::Game,
+                "game",
+                json!(["h264", "MPEG-4 Audio"]),
+                false,
+            ),
+            (FeedKind::Game, "game", json!(["H264", "Opus"]), false),
+            (
+                FeedKind::Game,
+                "game",
+                json!(["H264", "Opus", "MPEG-4 Audio"]),
+                false,
+            ),
+            (
+                FeedKind::Game,
+                "game",
+                json!(["G711", "MPEG-4 Audio", "Opus", "H264"]),
+                true,
+            ),
+            (FeedKind::Mic, "mic", json!(["MPEG-4 Audio", "Opus"]), false),
+            (FeedKind::Mic, "mic", json!(["H264", "Opus"]), true),
+            (FeedKind::Camera, "camera", json!(["H264", "G711"]), false),
+            (FeedKind::Camera, "camera", json!(["H264", "H264"]), false),
+        ] {
+            assert_eq!(
+                parse_feed(&[feed(name, 4, tracks)], kind).unwrap().usable,
+                usable
+            );
+        }
+
+        let rows = [
+            Value::Null,
+            json!({"name": 1}),
+            json!({"name": "Game"}),
+            json!({"name": "other"}),
+            json!({"name": "other", "tracks": [false]}),
+            json!({"name": "camera"}),
+            json!({"name": "camera", "ready": false}),
+            mic,
+            game,
+        ];
+        let optional = snapshot(&rows, false);
+        assert!(optional.game.unwrap().usable);
+        assert!(optional.mic.unwrap().usable);
+        assert!(optional.camera.is_none());
+        assert_eq!(
+            snapshot(&rows, true).camera.unwrap().unwrap_err(),
+            ReceivePathError::Ambiguous
+        );
+        assert_eq!(
+            snapshot(&rows[7..], true).camera.unwrap().unwrap_err(),
+            ReceivePathError::Absent
+        );
     }
     #[test]
     fn receiver_api_needs_no_external_http_tool() {
@@ -598,31 +748,74 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        let result = receive_snapshot(&cfg);
+        let result = receive_operation(&cfg, None);
         server.join().unwrap();
         assert_eq!(result.unwrap(), "{\"items\":[]}");
     }
     #[test]
-    fn readiness_requires_typed_fields_and_progress() {
-        let mut progress = MediaProgress::default();
-        let sample=parse_media_observation(r#"{"items":[{"name":"game","ready":true,"bytesReceived":4,"tracks":["H264","MPEG-4 Audio"]}]}"#,"game").unwrap();
-        assert!(!progress.observe(&sample));
-        let next=parse_media_observation(r#"{"items":[{"name":"game","ready":true,"bytesReceived":5,"tracks":["H264","MPEG-4 Audio"]}]}"#,"game").unwrap();
-        assert!(progress.observe(&next));
-        assert!(!progress.observe(&next));
+    fn progress_uses_strict_bytes_and_an_inclusive_three_second_window() {
+        let mut monitor = ReceiveMonitor::new(true);
+        let start = Instant::now();
+        for (bytes, millis, expected) in [
+            (10, 0, false),
+            (11, 3000, true),
+            (12, 6001, false),
+            (13, 6000, false),
+            (13, 7000, false),
+            (12, 8000, false),
+            (13, 9000, true),
+            (0, 10000, false),
+            (1, 11000, true),
+        ] {
+            let sample = snapshot(&feeds(bytes, bytes, bytes), true);
+            let observed = monitor
+                .observe(&sample, start + Duration::from_millis(millis))
+                .unwrap();
+            assert_eq!(observed, expected, "bytes={bytes} millis={millis}");
+        }
     }
+
     #[test]
-    fn a_path_name_is_not_readiness() {
-        assert!(!ready_output(r#"{"items":[{"name":"game"}]}"#, "game"));
+    fn a_path_error_advances_only_the_typed_prefix_of_the_snapshot() {
+        let start = Instant::now();
+        // Two recovery samples isolate the effects on the earlier and later paths.
+        for (game_bytes, expected) in [(20, false), (21, true)] {
+            let mut monitor = ReceiveMonitor::new(true);
+            assert!(!monitor
+                .observe(&snapshot(&feeds(10, 10, 10), true), start)
+                .unwrap());
+            let [game, _, camera] = feeds(20, 20, 20);
+            let malformed = snapshot(&[camera, json!({"name": "mic"}), game], true);
+            assert_eq!(
+                monitor.observe(&malformed, start + Duration::from_secs(1)),
+                Err(ReceivePathError::InvalidReadiness)
+            );
+            let recovered = snapshot(&feeds(game_bytes, 11, 11), true);
+            assert_eq!(
+                monitor.observe(&recovered, start + Duration::from_secs(2)),
+                Ok(expected)
+            );
+        }
     }
+
     #[test]
-    fn microphone_readiness_does_not_require_a_video_track() {
-        assert!(
-            ready_output(
-                r#"{"items":[{"name":"mic","ready":true,"bytesReceived":42,"tracks":["Opus"]}]}"#,
-                "mic"
-            ),
-            "valid audio-only microphone feed was refused"
+    fn unusable_typed_feeds_still_advance_all_baselines() {
+        let start = Instant::now();
+        let mut monitor = ReceiveMonitor::new(false);
+        let [mut game, mic, _] = feeds(20, 20, 0);
+        game["ready"] = json!(false);
+        let unusable = snapshot(&[game, mic], false);
+        assert!(!unusable.game.unwrap().usable);
+        assert_eq!(monitor.observe(&unusable, start), Ok(false));
+        let stalled_mic = snapshot(&feeds(21, 20, 0), false);
+        assert_eq!(
+            monitor.observe(&stalled_mic, start + Duration::from_secs(1)),
+            Ok(false)
+        );
+        let advancing = snapshot(&feeds(22, 21, 0), false);
+        assert_eq!(
+            monitor.observe(&advancing, start + Duration::from_secs(2)),
+            Ok(true)
         );
     }
 }
