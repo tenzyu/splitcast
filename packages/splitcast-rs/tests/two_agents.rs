@@ -1385,6 +1385,85 @@ fn studio_scene_edits_observe_partial_obs_effects_and_persist_only_verified_layo
 }
 
 #[test]
+fn production_held_scene_edit() {
+    // The long arm pins the baseline false stop. When sampling is independent
+    // of the effect owner, both edits must leave a progressing recording.
+    for (hold_ms, expected) in [(100, "running"), (3500, "failed")] {
+        let mut fixture = Fixture::with_options(false, None, true);
+        let agent = &fixture.production;
+        agent.ok("prepare", json!({}));
+        agent.ok("start", json!({}));
+        let scene = agent.ok("scene", json!({}));
+        let mut layout = scene["draft"].clone();
+        layout["camera"]["x"] = json!(128);
+        let dir = fixture.root.join("production");
+        let hold = dir.join("hold-scene-ack");
+        let committed = dir.join("scene-transform-committed");
+        fs::write(&hold, "hold").unwrap();
+        thread::scope(|scope| {
+            let edit = scope
+                .spawn(|| agent.command("scene-apply", scene_edit(&scene, "held-edit", &layout)));
+            let end = Instant::now() + Duration::from_secs(4);
+            while !committed.exists() && Instant::now() < end {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let accepted = committed.exists();
+            if accepted {
+                thread::sleep(Duration::from_millis(hold_ms));
+            }
+            fs::remove_file(hold).unwrap();
+            assert!(accepted, "scene edit did not reach its OBS write");
+            let (code, result) = edit.join().unwrap();
+            assert_eq!(code, 200, "{result}");
+            assert_eq!(result["operation"]["state"], "applied");
+        });
+
+        let pids = fixture.pids();
+        assert!(!pids.is_empty());
+        let end = Instant::now() + Duration::from_secs(4);
+        let mut bytes = agent.ok("status", json!({}))["output_progress"]["bytes"].as_u64();
+        let mut advanced = 0;
+        let status = loop {
+            let status = agent.ok("status", json!({}));
+            if expected == "failed" && status["state"] == "failed" {
+                assert_eq!(status["children"], json!([]));
+                assert!(status["output"].is_null());
+                assert!(status["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("stopped progressing"));
+                fixture.released(&pids);
+                break status;
+            }
+            if expected == "running" {
+                assert_eq!(status["state"], "running", "{status}");
+                let current = status["output_progress"]["bytes"].as_u64().unwrap();
+                if bytes.is_none_or(|previous| current > previous) {
+                    bytes = Some(current);
+                    advanced += 1;
+                    if advanced == 2 {
+                        break status;
+                    }
+                }
+            }
+            assert!(
+                Instant::now() < end,
+                "hold_ms={hold_ms} expected {expected}: {status}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        println!(
+            "hold_ms={hold_ms} edit=applied state={} later_samples={advanced} error={}",
+            status["state"], status["error"]
+        );
+        agent.ok("stop", json!({}));
+        fixture.released(&pids);
+        fixture.capture.shutdown();
+        fixture.production.shutdown();
+    }
+}
+
+#[test]
 fn studio_scene_proxy_preserves_stop_under_withheld_obs_acknowledgment() {
     let mut fixture = Fixture::new();
     fixture.capture.ok("prepare", json!({}));

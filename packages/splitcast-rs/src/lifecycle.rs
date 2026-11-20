@@ -748,6 +748,25 @@ mod tests {
             .is_err());
     }
     #[test]
+    fn queued_peer_prepare_cannot_begin_after_emergency_stop() {
+        let session = Session::new(Role::Production);
+        let control = session.control();
+        let owner = OwnerId::parse("queued-owner").unwrap();
+        let admitted = control.admit(false).unwrap();
+
+        // Admission has only queued work. No matching owner can yet claim
+        // completion, but the local emergency Stop can revoke the work.
+        assert!(control.request_stop(Some(&owner)).is_err());
+        let stop = control.request_stop(None).unwrap();
+        assert!(!control.begin(admitted, Some(owner.clone())));
+        control.finish_stop((200, r#"{"state":"idle","stop":"completed"}"#.into()));
+        assert_eq!(stop.response().unwrap().0, 200);
+        assert!(!control.begin(admitted, Some(owner.clone())));
+        assert!(control.request_stop(Some(&owner)).is_err());
+        assert_eq!(session.state(), Lifecycle::Idle);
+        assert!(control.admit(false).is_ok());
+    }
+    #[test]
     fn admission_and_prepare_begin_are_ordered_with_stop() {
         let mut session = Session::new(Role::Production);
         let control = session.control();
