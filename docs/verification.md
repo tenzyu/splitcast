@@ -4,6 +4,16 @@
 
 The [audio return receipt](evidence/audio-return.md) records the two-Agent software result, failure injections and independent private-sink observations on the audio return candidate.
 
+## 2026-11-20 paired acquisition and production supervision
+
+The integrated software revision `88156db27742390d584f0339fe672bbd1666a6c6`
+binds peer Prepare to the production Idle revision and correlates remote Stop
+completion. A joined observer checks production media while Studio commands
+run. The packaged OBS timing comparison retained private PulseAudio. The
+records include the exact commands, failed attempts and open hardware gates.
+[Implementation and verification](evidence/architecture-implementation-20261120.md) ·
+[OBS microphone comparison](evidence/unit-e-obs-pcm-20261120.md)
+
 ## 2026-11-18 published native Nix cache verification
 
 At `90af1210800c94a2fbc5900eb5ea3337604966e2`, [release run 44304462155](https://github.com/tenzyu/splitcast/actions/runs/44304462155/attempts/1)
