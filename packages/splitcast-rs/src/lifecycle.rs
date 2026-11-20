@@ -1,5 +1,7 @@
+use crate::obs::ProgressSnapshot;
 use crate::protocol::{OwnerId, RemoteOwner, StopProof};
-use crate::request::{rejected, RequestTicket, Response};
+use crate::request::{error_response, rejected, Failure, RequestTicket, Response};
+use crate::supervision::{Fault, MAX_SAMPLE_AGE};
 use crate::Output;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -59,6 +61,7 @@ enum Phase {
     Running {
         authority: Authority,
         output: Output,
+        observation: Option<RunningObservation>,
     },
     Degraded {
         authority: Authority,
@@ -68,8 +71,28 @@ enum Phase {
         authority: Authority,
         output: Option<Output>,
     },
-    Failed(Authority),
+    Failed {
+        authority: Authority,
+        compensating: Option<Fault>,
+    },
 }
+
+#[derive(Clone, Debug)]
+struct RunningObservation {
+    progress: ProgressSnapshot,
+    sampled_at: Instant,
+    terminal: Option<Fault>,
+}
+
+impl RunningObservation {
+    fn fault(&self, now: Instant) -> Option<Fault> {
+        self.terminal.or_else(|| {
+            (now.saturating_duration_since(self.sampled_at) >= MAX_SAMPLE_AGE)
+                .then_some(Fault::SampleOverdue)
+        })
+    }
+}
+
 impl Phase {
     fn state(&self) -> Lifecycle {
         match self {
@@ -79,24 +102,26 @@ impl Phase {
             Self::Running { .. } => Lifecycle::Running,
             Self::Degraded { .. } => Lifecycle::Degraded,
             Self::Stopping { .. } => Lifecycle::Stopping,
-            Self::Failed(_) => Lifecycle::Failed,
+            Self::Failed { .. } => Lifecycle::Failed,
         }
     }
     fn authority(&self) -> Option<&Authority> {
         match self {
             Self::Idle => None,
-            Self::Preparing(a) | Self::Ready(a) | Self::Failed(a) => Some(a),
+            Self::Preparing(a) | Self::Ready(a) => Some(a),
             Self::Running { authority, .. }
             | Self::Degraded { authority, .. }
+            | Self::Failed { authority, .. }
             | Self::Stopping { authority, .. } => Some(authority),
         }
     }
     fn authority_mut(&mut self) -> Option<&mut Authority> {
         match self {
             Self::Idle => None,
-            Self::Preparing(a) | Self::Ready(a) | Self::Failed(a) => Some(a),
+            Self::Preparing(a) | Self::Ready(a) => Some(a),
             Self::Running { authority, .. }
             | Self::Degraded { authority, .. }
+            | Self::Failed { authority, .. }
             | Self::Stopping { authority, .. } => Some(authority),
         }
     }
@@ -104,6 +129,16 @@ impl Phase {
         match self {
             Self::Running { output, .. } => Some(*output),
             Self::Degraded { output, .. } | Self::Stopping { output, .. } => *output,
+            _ => None,
+        }
+    }
+    fn observation_fault(&self, now: Instant) -> Option<Fault> {
+        match self {
+            Self::Running {
+                observation: Some(observation),
+                ..
+            } => observation.fault(now),
+            Self::Failed { compensating, .. } => *compensating,
             _ => None,
         }
     }
@@ -156,9 +191,11 @@ impl ControlState {
     }
 
     fn revoked(&self, generation: u64) -> bool {
+        let now = Instant::now();
         self.generation != generation
             || self.pending_stop().is_some()
-            || self.expired(Instant::now())
+            || self.expired(now)
+            || self.phase.observation_fault(now).is_some()
     }
 
     fn advance_generation(&mut self) -> io::Result<()> {
@@ -170,7 +207,10 @@ impl ControlState {
     }
 
     fn start_id(&self, now: Instant) -> Option<String> {
-        if self.pending_stop().is_some() || self.expired(now) {
+        if self.pending_stop().is_some()
+            || self.expired(now)
+            || self.phase.observation_fault(now).is_some()
+        {
             return None;
         }
         let phase = match self.phase.state() {
@@ -306,13 +346,82 @@ impl SessionControl {
     }
     pub(crate) fn admit(&self, observation: bool) -> std::io::Result<u64> {
         let state = self.lock();
-        if state.pending_stop().is_some() && !observation {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "Stop cleanup pending; submit a fresh command after completion",
-            ));
+        if !observation {
+            if state.pending_stop().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Stop cleanup pending; submit a fresh command after completion",
+                ));
+            }
+            if let Some(fault) = state.phase.observation_fault(Instant::now()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    fault.to_string(),
+                ));
+            }
         }
         Ok(state.generation)
+    }
+    pub(crate) fn output_progress(&self) -> Option<ProgressSnapshot> {
+        if let Phase::Running {
+            observation: Some(observation),
+            ..
+        } = &self.lock().phase
+        {
+            Some(observation.progress)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn observation_fault(&self) -> Option<Fault> {
+        self.lock().phase.observation_fault(Instant::now())
+    }
+    pub(crate) fn publish_progress(&self, generation: u64, progress: ProgressSnapshot) -> bool {
+        let mut state = self.lock();
+        if state.revoked(generation) {
+            return false;
+        }
+        let Phase::Running {
+            observation: Some(observation),
+            ..
+        } = &mut state.phase
+        else {
+            return false;
+        };
+        observation.progress = progress;
+        observation.sampled_at = Instant::now();
+        true
+    }
+    pub(crate) fn latch_observer_fault(&self, generation: u64, fault: Fault) {
+        let mut state = self.lock();
+        let now = Instant::now();
+        if state.generation != generation || state.pending_stop().is_some() || state.expired(now) {
+            return;
+        }
+        if let Phase::Running {
+            observation: Some(observation),
+            ..
+        } = &mut state.phase
+        {
+            observation.terminal = observation.fault(now).or(Some(fault));
+        }
+    }
+    pub(crate) fn finish_ordinary(
+        &self,
+        generation: u64,
+        ticket: &RequestTicket,
+        response: Response,
+    ) {
+        let state = self.lock();
+        let response = if response.0 == 200 && state.revoked(generation) {
+            error_response(
+                Failure::Unknown,
+                "session revoked before command completion",
+            )
+        } else {
+            response
+        };
+        ticket.finish(response);
     }
     pub(crate) fn prepare_id(&self, owner: Option<&OwnerId>) -> io::Result<Option<String>> {
         let state = self.lock();
@@ -340,7 +449,7 @@ impl SessionControl {
         if state.revoked(generation) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
-                "Stop revoked effect dispatch; outcome may be unknown",
+                "session revoked effect dispatch; outcome may be unknown",
             ));
         }
         // Callers perform one nonblocking socket syscall, never a capacity or
@@ -461,13 +570,34 @@ impl SessionControl {
     pub(crate) fn stop_completed(&self) -> bool {
         matches!(self.lock().stop, Some(StopRecord::Completed { .. }))
     }
-    pub(crate) fn stop_observation(
+    pub(crate) fn status_during_cleanup(
         &self,
         owner: Option<&OwnerId>,
     ) -> std::io::Result<Option<String>> {
         let state = self.lock();
         let Some(intent) = state.pending_stop() else {
-            return Ok(None);
+            let Phase::Failed {
+                authority,
+                compensating: Some(fault),
+            } = &state.phase
+            else {
+                return Ok(None);
+            };
+            if owner.is_some() && !authority.matches(owner) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "no matching production owner",
+                ));
+            }
+            return Ok(Some(
+                serde_json::json!({
+                    "version": 1, "engine": "rust-candidate", "role": "production",
+                    "state": "failed", "start_id": null, "output": null, "output_progress": null,
+                    "error": fault.to_string(), "children": null, "resource_observation": "unknown",
+                    "remote_release_pending": false,
+                })
+                .to_string(),
+            ));
         };
         if owner.is_some() && (self.role != Role::Production || intent.owner.as_ref() != owner) {
             return Err(std::io::Error::new(
@@ -491,6 +621,7 @@ impl SessionControl {
         let mut state = self.lock();
         if self.role != Role::Production
             || state.pending_stop().is_some()
+            || state.phase.observation_fault(Instant::now()).is_some()
             || !matches!(
                 state.phase.state(),
                 Lifecycle::Ready | Lifecycle::Running | Lifecycle::Degraded
@@ -648,6 +779,7 @@ impl Session {
         let now = Instant::now();
         if state.pending_stop().is_some()
             || state.expired(now)
+            || state.phase.observation_fault(now).is_some()
             || admission
                 .generation()
                 .is_some_and(|generation| generation != state.generation)
@@ -749,8 +881,26 @@ impl Session {
         }
     }
     pub fn start(&mut self, output: Output) -> Result<(), TransitionError> {
+        self.start_running(output, None).map(|_| ())
+    }
+    pub(crate) fn start_observed(
+        &mut self,
+        output: Output,
+        progress: ProgressSnapshot,
+    ) -> Result<u64, TransitionError> {
+        self.start_running(output, Some(progress))
+    }
+    fn start_running(
+        &mut self,
+        output: Output,
+        progress: Option<ProgressSnapshot>,
+    ) -> Result<u64, TransitionError> {
         let mut state = self.control.lock();
-        if state.pending_stop().is_some() || state.expired(Instant::now()) {
+        let now = Instant::now();
+        if state.pending_stop().is_some()
+            || state.expired(now)
+            || progress.is_some() && self.role != Role::Production
+        {
             return Err(Self::error(&state.phase, "cancelled start"));
         }
         match &state.phase {
@@ -758,10 +908,17 @@ impl Session {
                 state.phase = Phase::Running {
                     authority: authority.clone(),
                     output,
+                    observation: progress.map(|progress| RunningObservation {
+                        progress,
+                        sampled_at: now,
+                        terminal: None,
+                    }),
                 };
-                Ok(())
+                Ok(state.generation)
             }
-            Phase::Running { output: active, .. } if *active == output => Ok(()),
+            Phase::Running { output: active, .. } if *active == output && progress.is_none() => {
+                Ok(state.generation)
+            }
             _ => Err(Self::error(&state.phase, "start")),
         }
     }
@@ -778,19 +935,39 @@ impl Session {
     }
     pub fn fail(&mut self) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
-        if !matches!(
-            state.phase.state(),
-            Lifecycle::Preparing | Lifecycle::Ready | Lifecycle::Running | Lifecycle::Degraded
-        ) {
+        if state.pending_stop().is_some()
+            || !matches!(
+                state.phase.state(),
+                Lifecycle::Preparing | Lifecycle::Ready | Lifecycle::Running | Lifecycle::Degraded
+            )
+        {
             return Err(Self::error(&state.phase, "fail"));
         }
-        state.phase = Phase::Failed(state.phase.authority().unwrap().clone());
+        state
+            .advance_generation()
+            .map_err(|_| Self::error(&state.phase, "control generation exhausted"))?;
+        state.phase = Phase::Failed {
+            authority: state.phase.authority().unwrap().clone(),
+            compensating: state.phase.observation_fault(Instant::now()),
+        };
         Ok(())
+    }
+    pub(crate) fn failure_reconciled(&mut self) {
+        if let Phase::Failed { compensating, .. } = &mut self.control.lock().phase {
+            *compensating = None;
+        }
     }
     pub fn stop(&mut self) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
         if matches!(state.phase.state(), Lifecycle::Idle | Lifecycle::Stopping) {
             return Ok(());
+        }
+        // A listener-admitted Stop has already advanced the generation.
+        if state.pending_stop().is_none() {
+            state
+                .advance_generation()
+                .map_err(|_| Self::error(&state.phase, "control generation exhausted"))?;
+            state.stop = None;
         }
         state.phase = Phase::Stopping {
             authority: state.phase.authority().unwrap().clone(),
@@ -809,14 +986,6 @@ impl Session {
         {
             return Err(Self::error(&state.phase, "stopped"));
         }
-        // HTTP Stop already revoked the old Idle ID at admission. A direct
-        // lifecycle Stop must fence it too, including across local sessions.
-        if state.pending_stop().is_none() {
-            state
-                .advance_generation()
-                .map_err(|_| Self::error(&state.phase, "control generation exhausted"))?;
-            state.stop = None;
-        }
         state.phase = Phase::Idle;
         Ok(())
     }
@@ -833,6 +1002,78 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observation_fault_revokes_commands_but_stop_wins_and_fences_old_samples() {
+        let mut session = Session::for_agent(Role::Production, "fixture".into());
+        let control = session.control();
+        let prepare = |session: &mut Session, bytes| {
+            session
+                .prepare(None, Instant::now(), Duration::from_secs(30))
+                .unwrap();
+            session.prepared().unwrap();
+            session
+                .start_observed(Output::Recording, ProgressSnapshot::test_recording(bytes))
+                .unwrap()
+        };
+        let generation = prepare(&mut session, 1);
+        assert!(control.publish_progress(generation, ProgressSnapshot::test_recording(2)));
+        control.latch_observer_fault(generation, Fault::OutputStalled);
+        control.latch_observer_fault(generation, Fault::ObserverExited);
+        assert_eq!(control.observation_fault(), Some(Fault::OutputStalled));
+        assert!(control.admit(false).is_err());
+        assert!(control.admit(true).is_ok());
+        assert!(control
+            .dispatch(generation, || -> io::Result<()> {
+                panic!("revoked dispatch")
+            })
+            .is_err());
+        let work = RequestTicket::accepted();
+        control.finish_ordinary(generation, &work, (200, "{}".into()));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&work.response().unwrap().1).unwrap()
+                ["outcome"],
+            "unknown"
+        );
+
+        let admitted = control.request_stop(None).unwrap();
+        assert!(session.fail().is_err(), "pending Stop owns compensation");
+        session.stop().unwrap();
+        session.stopped().unwrap();
+        control.finish_stop((200, "{}".into()));
+        assert_eq!(admitted.response().unwrap().0, 200);
+        assert!(control.output_progress().is_none());
+
+        let next = prepare(&mut session, 3);
+        assert_ne!(next, generation);
+        assert!(!control.publish_progress(generation, ProgressSnapshot::test_recording(9)));
+        control.latch_observer_fault(generation, Fault::ObserverExited);
+        assert_eq!(control.observation_fault(), None);
+        assert_eq!(control.output_progress().unwrap().status()["bytes"], 3);
+    }
+
+    #[test]
+    fn overdue_observation_cannot_be_made_healthy_by_a_late_sample() {
+        let mut session = Session::new(Role::Production);
+        session
+            .prepare(None, Instant::now(), Duration::from_secs(30))
+            .unwrap();
+        session.prepared().unwrap();
+        let generation = session
+            .start_observed(Output::Recording, ProgressSnapshot::test_recording(1))
+            .unwrap();
+        let control = session.control();
+        if let Phase::Running {
+            observation: Some(observation),
+            ..
+        } = &mut control.lock().phase
+        {
+            observation.sampled_at -= MAX_SAMPLE_AGE;
+        }
+        assert!(control.cancelled(generation));
+        assert!(!control.publish_progress(generation, ProgressSnapshot::test_recording(2)));
+        assert_eq!(control.observation_fault(), Some(Fault::SampleOverdue));
+    }
 
     #[test]
     fn output_watchdog_revokes_start_and_requests_one_correlated_stop() {
@@ -871,7 +1112,7 @@ mod tests {
         intent.since = Instant::now() - STOP_OBSERVATION_BUDGET;
         drop(state);
         let snapshot: serde_json::Value =
-            serde_json::from_str(&control.stop_observation(None).unwrap().unwrap()).unwrap();
+            serde_json::from_str(&control.status_during_cleanup(None).unwrap().unwrap()).unwrap();
         assert_eq!(snapshot["state"], "stopping");
         assert_eq!(snapshot["cleanup"], "unknown");
         assert_eq!(snapshot["outcome"], "unknown");
@@ -946,9 +1187,13 @@ mod tests {
         assert!(session.prepared().is_err());
         session.stop().unwrap();
         session.stopped().unwrap();
-        let pending: serde_json::Value =
-            serde_json::from_str(&control.stop_observation(Some(&owner)).unwrap().unwrap())
-                .unwrap();
+        let pending: serde_json::Value = serde_json::from_str(
+            &control
+                .status_during_cleanup(Some(&owner))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(pending["owner"], owner.as_str());
         assert_eq!(pending["stop_id"], stop.id());
         assert!(control

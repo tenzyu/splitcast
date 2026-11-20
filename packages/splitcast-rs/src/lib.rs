@@ -12,6 +12,7 @@ pub mod process;
 pub mod protocol;
 mod scene;
 pub mod state;
+mod supervision;
 mod tts;
 mod workers;
 pub use lifecycle::{Lifecycle, Role, Session, TransitionError};

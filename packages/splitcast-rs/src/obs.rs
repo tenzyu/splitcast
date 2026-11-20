@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tungstenite::{protocol::WebSocketConfig, Message, WebSocket};
 
 const LIMIT: usize = 4 * 1024 * 1024;
-const TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);
 
 fn err(message: &str) -> io::Error {
     io::Error::other(message)
@@ -88,7 +88,7 @@ fn response_data(response: &str) -> io::Result<Value> {
         .map(|_| value["d"]["responseData"].clone())
         .ok_or_else(|| err("OBS response data required"))
 }
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct OutputStatus {
     active: bool,
     bytes: u64,
@@ -141,43 +141,70 @@ pub(crate) fn read_output_status(
     output: crate::Output,
     operation: Option<&crate::request::Operation>,
 ) -> io::Result<OutputStatus> {
-    Obs::connect_endpoint(port, password_path, operation.cloned())?.observe(output)
+    let operation = operation
+        .cloned()
+        .map(|operation| operation.capped(TIMEOUT));
+    Obs::connect_endpoint(port, password_path, operation)?.observe(output)
 }
 
-#[derive(Default)]
-pub(crate) struct OutputProgress {
-    accepted: Option<AcceptedStatus>,
-}
+pub(crate) struct OutputProgress(ProgressSnapshot);
 
-struct AcceptedStatus {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProgressSnapshot {
     sample: OutputStatus,
     compared: bool,
 }
 
 impl OutputProgress {
-    pub(crate) fn observe(&mut self, sample: OutputStatus) -> bool {
-        let previous = self.accepted.as_ref().map(|status| &status.sample);
-        if !sample.progresses_from(previous) {
-            return false;
-        }
-        self.accepted = Some(AcceptedStatus {
+    pub(crate) fn start(sample: OutputStatus) -> Option<Self> {
+        sample.ready().then_some(Self(ProgressSnapshot {
             sample,
-            compared: previous.is_some(),
-        });
-        true
+            compared: false,
+        }))
     }
 
-    pub(crate) fn status(&self) -> Option<Value> {
-        let AcceptedStatus { sample, compared } = self.accepted.as_ref()?;
-        let frame_health = match (sample.frames, *compared) {
+    pub(crate) fn snapshot(&self) -> ProgressSnapshot {
+        self.0
+    }
+
+    pub(crate) fn observe(&mut self, sample: OutputStatus) -> Option<ProgressSnapshot> {
+        if !sample.progresses_from(Some(&self.0.sample)) {
+            return None;
+        }
+        self.0 = ProgressSnapshot {
+            sample,
+            compared: true,
+        };
+        Some(self.0)
+    }
+}
+
+impl ProgressSnapshot {
+    pub(crate) fn status(self) -> Value {
+        let Self { sample, compared } = self;
+        let frame_health = match (sample.frames, compared) {
             (None, _) => "unknown",
             (Some(_), false) => "pending",
             (Some(_), true) => "progressing",
         };
-        Some(json!({
+        json!({
             "active": sample.active, "bytes": sample.bytes, "frames": sample.frames,
             "frame_health": frame_health, "duration_ms": sample.duration_ms,
-        }))
+        })
+    }
+}
+
+#[cfg(test)]
+impl ProgressSnapshot {
+    pub(crate) fn test_recording(bytes: u64) -> Self {
+        OutputProgress::start(OutputStatus {
+            active: true,
+            bytes,
+            frames: None,
+            duration_ms: None,
+        })
+        .unwrap()
+        .snapshot()
     }
 }
 
@@ -185,21 +212,7 @@ impl OutputProgress {
 // Start reply can leave output active before any counters are observed.
 pub(crate) struct SessionProfile {
     directory: PathBuf,
-    attempt: Option<OutputAttempt>,
-}
-
-struct OutputAttempt {
-    output: crate::Output,
-    progress: OutputProgress,
-}
-
-impl OutputAttempt {
-    fn new(output: crate::Output) -> Self {
-        Self {
-            output,
-            progress: OutputProgress::default(),
-        }
-    }
+    attempt: Option<crate::Output>,
 }
 
 impl SessionProfile {
@@ -215,7 +228,7 @@ impl SessionProfile {
     pub(crate) fn test_attempt(directory: PathBuf, output: crate::Output) -> Self {
         Self {
             directory,
-            attempt: Some(OutputAttempt::new(output)),
+            attempt: Some(output),
         }
     }
 
@@ -224,21 +237,12 @@ impl SessionProfile {
     }
 
     pub(crate) fn request_start(&mut self, obs: &mut Obs, output: crate::Output) -> io::Result<()> {
-        self.attempt = Some(OutputAttempt::new(output));
+        self.attempt = Some(output);
         obs.start(output)
     }
 
     pub(crate) fn requested_output(&self) -> Option<crate::Output> {
-        self.attempt.as_ref().map(|attempt| attempt.output)
-    }
-
-    pub(crate) fn output_progress_mut(&mut self) -> Option<(crate::Output, &mut OutputProgress)> {
-        let attempt = self.attempt.as_mut()?;
-        Some((attempt.output, &mut attempt.progress))
-    }
-
-    pub(crate) fn progress(&self) -> Option<Value> {
-        self.attempt.as_ref()?.progress.status()
+        self.attempt
     }
 
     pub(crate) fn discard(&self) -> io::Result<()> {
@@ -1532,31 +1536,33 @@ mod tests {
             )
             .unwrap()
         };
-        let mut progress = OutputProgress::default();
         assert!(!sample(false, 3_u64, Value::Null).ready());
         assert!(!sample(true, 0, Value::Null).ready());
-        assert!(!progress.observe(sample(true, 0, Value::Null)));
-        assert_eq!(progress.status(), None);
+        assert!(OutputProgress::start(sample(true, 0, Value::Null)).is_none());
 
         let baseline = sample(true, 3, json!(100));
         assert!(baseline.ready());
-        assert!(progress.observe(baseline));
-        let status = Some(json!({
+        let mut progress = OutputProgress::start(baseline).unwrap();
+        let status = json!({
             "active": true, "bytes": 3, "frames": null,
             "frame_health": "unknown", "duration_ms": 100,
-        }));
-        assert_eq!(progress.status(), status);
+        });
+        assert_eq!(progress.snapshot().status(), status);
         for (active, bytes) in [(false, 10), (true, 3), (true, 2)] {
-            assert!(!progress.observe(sample(active, bytes, Value::Null)));
-            assert_eq!(progress.status(), status);
+            assert!(progress
+                .observe(sample(active, bytes, Value::Null))
+                .is_none());
+            assert_eq!(progress.snapshot().status(), status);
         }
-        assert!(progress.observe(sample(true, 4, json!("optional"))));
         assert_eq!(
-            progress.status(),
-            Some(json!({
+            progress
+                .observe(sample(true, 4, json!("optional")))
+                .unwrap()
+                .status(),
+            json!({
                 "active": true, "bytes": 4, "frames": null,
                 "frame_health": "unknown", "duration_ms": null,
-            }))
+            })
         );
     }
 
@@ -1570,33 +1576,28 @@ mod tests {
             )
             .unwrap()
         };
-        let mut profile = SessionProfile::test_attempt(PathBuf::new(), output);
-        assert_eq!(profile.progress(), None);
+        let profile = SessionProfile::test_attempt(PathBuf::new(), output);
         assert!(!sample(10, 0).ready());
         assert!(!sample(0, 2).ready());
-        let (_, progress) = profile.output_progress_mut().unwrap();
-        assert!(!progress.observe(sample(10, 0)));
-        assert!(progress.observe(sample(10, 2)));
-        let baseline = Some(json!({
+        assert!(OutputProgress::start(sample(10, 0)).is_none());
+        let mut progress = OutputProgress::start(sample(10, 2)).unwrap();
+        let baseline = json!({
             "active": true, "bytes": 10, "frames": 2,
             "frame_health": "pending", "duration_ms": null,
-        }));
-        assert_eq!(profile.progress(), baseline);
+        });
+        assert_eq!(progress.snapshot().status(), baseline);
 
-        let mut progress = std::mem::take(profile.output_progress_mut().unwrap().1);
         assert_eq!(profile.requested_output(), Some(output));
-        assert_eq!(profile.progress(), None);
         for (bytes, frames) in [(20, 2), (20, 1), (10, 4), (9, 4)] {
-            assert!(!progress.observe(sample(bytes, frames)));
-            assert_eq!(progress.status(), baseline);
+            assert!(progress.observe(sample(bytes, frames)).is_none());
+            assert_eq!(progress.snapshot().status(), baseline);
         }
-        assert!(progress.observe(sample(11, 3)));
         assert_eq!(
-            progress.status(),
-            Some(json!({
+            progress.observe(sample(11, 3)).unwrap().status(),
+            json!({
                 "active": true, "bytes": 11, "frames": 3,
                 "frame_health": "progressing", "duration_ms": null,
-            }))
+            })
         );
     }
 

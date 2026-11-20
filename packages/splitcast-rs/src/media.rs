@@ -10,6 +10,8 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
+pub(crate) const RECEIVE_TIMEOUT: Duration = Duration::from_secs(2);
+
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|x| x.to_string()).collect()
 }
@@ -51,9 +53,9 @@ pub(crate) fn receive_snapshot(
 fn read_paths(api_port: u16, operation: Option<&Operation>) -> io::Result<Vec<u8>> {
     let timeout = match operation {
         Some(operation) => operation
-            .deadline(Duration::from_secs(2))?
+            .deadline(RECEIVE_TIMEOUT)?
             .saturating_duration_since(Instant::now()),
-        None => Duration::from_secs(2),
+        None => RECEIVE_TIMEOUT,
     };
     crate::http::get_body(api_port, "/v3/paths/list", timeout, 1024 * 1024)
 }

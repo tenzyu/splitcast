@@ -238,6 +238,30 @@ impl Agent {
         status
     }
 
+    fn assert_observers(&self, expected: usize) {
+        let tasks = format!("/proc/{}/task", self.child.id());
+        let end = Instant::now() + Duration::from_secs(2);
+        loop {
+            let count = fs::read_dir(&tasks)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|task| {
+                    fs::read_to_string(task.path().join("comm"))
+                        .is_ok_and(|name| name.trim() == "splitcast-watch")
+                })
+                .count();
+            assert!(count <= 1, "created more than one production observer");
+            if count == expected {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "observer count {count}, expected {expected}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn shutdown(&mut self) {
         if self.child.try_wait().unwrap().is_some() {
             return;
@@ -557,21 +581,13 @@ fn production_watchdog_requires_stream_frames_as_well_as_bytes() {
 
         let pids = fixture.pids();
         assert!(!pids.is_empty());
+        let failure_start = Instant::now();
         fs::write(fixture.root.join("production/frame-counter-fault"), fault).unwrap();
-        let end = Instant::now() + Duration::from_secs(4);
-        loop {
-            let status = agent.ok("status", json!({}));
-            if status["state"] == "failed" {
-                break;
-            }
-            assert!(
-                Instant::now() < end,
-                "watchdog accepted {fault} stream frames: {status}"
-            );
-            thread::sleep(Duration::from_millis(20));
-        }
-        let failed = agent.state("failed");
-        assert_eq!(failed["obs_shutdown"]["output_inactive_confirmed"], true);
+        let reason = match fault {
+            "missing" | "wrong-type" => "OBS output observation unavailable",
+            _ => "OBS output stopped progressing",
+        };
+        assert_production_failure(agent, reason, failure_start, true);
         fixture.released(&pids);
         let log = fs::read_to_string(fixture.root.join("production/obs-requests.log")).unwrap();
         assert_eq!(log.lines().filter(|line| *line == "StartStream").count(), 1);
@@ -1246,7 +1262,8 @@ fn virtual_worker() {
                 .parse()
                 .unwrap();
             let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-            for (n, stream) in listener.incoming().enumerate() {
+            let mut count = 0;
+            for stream in listener.incoming() {
                 let mut stream = stream.unwrap();
                 stream.set_read_timeout(Some(LIMIT)).unwrap();
                 let mut request = Vec::new();
@@ -1257,6 +1274,7 @@ fn virtual_worker() {
                     assert!(request.len() < 8192);
                 }
                 assert!(request.starts_with(b"GET /v3/paths/list HTTP/1.1"));
+                record_edit_observation(&dir, "receiver-edit-reads");
                 if dir.join("hold-readiness").exists() {
                     fs::write(
                         dir.join("prepare-readiness-entered"),
@@ -1268,12 +1286,20 @@ fn virtual_worker() {
                         thread::sleep(Duration::from_millis(10));
                     }
                 }
+                if !dir.join("freeze-receive-bytes").exists() {
+                    count += 1;
+                }
+                let mic_bytes = if dir.join("malformed-receive-path").exists() {
+                    json!("invalid")
+                } else {
+                    json!(count * 512)
+                };
                 let body = json!({"items":[
-                    {"name":"game","ready":true,"bytesReceived":(n+1)*1024,"tracks":["H264","MPEG-4 Audio"]},
-                    {"name":"mic","ready":true,"bytesReceived":(n+1)*512,"tracks":["Opus"]},
-                    {"name":"camera","ready":true,"bytesReceived":(n+1)*256,"tracks":["H264"]}
+                    {"name":"game","ready":true,"bytesReceived":count*1024,"tracks":["H264","MPEG-4 Audio"]},
+                    {"name":"mic","ready":true,"bytesReceived":mic_bytes,"tracks":["Opus"]},
+                    {"name":"camera","ready":true,"bytesReceived":count*256,"tracks":["H264"]}
                 ]}).to_string();
-                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             }
         }
         "obs" => virtual_obs(&dir),
@@ -1282,6 +1308,21 @@ fn virtual_worker() {
         },
         other => panic!("unexpected stand-in worker {other}"),
     }
+}
+
+fn record_edit_observation(dir: &Path, file: &str) {
+    if dir.join("scene-transform-committed").exists() && dir.join("hold-scene-ack").exists() {
+        fixture_timestamp(&dir.join(file));
+    }
+}
+
+fn fixture_timestamp(path: &Path) {
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    writeln!(log, "{:?}", Instant::now()).unwrap();
 }
 
 #[derive(Default)]
@@ -1360,6 +1401,15 @@ fn virtual_obs(dir: &Path) {
             let log = Arc::clone(&log);
             scope.spawn(move || {
         let stream = stream.unwrap();
+        let hold = dir.join("hold-all-obs");
+        if hold.exists() {
+            fixture_timestamp(&dir.join("obs-all-held.log"));
+            let end = Instant::now() + LIMIT;
+            while hold.exists() && Instant::now() < end {
+                thread::sleep(Duration::from_millis(10));
+            }
+            return;
+        }
         stream.set_read_timeout(Some(LIMIT)).unwrap();
         stream.set_write_timeout(Some(LIMIT)).unwrap();
         let Ok(mut socket) = tungstenite::accept(stream) else { return };
@@ -1455,7 +1505,10 @@ fn virtual_obs(dir: &Path) {
                     json!({})
                 },
                 "GetRecordStatus" | "GetStreamStatus" => {
-                    *count += 1;
+                    record_edit_observation(dir, "obs-edit-reads");
+                    if !dir.join("freeze-output-bytes").exists() {
+                        *count += 1;
+                    }
                     let mut status = json!({"outputActive":*active == Some(method),"outputBytes":*count*1024,"outputDuration":*count*1000});
                     if method == "GetStreamStatus" {
                         match fs::read_to_string(dir.join("frame-counter-fault")).as_deref() {
@@ -1716,80 +1769,244 @@ fn studio_scene_edits_observe_partial_obs_effects_and_persist_only_verified_layo
 
 #[test]
 fn production_held_scene_edit() {
-    // The long arm pins the baseline false stop. When sampling is independent
-    // of the effect owner, both edits must leave a progressing recording.
-    for (hold_ms, expected) in [(100, "running"), (3500, "failed")] {
+    let repeats = if std::env::var_os("SPLITCAST_REPEAT_HELD_EDIT").is_some() {
+        5
+    } else {
+        1
+    };
+    for hold_ms in [100, 3500] {
         let mut fixture = Fixture::with_options(false, None, true);
         let agent = &fixture.production;
+        agent.assert_observers(0);
         agent.ok("prepare", json!({}));
+        agent.assert_observers(0);
         agent.ok("start", json!({}));
-        let scene = agent.ok("scene", json!({}));
-        let mut layout = scene["draft"].clone();
-        layout["camera"]["x"] = json!(128);
+        agent.assert_observers(1);
         let dir = fixture.root.join("production");
         let hold = dir.join("hold-scene-ack");
         let committed = dir.join("scene-transform-committed");
-        fs::write(&hold, "hold").unwrap();
-        thread::scope(|scope| {
-            let edit = scope
-                .spawn(|| agent.command("scene-apply", scene_edit(&scene, "held-edit", &layout)));
-            let end = Instant::now() + Duration::from_secs(4);
-            while !committed.exists() && Instant::now() < end {
-                thread::sleep(Duration::from_millis(5));
-            }
-            let accepted = committed.exists();
-            if accepted {
-                thread::sleep(Duration::from_millis(hold_ms));
-            }
-            fs::remove_file(hold).unwrap();
-            assert!(accepted, "scene edit did not reach its OBS write");
-            let (code, result) = edit.join().unwrap();
-            assert_eq!(code, 200, "{result}");
-            assert_eq!(result["operation"]["state"], "applied");
-        });
-
-        let pids = fixture.pids();
-        assert!(!pids.is_empty());
-        let end = Instant::now() + Duration::from_secs(4);
-        let mut bytes = agent.ok("status", json!({}))["output_progress"]["bytes"].as_u64();
-        let mut advanced = 0;
-        let status = loop {
-            let status = agent.ok("status", json!({}));
-            if expected == "failed" && status["state"] == "failed" {
-                assert_eq!(status["children"], json!([]));
-                assert!(status["output"].is_null());
-                assert!(status["error"]
-                    .as_str()
-                    .unwrap()
-                    .contains("stopped progressing"));
-                fixture.released(&pids);
-                break status;
-            }
-            if expected == "running" {
-                assert_eq!(status["state"], "running", "{status}");
-                let current = status["output_progress"]["bytes"].as_u64().unwrap();
-                if bytes.is_none_or(|previous| current > previous) {
-                    bytes = Some(current);
-                    advanced += 1;
-                    if advanced == 2 {
-                        break status;
-                    }
-                }
-            }
-            assert!(
-                Instant::now() < end,
-                "hold_ms={hold_ms} expected {expected}: {status}"
-            );
-            thread::sleep(Duration::from_millis(20));
+        let read_counts = || {
+            ["receiver-edit-reads", "obs-edit-reads"].map(|name| {
+                fs::read_to_string(dir.join(name))
+                    .unwrap_or_default()
+                    .lines()
+                    .count()
+            })
         };
-        println!(
-            "hold_ms={hold_ms} edit=applied state={} later_samples={advanced} error={}",
-            status["state"], status["error"]
-        );
+        for repeat in 0..repeats {
+            let scene = agent.ok("scene", json!({}));
+            let mut layout = scene["draft"].clone();
+            layout["camera"]["x"] = json!(128 + repeat);
+            let args = scene_edit(&scene, &format!("held-edit-{repeat}"), &layout);
+            let [before_receiver, before_obs] = read_counts();
+            fs::write(&hold, "hold").unwrap();
+            thread::scope(|scope| {
+                let edit = scope.spawn(|| agent.command("scene-apply", args));
+                await_scene_transform(&committed);
+                thread::sleep(Duration::from_millis(hold_ms));
+                fs::remove_file(&hold).unwrap();
+                let (code, result) = edit.join().unwrap();
+                assert_eq!(code, 200, "{result}");
+                assert_eq!(result["operation"]["state"], "applied");
+            });
+            fs::remove_file(&committed).unwrap();
+            let [receiver, obs] = read_counts();
+            let receiver = receiver - before_receiver;
+            let obs = obs - before_obs;
+            if hold_ms == 3500 {
+                assert!(
+                    receiver >= 2 && obs >= 2,
+                    "held edit reads: {receiver} receiver, {obs} OBS"
+                );
+            }
+
+            let end = Instant::now() + Duration::from_secs(4);
+            let mut bytes = agent.state("running")["output_progress"]["bytes"]
+                .as_u64()
+                .unwrap();
+            let mut advanced = 0;
+            while advanced < 2 {
+                let status = agent.state("running");
+                let current = status["output_progress"]["bytes"].as_u64().unwrap();
+                if current > bytes {
+                    bytes = current;
+                    advanced += 1;
+                }
+                assert!(
+                    Instant::now() < end,
+                    "hold_ms={hold_ms} output stalled: {status}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+            agent.assert_observers(1);
+            println!("hold_ms={hold_ms} edit={repeat} applied state=running later_samples={advanced} receiver_reads_during_hold={receiver} obs_reads_during_hold={obs}");
+        }
+        let pids = fixture.pids();
         agent.ok("stop", json!({}));
+        agent.assert_observers(0);
         fixture.released(&pids);
         fixture.capture.shutdown();
         fixture.production.shutdown();
+    }
+}
+
+fn await_scene_transform(committed: &Path) {
+    let end = Instant::now() + Duration::from_secs(4);
+    while !committed.exists() {
+        assert!(
+            Instant::now() < end,
+            "scene edit did not reach its OBS write"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn production_ingress_fault_cancels_a_held_edit_and_reconciles_output() {
+    let mut fixture = Fixture::with_options(false, None, true);
+    let agent = &fixture.production;
+    agent.ok("prepare", json!({}));
+    agent.ok("start", json!({}));
+    let pids = fixture.pids();
+    let scene = agent.ok("scene", json!({}));
+    let mut layout = scene["draft"].clone();
+    layout["camera"]["x"] = json!(128);
+    let args = scene_edit(&scene, "ingress-stall-during-edit", &layout);
+    let dir = fixture.root.join("production");
+    let hold = dir.join("hold-scene-ack");
+    fs::write(&hold, "hold").unwrap();
+    let failure_start = thread::scope(|scope| {
+        let edit = scope.spawn(|| agent.command("scene-apply", args));
+        await_scene_transform(&dir.join("scene-transform-committed"));
+        let now = Instant::now();
+        fs::write(dir.join("freeze-receive-bytes"), "").unwrap();
+        let (code, body) = edit.join().unwrap();
+        assert_ne!(code, 200, "{body}");
+        assert_eq!(body["outcome"], "unknown");
+        assert!(
+            now.elapsed() < Duration::from_secs(4),
+            "edit waited for its own deadline: {body}"
+        );
+        fs::remove_file(&hold).unwrap();
+        now
+    });
+    assert_production_failure(
+        agent,
+        "incoming media stopped progressing",
+        failure_start,
+        true,
+    );
+    let requests = fs::read_to_string(dir.join("obs-requests.log")).unwrap();
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|method| *method == "StopRecord")
+            .count(),
+        1
+    );
+    fixture.released(&pids);
+    agent.ok("stop", json!({}));
+    fixture.capture.shutdown();
+    fixture.production.shutdown();
+}
+
+#[test]
+fn production_supervision_reports_malformed_ingress_output_stall_and_all_obs_connections_held() {
+    for (flag, error, inactive) in [
+        (
+            "malformed-receive-path",
+            "unusable incoming media: invalid media byte counter",
+            true,
+        ),
+        (
+            "freeze-output-bytes",
+            "OBS output stopped progressing",
+            true,
+        ),
+        ("hold-all-obs", "OBS output observation unavailable", false),
+    ] {
+        let mut fixture = Fixture::new();
+        let agent = &fixture.production;
+        agent.ok("prepare", json!({}));
+        agent.ok("start", json!({}));
+        let pids = fixture.pids();
+        let dir = fixture.root.join("production");
+        let failure_start = Instant::now();
+        fs::write(dir.join(flag), "").unwrap();
+        let pending_observed = assert_production_failure(agent, error, failure_start, inactive);
+        fixture.released(&pids);
+        if !inactive {
+            assert!(
+                pending_observed,
+                "status unavailable during failure cleanup"
+            );
+            let held = fs::read_to_string(dir.join("obs-all-held.log")).unwrap();
+            assert!(
+                held.lines().count() >= 2,
+                "observer and cleanup must try independent connections"
+            );
+        }
+        agent.ok("stop", json!({}));
+        fixture.capture.shutdown();
+        fixture.production.shutdown();
+    }
+}
+
+#[test]
+fn production_worker_death_joins_the_observer() {
+    let mut fixture = Fixture::new();
+    let agent = &fixture.production;
+    agent.ok("prepare", json!({}));
+    agent.ok("start", json!({}));
+    agent.assert_observers(1);
+    let pids = fixture.pids();
+    let writer: i32 = fs::read_to_string(fixture.root.join("production/ffmpeg.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let failure_start = Instant::now();
+    assert_eq!(unsafe { libc::kill(writer, libc::SIGKILL) }, 0);
+    assert_production_failure(
+        agent,
+        "owned infrastructure or media process exited",
+        failure_start,
+        true,
+    );
+    fixture.released(&pids);
+    agent.ok("stop", json!({}));
+    fixture.capture.shutdown();
+    fixture.production.shutdown();
+}
+
+fn assert_production_failure(agent: &Agent, reason: &str, start: Instant, inactive: bool) -> bool {
+    let mut pending_observed = false;
+    loop {
+        let status = agent.ok("status", json!({}));
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{reason}: {status}"
+        );
+        if status["state"] == "failed" {
+            assert!(
+                status["error"].as_str().unwrap().contains(reason),
+                "{status}"
+            );
+            if status["resource_observation"] == "unknown" {
+                assert!(status["children"].is_null());
+                pending_observed = true;
+            } else {
+                assert_eq!(
+                    status["obs_shutdown"]["output_inactive_confirmed"],
+                    inactive
+                );
+                assert_eq!(status["children"], json!([]));
+                assert!(status["output"].is_null());
+                agent.assert_observers(0);
+                println!("{reason} detected and cleanup observed after {:?}; output_inactive_confirmed={inactive}", start.elapsed());
+                return pending_observed;
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -1831,8 +2048,10 @@ fn studio_scene_proxy_preserves_stop_under_withheld_obs_acknowledgment() {
     let pids = fixture.pids();
     let requested = Instant::now();
     let (code, ack) = fixture.capture.command("stop", json!({}));
+    let latency = requested.elapsed();
     assert!(matches!(code, 200 | 202), "{ack}");
-    assert!(requested.elapsed() <= Duration::from_millis(500));
+    assert!(latency <= Duration::from_millis(500));
+    println!("urgent Stop acknowledged as HTTP {code} after {latency:?}");
     let error = edit.join().unwrap().unwrap_err();
     assert!(error.to_string().contains("outcome unknown"), "{error}");
     fs::remove_file(hold).unwrap();

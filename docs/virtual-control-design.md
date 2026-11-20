@@ -56,8 +56,26 @@ remains a possible external effect requiring compensation.
 The listener checks expiry independently of Agent progress. Owner-driven
 expiry uses the same revocation before entering Stopping. Inbound heartbeat
 renews only a live matching Ready, Running, or Degraded lease. Preparing keeps
-its initial lease. Outbound capture heartbeat and health work remain with the
-effect owner, so prolonged stalls can fail closed through production expiry.
+its initial lease. The capture Agent still sends its own heartbeats, so
+prolonged capture stalls can fail closed through production expiry.
+
+## Production Running supervision
+
+Start checks ingress and OBS output while the Agent owns the effects. On
+Running it transfers both comparison histories to one read-only observer.
+Each cycle reads one bounded MediaMTX response and authenticates a separate
+OBS status connection. The next cycle is scheduled one second after the
+previous one finishes. MediaMTX is capped at two seconds and the complete OBS
+read at five seconds. The observer replaces one generation-bound progress
+snapshot and latches the first terminal fault.
+
+Ordinary admission, I/O and successful completion check the latch. The Agent
+also checks for an exited thread or a snapshot eight seconds old. Pending
+Stop takes priority. A fault interrupts ordinary work and hands compensation
+to the Agent. While it runs, status reports Failed with unknown resource
+observation. Final status carries the separately observed OBS inactivity and
+exit. Cleanup cancels and joins the observer before reconciling output with a
+fresh 15-second cooperative budget.
 
 ## Remote completion and uncertainty
 

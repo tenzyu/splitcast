@@ -448,6 +448,10 @@ impl Invocation {
 }
 
 impl Command {
+    pub(crate) fn is_status_observation(&self) -> bool {
+        matches!(self, Self::Status | Self::Diagnostics)
+    }
+
     pub fn request(&self) -> (&'static str, Value) {
         match self {
             Self::Status => ("status", json!({})),

@@ -4,6 +4,7 @@ use crate::protocol::{
 };
 use crate::request::rejected;
 use crate::scene::{ResultState as SceneResult, Scene};
+use crate::supervision::{Fault, Observer, RunningMedia};
 use crate::workers::{Worker, Workers};
 use crate::{config, control, media, obs, return_audio};
 use crate::{Lifecycle, Output, Role, Session};
@@ -96,6 +97,7 @@ impl ObsShutdown {
 
 struct Agent {
     operation: Option<crate::request::Operation>,
+    observer: Option<Observer>,
     cfg: config::Config,
     session: Session,
     children: Workers,
@@ -104,8 +106,6 @@ struct Agent {
     mic_muted: bool,
     last_heartbeat: Instant,
     _lock: fs::File,
-    receive_monitor: Option<media::ReceiveMonitor>,
-    last_health: Instant,
     media_prepared: bool,
     obs_profile: Option<obs::SessionProfile>,
     obs_shutdown: Option<ObsShutdown>,
@@ -145,6 +145,7 @@ impl Agent {
         let scene = Scene::new(instance.clone(), &cfg);
         Ok(Self {
             operation: None,
+            observer: None,
             cfg,
             session: Session::for_agent(role, instance),
             children: Workers::default(),
@@ -153,8 +154,6 @@ impl Agent {
             mic_muted: false,
             last_heartbeat: Instant::now(),
             _lock: lock,
-            receive_monitor: None,
-            last_health: Instant::now(),
             media_prepared: false,
             obs_profile: None,
             obs_shutdown: None,
@@ -184,7 +183,7 @@ impl Agent {
             "state": json_state(self.session.state()), "output": self.session.output().map(Output::as_str),
             "start_id": self.session.start_id(),
             "output_seconds_remaining": self.session.output_seconds_remaining(),
-            "output_progress": self.obs_profile.as_ref().and_then(obs::SessionProfile::progress),
+            "output_progress": control.output_progress().map(obs::ProgressSnapshot::status),
             "error": self.error, "warnings": self.warnings, "mic_muted": self.mic_muted,
             "children": self.children.names(), "stop": stop, "outcome": outcome, "stop_id": control.stop_id(),
             "owner": control.completed_owner().as_ref().map(OwnerId::as_str),
@@ -355,21 +354,13 @@ impl Agent {
             self.operation.as_ref(),
         )
     }
-    fn observe_output(&mut self) -> io::Result<bool> {
-        let profile = self
-            .obs_profile
-            .as_mut()
-            .ok_or_else(|| err("owned OBS profile unavailable"))?;
-        let (output, progress) = profile
-            .output_progress_mut()
-            .ok_or_else(|| err("owned OBS output unavailable"))?;
-        let sample = obs::read_output_status(
+    fn read_output_status(&self, output: Output) -> io::Result<obs::OutputStatus> {
+        obs::read_output_status(
             self.cfg.obs_port,
             &self.cfg.obs_password,
             output,
             self.operation.as_ref(),
-        )?;
-        Ok(progress.observe(sample))
+        )
     }
     fn start(&mut self, start: Start, owner: Option<&OwnerId>) -> io::Result<()> {
         let output = start.output();
@@ -502,37 +493,36 @@ impl Agent {
                 self.wait_ready(|| {
                     self.receive_snapshot().is_ok_and(|snapshot| {
                         monitor.observe(&snapshot, Instant::now()).unwrap_or(false)
-                    }) && obs::read_output_status(
-                        self.cfg.obs_port,
-                        &self.cfg.obs_password,
-                        output,
-                        self.operation.as_ref(),
-                    )
-                    .is_ok_and(|sample| sample.ready())
+                    }) && self
+                        .read_output_status(output)
+                        .is_ok_and(|sample| sample.ready())
                 })?;
-                self.receive_monitor = Some(monitor);
-                if !self.observe_output()? {
-                    return Err(err(
-                        "OBS output counters were not ready before confirming Start",
-                    ));
-                }
+                let status = self.read_output_status(output)?;
+                let media = RunningMedia::new(&self.cfg, output, monitor, status)?;
+                self.checkpoint()?;
+                let generation = self
+                    .session
+                    .start_observed(output, media.baseline())
+                    .map_err(io::Error::other)?;
+                self.observer = Some(media.supervise(self.session.control(), generation)?);
+            }
+            self.checkpoint()?;
+            if self.cfg.role == "capture" {
+                self.session.start(output).map_err(io::Error::other)?;
+            }
+            if let Some(owner) = owner {
+                self.renew_lease(owner)?;
             }
             Ok(())
         })();
-        if let Err(e) = outcome {
-            return Err(self.fail(e));
-        }
-        self.checkpoint().map_err(|e| self.fail(e))?;
-        self.session
-            .start(output)
-            .map_err(|error| self.fail(io::Error::other(error)))?;
-        self.last_health = Instant::now();
-        if let Some(o) = owner {
-            self.renew_lease(o)?;
-        }
-        Ok(())
+        outcome.map_err(|error| self.fail(error))
     }
     fn cleanup(&mut self) -> io::Result<()> {
+        if let Some(mut observer) = self.observer.take() {
+            if let Err(error) = observer.shutdown() {
+                self.warn(&error.to_string());
+            }
+        }
         let previous = self.operation.replace(crate::request::Operation::new(
             Arc::new(AtomicBool::new(false)),
             None,
@@ -543,7 +533,6 @@ impl Agent {
         result
     }
     fn cleanup_owned(&mut self) -> io::Result<()> {
-        self.receive_monitor = None;
         let scene_reset = self.scene.reset();
         self.eventsub.take(); // cancels and joins the session subscription
         self.speech_source.take(); // cancels and joins any synthesis worker
@@ -617,19 +606,19 @@ impl Agent {
         }
     }
     fn fail(&mut self, cause: io::Error) -> io::Error {
-        if self.session.control().stop_pending() {
+        if self.session.fail().is_err() && self.session.control().stop_pending() {
             // The admitted Stop owns compensation. Do not perform two cleanup
             // attempts or overwrite Stopping while unwinding cancelled work.
             let _ = self.session.stop();
             self.error = cause.to_string();
             return cause;
         }
-        let _ = self.session.fail();
         let error = match self.cleanup() {
             Ok(()) => err(&cause.to_string()),
             Err(cleanup) => err(&format!("{cause}; cleanup incomplete: {cleanup}")),
         };
         self.error = error.to_string();
+        self.session.failure_reconciled();
         error
     }
     fn stop(&mut self, owner: Option<&OwnerId>) -> io::Result<()> {
@@ -655,6 +644,9 @@ impl Agent {
     }
     fn tick(&mut self) {
         self.expire_lease();
+        if self.reconcile_observer_fault() {
+            return;
+        }
         if matches!(self.session.state(), Lifecycle::Ready | Lifecycle::Running) {
             if self.cfg.role == "capture"
                 && self.children.contains(Worker::Tunnel)
@@ -671,33 +663,25 @@ impl Agent {
                 let _ = self.fail(err(
                     "owned infrastructure or media process exited; explicit prepare required",
                 ));
+                return;
             }
             if let Err(error) = self.poll_speech() {
                 self.warn(&format!("speech return: {error}"));
             }
-            if self.cfg.role == "production"
-                && self.session.state() == Lifecycle::Running
-                && self.last_health.elapsed() >= Duration::from_secs(1)
-            {
-                self.last_health = Instant::now();
-                let health = (|| -> io::Result<bool> {
-                    let snapshot = self.receive_snapshot()?;
-                    if !self
-                        .receive_monitor
-                        .as_mut()
-                        .ok_or_else(|| err("receive monitor unavailable"))?
-                        .observe(&snapshot, Instant::now())
-                        .map_err(io::Error::other)?
-                    {
-                        return Ok(false);
-                    }
-                    self.observe_output()
-                })();
-                if !matches!(health, Ok(true)) {
-                    let _ = self.fail(err("incoming media or OBS output stopped progressing; output stopped without automatic publication"));
-                }
-            }
         }
+    }
+    fn reconcile_observer_fault(&mut self) -> bool {
+        let control = self.session.control();
+        if let Some(generation) = self.observer.as_ref().and_then(Observer::exited_generation) {
+            control.latch_observer_fault(generation, Fault::ObserverExited);
+        }
+        if let Some(fault) = control.observation_fault() {
+            let _ = self.fail(err(&format!(
+                "{fault}; output stopped without automatic publication"
+            )));
+            return true;
+        }
+        false
     }
     fn poll_speech(&mut self) -> io::Result<()> {
         if let Some(source) = &mut self.speech_source {
@@ -945,6 +929,7 @@ impl Agent {
             }
             _ => return Err(rejected("unknown Studio scene command")),
         };
+        self.checkpoint()?;
         self.scene.result(state);
         Ok(self.scene.snapshot(&self.cfg, generation, running))
     }
@@ -959,27 +944,36 @@ impl Agent {
             work.ticket.abandon();
             return;
         }
+        self.expire_lease();
+        self.reconcile_observer_fault();
+        let observation = work.invocation.command.is_status_observation();
+        let control = self.session.control();
+        let admitted = control.admit(observation);
+        if !observation && !matches!(admitted, Ok(generation) if generation == work.generation) {
+            let message = admitted.err().map_or_else(
+                || "request superseded by session transition".into(),
+                |error| error.to_string(),
+            );
+            work.ticket.finish(crate::request::error_response(
+                crate::request::Failure::NotExecuted,
+                &message,
+            ));
+            return;
+        }
         let preparing = matches!(work.invocation.command, Command::Prepare { .. });
         if !preparing && !work.ticket.begin() {
             return;
         }
-        let control = self.session.control();
-        if !matches!(control.admit(false), Ok(generation) if generation == work.generation) {
-            work.ticket.finish(crate::request::error_response(
-                crate::request::Failure::NotExecuted,
-                "request superseded by Stop",
-            ));
-            return;
-        }
-        self.operation = Some(
-            crate::request::Operation::new(
-                Arc::clone(shutdown),
-                Some(Arc::clone(&work.ticket)),
-                limits.operation,
-            )
-            .with_control(control, work.generation),
+        let operation = crate::request::Operation::new(
+            Arc::clone(shutdown),
+            Some(Arc::clone(&work.ticket)),
+            limits.operation,
         );
-        self.expire_lease();
+        self.operation = Some(if observation {
+            operation
+        } else {
+            operation.with_control(control.clone(), work.generation)
+        });
         let result = if let Command::Prepare { media } = work.invocation.command {
             self.prepare_admitted(
                 work.invocation.owner.as_ref(),
@@ -994,9 +988,14 @@ impl Agent {
             self.execute(work.invocation)
         };
         let response = result
+            .and_then(|body| self.checkpoint().map(|()| body))
             .map(|body| (200, body))
             .unwrap_or_else(crate::request::command_failure);
-        work.ticket.finish(response);
+        if observation {
+            work.ticket.finish(response);
+        } else {
+            control.finish_ordinary(work.generation, &work.ticket, response);
+        }
     }
     fn prepare_remote(&mut self, owner: RemoteOwner, media: bool) -> io::Result<()> {
         let cap = Duration::from_secs(self.cfg.timeout as u64);

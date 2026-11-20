@@ -267,23 +267,23 @@ fn connection(
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }
-    if matches!(invocation.command, Command::Status) {
-        match config.control.stop_observation(invocation.owner.as_ref()) {
-            Ok(Some(body)) => {
-                let _ = control::reply(stream, 200, &body);
-                return;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                let _ = control::reply(stream, 409, &serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string());
-                return;
-            }
+    let status_owner =
+        matches!(invocation.command, Command::Status).then(|| invocation.owner.clone());
+    let observe_cleanup = || {
+        let owner = status_owner.as_ref()?;
+        match config.control.status_during_cleanup(owner.as_ref()) {
+            Ok(status) => status.map(|body| (200, body)),
+            Err(error) => Some((409, serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string())),
         }
+    };
+    if let Some((code, body)) = observe_cleanup() {
+        let _ = control::reply(stream, code, &body);
+        return;
     }
-    let generation = match config.control.admit(matches!(
-        invocation.command,
-        Command::Status | Command::Diagnostics
-    )) {
+    let generation = match config
+        .control
+        .admit(invocation.command.is_status_observation())
+    {
         Ok(generation) => generation,
         Err(error) => {
             let response = error_response(crate::request::Failure::NotExecuted, &error.to_string());
@@ -333,6 +333,9 @@ fn connection(
     } else {
         loop {
             if let Some(response) = ticket.response() {
+                break response;
+            }
+            if let Some(response) = observe_cleanup() {
                 break response;
             }
             if cancel.load(Ordering::Relaxed) || Instant::now() >= expires + limits.operation {
