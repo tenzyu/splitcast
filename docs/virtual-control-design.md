@@ -42,9 +42,8 @@ introduced.
 ## One effects owner and one authority source
 
 Agent alone owns configuration, Workers, RPC sequencing, the role lock, and
-lifecycle transitions. SessionControl shares only canonical phase/authority
-metadata, a generation, the active preparation owner, and the current/latest
-Stop result. It does not own a second Agent or cloned processes.
+lifecycle transitions. SessionControl shares the canonical phase and its
+authority, the admission generation, and the current/latest Stop result.
 
 Authorization, lease checks, Stop revocation, and Ready/Running commits use the
 same short mutex. No copied authorization snapshot needs synchronization.
@@ -62,18 +61,28 @@ effect owner, so prolonged stalls can fail closed through production expiry.
 
 ## Remote completion and uncertainty
 
+Paired Agents require `transport.version = 3` for both media and speech-only
+sessions. Authenticated production `routes` includes a `prepare_id` while
+production is available in Idle. Capture checks transport compatibility and
+appends a fresh 32-character lowercase hexadecimal nonce to that ID to make
+its `_owner`. At dequeue, production checks the admission generation,
+deadline, Stop and the entire Idle precondition, then commits the owner in
+Preparing under the metadata lock before starting effects. In Ready or
+Running, the same owner and purpose can observe success again.
+
 Capture records its remote owner with the first positive Prepare socket write,
 under the same mutex as generation revocation. Cancellation before dispatch
 does not invent a remote obligation. Even a transmitted HTTP prefix retains
 uncertainty. Lost Prepare or Start responses do not erase that obligation or
 permit blind replay.
 
-Remote Stop may acknowledge intent before completing cleanup. Capture observes
-that accepted intent with read-only, owner-scoped status requests inside its
-existing cleanup budget. It does not retransmit Start/Prepare or automatically
-restart incomplete cleanup. Only matching `owner`, `stop: "completed"`, and
-`state: "idle"` confirm release. Bare Idle, another owner's proof, malformed
-responses, or lost replies retain uncertainty.
+Immediate Stop completion requires a production-incarnation `stop_id`, the
+held owner, `stop: "completed"`, `outcome: "completed"`, and Idle. On a
+`202` acknowledgment, capture retains the admitted `stop_id` and requires it
+on subsequent owner-scoped status reads inside the existing cleanup budget.
+Bare Idle, changed tickets, another owner's proof, malformed responses, and
+lost replies retain uncertainty. On tunnel recovery capture checks
+compatibility and uses its held owner for Stop regardless of `prepare_id`.
 
 Peer Start cannot implicitly prepare Idle. A stale transmitted Start therefore
 cannot recreate a stopped session. An unknown Prepare still in transmission
@@ -101,34 +110,26 @@ control mutation.
 
 ## Ephemeral observation and replay limits
 
-Stop has no per-intent correlation ID or durable result registry. Status shows
-the current pending intent or the latest completion while Idle. A new Prepare
-clears that completion. Another session's later completion can replace its
-owner proof. An unowned status result cannot identify an earlier caller's Stop.
+Status shows the current pending intent or the latest completion while Idle.
+A new Prepare clears that completion. The Stop ticket lives in memory.
 
-For owner-scoped cleanup, a lost reply can be reconciled through read-only
-status only while matching owner, completed Stop, and Idle remain observable.
-A wrong owner, a refusal, or overwritten metadata is unknown, not proof of
-release. Matching owner Stop remains retryable while that owner holds unresolved
-effects, even after expiry. No retry may cancel a different owner's session.
+An explicit retry with the matching owner after a lost Stop reply can return
+the retained completion or admit cleanup for effects still held by that owner,
+including after lease expiry. The first attempt stays unknown until there is
+correlated proof. A different owner's session rejects this retry.
 
 Operator clients must coordinate so another client does not Prepare before the
 first client observes Stop completion. If that window was missed, pause further
 commands and reconcile the currently held session under explicit operator
 authority. Do not infer the old result or blindly stop a newer session.
 
-The local generation fence covers admitted and queued work, not an arbitrary
-cross-host message still in transit. A duplicate Prepare for the current owner
-can be idempotent; a later Prepare admitted from Idle can create fresh effects,
-even with a previously used owner ID. Completed Stop proves release of the held
-session at reconciliation, not rejection of all future Prepare messages.
-Supported clients issue one Prepare attempt, never automatically replay it after
-uncertainty, and use fresh owner IDs for fresh authorizations. Concurrent or
-reordered external replay is outside this in-memory protocol's safety envelope.
-An unresolved transmitted Prepare remains Stopping until release is proved.
-If no owner-bound proof is available, quiesce the peer request sources and
-inspect and release held effects under coordinated operator control before a
-fresh session. Plain Idle or an agent restart alone cannot prove that absence.
+Stop fences admitted local work and invalidates the previous Idle precondition
+for peer acquisitions. A delayed Prepare keeps its old precondition across
+later sessions and process restarts. A fresh authorization uses the current
+Idle revision and a new nonce. An unresolved transmitted Prepare retains its
+release obligation. If no owner-bound proof is available, quiesce the peer
+request sources and inspect and release held effects under coordinated operator
+control before a fresh session.
 
 ## Bounds and shutdown
 

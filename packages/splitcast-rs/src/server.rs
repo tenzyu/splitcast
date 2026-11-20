@@ -1,6 +1,6 @@
 use crate::{
     control,
-    protocol::{Command, Invocation},
+    protocol::{transport, Command, Invocation},
     request::{error_response, RequestTicket},
 };
 use std::io;
@@ -83,6 +83,7 @@ struct ConnectionConfig {
     port: u16,
     token: String,
     max_text: usize,
+    transport: [serde_json::Value; 2],
     limits: Limits,
     control: crate::lifecycle::SessionControl,
     normal_waiters: AtomicUsize,
@@ -95,7 +96,7 @@ impl ListenerOwner {
     pub(crate) fn start(
         listener: TcpListener,
         token: String,
-        max_text: usize,
+        cfg: &crate::config::Config,
         shutdown: Arc<AtomicBool>,
         limits: Limits,
         control: crate::lifecycle::SessionControl,
@@ -104,7 +105,8 @@ impl ListenerOwner {
         let config = Arc::new(ConnectionConfig {
             port,
             token,
-            max_text,
+            max_text: cfg.tts_max_text as usize,
+            transport: [transport(cfg, false), transport(cfg, true)],
             limits,
             control,
             normal_waiters: AtomicUsize::new(0),
@@ -235,7 +237,7 @@ fn connection(
                         if let Some(response) = ticket.response() { break response; }
                         if cancel.load(Ordering::Relaxed) || Instant::now() >= end {
                             let cleanup = if cancel.load(Ordering::Relaxed) { "unknown" } else { "pending" };
-                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup,"stop_id":ticket.id}).to_string());
+                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup,"stop_id":ticket.id()}).to_string());
                         }
                         thread::sleep(Duration::from_millis(10));
                     }
@@ -248,6 +250,20 @@ fn connection(
         let response = config.control.heartbeat(invocation.owner.as_ref(), limits.lease)
             .map(|body| (200, body))
             .unwrap_or_else(|error| (409, serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string()));
+        let _ = control::reply(stream, response.0, &response.1);
+        return;
+    }
+    if let Command::Routes { media } = invocation.command {
+        let response =
+            config
+                .control
+                .prepare_id(invocation.owner.as_ref())
+                .map(|prepare_id| {
+                    (200, serde_json::json!({
+                "transport": &config.transport[usize::from(media)], "prepare_id": prepare_id
+            }).to_string())
+                })
+                .unwrap_or_else(crate::request::command_failure);
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }

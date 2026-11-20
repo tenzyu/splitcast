@@ -154,6 +154,157 @@ impl OwnerId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn matches_prepare_id(&self, prepare_id: &str) -> bool {
+        self.0
+            .rsplit_once('-')
+            .is_some_and(|(id, nonce)| id == prepare_id && valid_nonce(nonce))
+    }
+}
+
+fn valid_nonce(nonce: &str) -> bool {
+    nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn instance_generation(id: &str) -> Option<(&str, u64)> {
+    let (instance, digits) = id.rsplit_once('-')?;
+    if !valid_nonce(instance) || digits.len() > 20 {
+        return None;
+    }
+    let generation = digits.parse::<u64>().ok()?;
+    (digits == generation.to_string()).then_some((instance, generation))
+}
+
+/// Capture's record of the production incarnation and Idle revision it used.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RemoteOwner {
+    owner: OwnerId,
+    instance: String,
+    generation: u64,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct StopId(String);
+
+/// Only a correlated production completion can construct a release proof.
+#[derive(Debug)]
+pub(crate) struct StopProof(RemoteOwner);
+
+impl StopProof {
+    pub(crate) fn proves(&self, owner: &RemoteOwner) -> bool {
+        &self.0 == owner
+    }
+}
+
+impl RemoteOwner {
+    #[cfg(test)]
+    pub(crate) const FIXTURE_INSTANCE: &str = "0123456789abcdef0123456789abcdef";
+
+    #[cfg(test)]
+    pub(crate) fn fixture(nonce: u128) -> Self {
+        Self::from_prepare(
+            &format!("{}-0-idle", Self::FIXTURE_INSTANCE),
+            &format!("{nonce:032x}"),
+        )
+        .unwrap()
+    }
+
+    pub(crate) fn from_prepare(prepare_id: &str, nonce: &str) -> io::Result<Self> {
+        let (instance, generation) = prepare_id
+            .strip_suffix("-idle")
+            .and_then(instance_generation)
+            .filter(|_| valid_nonce(nonce))
+            .ok_or_else(|| io::Error::other("invalid production Idle prepare ID or nonce"))?;
+        Ok(Self {
+            owner: OwnerId::parse(&format!("{prepare_id}-{nonce}"))?,
+            instance: instance.to_owned(),
+            generation,
+        })
+    }
+
+    pub(crate) fn owner(&self) -> &OwnerId {
+        &self.owner
+    }
+
+    fn stop_id<'a>(&self, document: &'a Value) -> io::Result<&'a str> {
+        document["stop_id"]
+            .as_str()
+            .filter(|id| {
+                instance_generation(id).is_some_and(|(instance, generation)| {
+                    instance == self.instance && generation > self.generation
+                })
+            })
+            .ok_or_else(|| {
+                io::Error::other("remote Stop ticket did not match the held production instance")
+            })
+    }
+
+    pub(crate) fn admitted_stop(&self, document: &Value) -> io::Result<StopId> {
+        let id = self.stop_id(document)?;
+        if !document["owner"].is_null() && !self.matches_owner(document) {
+            return Err(io::Error::other(
+                "remote Stop admission reported a different owner",
+            ));
+        }
+        Ok(StopId(id.to_owned()))
+    }
+
+    fn matches_owner(&self, document: &Value) -> bool {
+        document["owner"].as_str() == Some(self.owner.as_str())
+    }
+
+    pub(crate) fn observe_stop(
+        &self,
+        document: &Value,
+        admitted: Option<&StopId>,
+    ) -> io::Result<Option<StopProof>> {
+        let id = self.stop_id(document)?;
+        if !self.matches_owner(document) || admitted.is_some_and(|expected| expected.0 != id) {
+            return Err(io::Error::other(
+                "remote Stop observation changed owner or ticket",
+            ));
+        }
+        if document["state"] == "idle"
+            && document["stop"] == "completed"
+            && document["outcome"] == "completed"
+        {
+            return Ok(Some(StopProof(self.clone())));
+        }
+        if admitted.is_some()
+            && document["state"] == "stopping"
+            && document["stop"] == "requested"
+            && document["outcome"] == "accepted"
+        {
+            return Ok(None);
+        }
+        Err(io::Error::other(
+            "remote Stop did not prove completion for the owned session",
+        ))
+    }
+}
+
+pub(crate) fn transport(cfg: &crate::config::Config, media: bool) -> Value {
+    let mut contract = json!({"version":3});
+    if media {
+        contract["media"] = json!({
+            "video":{"codec":"H264","width":cfg.width,"height":cfg.height,"fps":cfg.fps},
+            "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
+            "ports":{"rtmp":cfg.rtmp,"rtsp":cfg.rtsp}
+        });
+        if let Some(camera) = &cfg.camera {
+            contract["media"]["camera"] = json!({
+                "location":camera.location,"codec":"H264","width":camera.width,
+                "height":camera.height,"fps":camera.fps
+            });
+        }
+    }
+    if cfg.tts_enabled {
+        contract["speech_return"] = json!({"version":1,"expiry_seconds":cfg.tts_expiry_seconds});
+    }
+    contract
 }
 
 fn invalid() -> io::Error {

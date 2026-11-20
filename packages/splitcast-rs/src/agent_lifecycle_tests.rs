@@ -89,14 +89,15 @@ fn expired_and_abandoned_queue_entries_never_prepare() {
     let (server, queue) = ListenerOwner::start(
         socket,
         TOKEN.into(),
-        1000,
+        &fixture.0,
         Arc::clone(&cancel),
         limits,
         agent.session.control(),
     )
     .unwrap();
     for abandon in [false, true] {
-        let client = send(port, "prepare", json!({}));
+        let owner = agent.session.fixture_owner(1);
+        let client = send(port, "prepare", json!({"_owner":owner.as_str()}));
         let work = queue.recv_timeout(Duration::from_secs(2)).unwrap();
         if abandon {
             assert!(work.ticket.cancel_queued());
@@ -105,9 +106,60 @@ fn expired_and_abandoned_queue_entries_never_prepare() {
         assert_eq!(reply["outcome"], "not_executed");
         agent.execute_work(work, &cancel, limits);
         assert_eq!(agent.session.state(), Lifecycle::Idle);
+        assert!(agent.children.names().is_empty());
+        assert_eq!(agent.session.fixture_owner(1), owner);
     }
     server.join().unwrap();
     drop(agent);
+}
+
+#[test]
+fn emergency_stop_revokes_a_queued_owned_prepare_at_the_listener_boundary() {
+    let fixture = Fixture::new();
+    let mut agent = Agent::new(fixture.0.clone()).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let limits = Limits::default();
+    let socket = listener();
+    let port = socket.local_addr().unwrap().port();
+    let control = agent.session.control();
+    let (server, queue) = ListenerOwner::start(
+        socket,
+        TOKEN.into(),
+        &fixture.0,
+        Arc::clone(&cancel),
+        limits,
+        control.clone(),
+    )
+    .unwrap();
+    let routes = response(send(port, "routes", json!({})));
+    assert_eq!(
+        routes["prepare_id"].as_str(),
+        agent.session.start_id().as_deref()
+    );
+    let owner = agent.session.fixture_owner(1);
+    let prepare = send(port, "prepare", json!({"_owner":owner.as_str()}));
+    let work = queue.recv_timeout(Duration::from_secs(2)).unwrap();
+    let early = response(send(port, "stop", json!({"_owner":owner.as_str()})));
+    assert_eq!(early["outcome"], "not_executed");
+    assert_eq!(control.generation(), work.generation);
+
+    let stop = response(send(port, "stop", json!({})));
+    assert_eq!(stop["outcome"], "accepted");
+    assert!(response(send(port, "routes", json!({})))["prepare_id"].is_null());
+    agent.expire_lease();
+    agent.execute_work(work, &cancel, limits);
+    assert_eq!(response(prepare)["outcome"], "not_executed");
+    assert_eq!(agent.session.state(), Lifecycle::Idle);
+    assert!(agent.children.names().is_empty());
+    assert!(control.completed_owner().is_none());
+    let revision = response(send(port, "routes", json!({})))["prepare_id"].clone();
+    assert_ne!(routes["prepare_id"], revision);
+    assert!(revision.is_string());
+    assert_eq!(
+        response(send(port, "stop", json!({"_owner":owner.as_str()})))["outcome"],
+        "not_executed"
+    );
+    server.join().unwrap();
 }
 
 #[test]
@@ -125,7 +177,7 @@ fn started_request_timeout_reports_unknown_and_cancels_next_effect() {
     let (server, queue) = ListenerOwner::start(
         socket,
         TOKEN.into(),
-        1000,
+        &fixture.0,
         Arc::clone(&cancel),
         limits,
         agent.session.control(),
@@ -277,7 +329,7 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
     fixture.0.state_dir = short;
     fixture.0.token_file = fixture.0.state_dir.join("token");
     let mut agent = Agent::new(fixture.0.clone()).unwrap();
-    let owner = OwnerId::parse("retained-owner").unwrap();
+    let owner = agent.session.fixture_owner(1);
     agent
         .session
         .prepare(Some(owner.clone()), Instant::now(), Duration::from_secs(30))
@@ -329,7 +381,7 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
     let (server, queue) = ListenerOwner::start(
         socket,
         TOKEN.into(),
-        1000,
+        &fixture.0,
         Arc::clone(&shutdown),
         Limits::default(),
         control.clone(),
@@ -414,7 +466,7 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
     assert_eq!(proof["stop"], "completed");
     assert_eq!(proof["owner"], owner.as_str());
     let old_generation = generation;
-    let newer = OwnerId::parse("newer-owner").unwrap();
+    let newer = agent.session.fixture_owner(2);
     agent
         .session
         .prepare(Some(newer.clone()), Instant::now(), Duration::from_secs(30))
@@ -428,7 +480,7 @@ fn expired_matching_peer_can_retry_retained_cleanup_over_http() {
         std::path::Path::new(&format!("/proc/{new_pid}")).exists(),
         "stale owner killed the newer receiver"
     );
-    assert!(!control.begin(old_generation, Some(owner)));
+    assert!(control.cancelled(old_generation));
     agent.session.prepared().unwrap();
     agent.session.start(Output::Recording).unwrap();
     assert_eq!(agent.session.output(), Some(Output::Recording));
@@ -460,32 +512,26 @@ fn cancellation_before_remote_prepare_dispatch_does_not_invent_an_obligation() {
         .with_control(control.clone(), control.generation()),
     );
     control.request_stop(None).unwrap();
-    let result = agent.prepare_remote(OwnerId::parse("never-dispatched").unwrap(), true);
+    let result = agent.prepare_remote(RemoteOwner::fixture(1), true);
     assert!(result.is_err());
     assert!(
         matches!(peer.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock),
         "cancelled Prepare established a peer connection"
     );
-    let obligation = agent.session.remote_owner();
-    // Before the fix this record is invented despite the proved absence of
-    // dispatch. Remove only that fixture record so failure cannot start SSH.
-    if obligation.is_some() {
-        agent.session.remote_released().unwrap();
-    }
+    assert!(
+        agent.session.remote_owner().is_none(),
+        "cancelled pre-dispatch Prepare invented a remote obligation"
+    );
     agent.stop(None).unwrap();
     assert_eq!(agent.session.state(), Lifecycle::Idle);
     assert!(agent.children.names().is_empty());
-    assert!(
-        obligation.is_none(),
-        "cancelled pre-dispatch Prepare invented remote obligation: {obligation:?}"
-    );
 }
 
 #[test]
 fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
     let fixture = Fixture::new();
     let mut agent = Agent::new(fixture.0.clone()).unwrap();
-    let owner = OwnerId::parse("live-owner").unwrap();
+    let owner = agent.session.fixture_owner(1);
     agent
         .session
         .prepare(
@@ -502,7 +548,7 @@ fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
     let (server, queue) = ListenerOwner::start(
         socket,
         TOKEN.into(),
-        1000,
+        &fixture.0,
         Arc::clone(&cancel),
         Limits {
             lease: Duration::from_millis(250),
@@ -516,12 +562,12 @@ fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
     let queued = send(
         port,
         "start",
-        json!({"_owner":"live-owner","output":"recording"}),
+        json!({"_owner":owner.as_str(),"output":"recording"}),
     );
     for _ in 0..4 {
         thread::sleep(Duration::from_millis(60));
         assert_eq!(
-            response(send(port, "heartbeat", json!({"_owner":"live-owner"})))["renewed"],
+            response(send(port, "heartbeat", json!({"_owner":owner.as_str()})))["renewed"],
             true
         );
         assert!(!agent.session.lease_expired(Instant::now()));
@@ -534,11 +580,11 @@ fn heartbeat_and_expiry_progress_while_the_effect_owner_does_not_drain_work() {
     assert!(agent.session.output().is_none());
     thread::sleep(Duration::from_millis(300));
     assert_eq!(
-        response(send(port, "heartbeat", json!({"_owner":"live-owner"})))["outcome"],
+        response(send(port, "heartbeat", json!({"_owner":owner.as_str()})))["outcome"],
         "not_executed"
     );
     assert_eq!(
-        response(send(port, "stop", json!({"_owner":"live-owner"})))["outcome"],
+        response(send(port, "stop", json!({"_owner":owner.as_str()})))["outcome"],
         "accepted"
     );
     let work = queue.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -563,7 +609,7 @@ fn completed_http_response_closes_even_when_listener_reaping_is_delayed() {
     let (server, queue) = ListenerOwner::start(
         socket,
         TOKEN.into(),
-        1000,
+        &fixture.0,
         cancel,
         Limits::default(),
         control.clone(),
@@ -622,9 +668,10 @@ fn stop_acknowledges_during_failure_cleanup_before_remote_ack_is_released() {
         .session
         .prepare(None, Instant::now(), Duration::from_secs(30))
         .unwrap();
-    agent
-        .session
-        .record_remote_attempt(OwnerId::parse("failure-cleanup-owner").unwrap())
+    let peer_owner = RemoteOwner::fixture(1);
+    let control = agent.session.control();
+    control
+        .dispatch_prepare(control.generation(), &peer_owner, || Ok(1))
         .unwrap();
     agent.session.prepared().unwrap();
     agent.session.start(Output::Recording).unwrap();
@@ -658,7 +705,7 @@ fn stop_acknowledges_during_failure_cleanup_before_remote_ack_is_released() {
     let (server, queue) = ListenerOwner::start(
         socket,
         TOKEN.into(),
-        1000,
+        &fixture.0,
         cancel,
         Limits::default(),
         control.clone(),
@@ -680,13 +727,14 @@ fn stop_acknowledges_during_failure_cleanup_before_remote_ack_is_released() {
             let request = control::recv(&mut socket, peer_port, TOKEN).unwrap();
             let request: Value = serde_json::from_str(&request.body).unwrap();
             assert_eq!(request["command"], "stop");
-            assert_eq!(request["args"]["_owner"], "failure-cleanup-owner");
+            assert_eq!(request["args"]["_owner"], peer_owner.owner().as_str());
             entered.send(()).unwrap();
             resume.recv_timeout(Duration::from_secs(5)).unwrap();
             control::reply(
                 &mut socket,
                 200,
-                r#"{"state":"idle","stop":"completed","owner":"failure-cleanup-owner"}"#,
+                &json!({"state":"idle","stop":"completed","outcome":"completed",
+                    "owner":peer_owner.owner().as_str(), "stop_id":format!("{}-1", RemoteOwner::FIXTURE_INSTANCE)}).to_string(),
             )
             .unwrap();
         });

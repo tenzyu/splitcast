@@ -154,7 +154,7 @@ pub(crate) struct Operation {
     ticket: Option<Arc<RequestTicket>>,
     deadline: Instant,
     control: Option<(crate::lifecycle::SessionControl, u64)>,
-    remote_prepare: Option<crate::protocol::OwnerId>,
+    remote_prepare: Option<crate::protocol::RemoteOwner>,
 }
 impl Operation {
     pub(crate) fn new(
@@ -187,6 +187,9 @@ impl Operation {
         self.control = Some((control, generation));
         self
     }
+    pub(crate) fn generation(&self) -> Option<u64> {
+        self.control.as_ref().map(|(_, generation)| *generation)
+    }
     pub(crate) fn check(&self) -> io::Result<()> {
         if self.shutdown.load(Ordering::Relaxed)
             || self.ticket.as_ref().is_some_and(|t| t.cancelled())
@@ -211,13 +214,10 @@ impl Operation {
     pub(crate) fn with_remote_prepare(
         mut self,
         control: crate::lifecycle::SessionControl,
-        owner: crate::protocol::OwnerId,
+        owner: crate::protocol::RemoteOwner,
     ) -> Self {
         // Never refresh the generation of an already executing operation.
-        let generation = self
-            .control
-            .as_ref()
-            .map_or_else(|| control.generation(), |(_, generation)| *generation);
+        let generation = self.generation().unwrap_or_else(|| control.generation());
         self.control = Some((control, generation));
         self.remote_prepare = Some(owner);
         self
@@ -291,7 +291,7 @@ mod tests {
             session
                 .prepare(None, Instant::now(), Duration::from_secs(30))
                 .unwrap();
-            let owner = crate::protocol::OwnerId::parse("wire-owner").unwrap();
+            let owner = crate::protocol::RemoteOwner::fixture(1);
             let control = session.control();
             let operation = Operation::new(
                 Arc::new(AtomicBool::new(false)),
@@ -305,6 +305,14 @@ mod tests {
             let (mut peer, _) = listener.accept().unwrap();
             peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
             let deadline = Instant::now() + Duration::from_secs(1);
+            assert_eq!(operation.write(&mut stream, b"", deadline).unwrap(), 0);
+            assert!(session.remote_owner().is_none());
+            assert!(control
+                .dispatch_prepare(control.generation(), &owner, || Err(io::Error::from(
+                    io::ErrorKind::WouldBlock
+                )))
+                .is_err());
+            assert!(session.remote_owner().is_none());
             if sent_prefix {
                 assert_eq!(operation.write(&mut stream, b"POST", deadline).unwrap(), 4);
                 let mut prefix = [0; 4];

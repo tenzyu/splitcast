@@ -1,4 +1,7 @@
-use crate::protocol::{Command, Invocation, MicAction, OwnerId, Start};
+use crate::lifecycle::{PrepareAdmission, PrepareDisposition};
+use crate::protocol::{
+    transport, Command, Invocation, MicAction, OwnerId, RemoteOwner, Start, StopProof,
+};
 use crate::request::rejected;
 use crate::scene::{ResultState as SceneResult, Scene};
 use crate::workers::{Worker, Workers};
@@ -36,26 +39,6 @@ fn rand_hex() -> io::Result<String> {
     let mut f = fs::File::open("/dev/urandom")?;
     f.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|x| format!("{x:02x}")).collect::<String>())
-}
-fn transport(cfg: &config::Config, media: bool) -> Value {
-    let mut contract = json!({"version":2});
-    if media {
-        contract["media"] = json!({
-            "video":{"codec":"H264","width":cfg.width,"height":cfg.height,"fps":cfg.fps},
-            "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
-            "ports":{"rtmp":cfg.rtmp,"rtsp":cfg.rtsp}
-        });
-        if let Some(camera) = &cfg.camera {
-            contract["media"]["camera"] = json!({
-                "location":camera.location,"codec":"H264","width":camera.width,
-                "height":camera.height,"fps":camera.fps
-            });
-        }
-    }
-    if cfg.tts_enabled {
-        contract["speech_return"] = json!({"version":1,"expiry_seconds":cfg.tts_expiry_seconds});
-    }
-    contract
 }
 fn require_rust_production(document: &str) -> io::Result<()> {
     let hello: Value = serde_json::from_str(document).map_err(|_| err("invalid peer status"))?;
@@ -242,7 +225,7 @@ impl Agent {
             .and_then(|s| require_rust_production(&s))
             .is_ok()
     }
-    fn validate_peer_transport(&self, media: bool) -> io::Result<()> {
+    fn validate_peer_transport(&self, media: bool) -> io::Result<Value> {
         self.checkpoint()?;
         let response: Value = serde_json::from_str(
             &self.request_peer("routes", &json!({"media": media}).to_string())?,
@@ -253,7 +236,7 @@ impl Agent {
                 "peer media or speech contract differs; no capture was started",
             ));
         }
-        Ok(())
+        Ok(response)
     }
     fn guard_lease(&self, owner: Option<&OwnerId>) -> io::Result<()> {
         self.session.authorize(owner).map_err(|_| {
@@ -269,52 +252,72 @@ impl Agent {
         Duration::from_secs((self.cfg.timeout as u64 * 8).max(30))
     }
     fn prepare(&mut self, owner: Option<&OwnerId>, media: bool) -> io::Result<()> {
-        self.checkpoint()?;
-        self.guard_lease(owner)?;
-        if matches!(self.session.state(), Lifecycle::Ready | Lifecycle::Running) {
-            return if self.media_prepared == media {
-                Ok(())
-            } else {
-                Err(err("stop before changing the prepared session purpose"))
-            };
-        }
-        if self.session.state() != Lifecycle::Idle {
-            return Err(err("stop before preparing another session"));
+        let generation = self
+            .operation
+            .as_ref()
+            .and_then(crate::request::Operation::generation);
+        self.prepare_admitted(owner, media, PrepareAdmission::Inline { generation })
+    }
+    fn prepare_admitted(
+        &mut self,
+        owner: Option<&OwnerId>,
+        media: bool,
+        admission: PrepareAdmission<'_>,
+    ) -> io::Result<()> {
+        self.checkpoint()
+            .map_err(|_| rejected("Prepare superseded by Stop or expiry"))?;
+        if self.cfg.role != "production" && owner.is_some() {
+            return Err(rejected("only production accepts remote ownership"));
         }
         if !media && !self.cfg.tts_enabled && self.cfg.chat_credentials.is_none() {
-            return Err(err(
+            return Err(rejected(
                 "media-free Prepare requires speech return or production chat",
             ));
         }
-        self.scene.reset()?;
+        if self.cfg.tts_enabled {
+            if self.cfg.role == "production" && owner.is_none() {
+                return Err(rejected("speech return requires capture-owned Prepare"));
+            }
+            if self.cfg.role == "capture" && !crate::poc_speech::valid_target(&self.cfg.tts_sink) {
+                return Err(rejected(
+                    "return audio requires an explicit capture playback node",
+                ));
+            }
+        }
+        let lease = self.lease_duration();
+        if let PrepareDisposition::AlreadyPrepared =
+            self.session.begin_prepare(owner, lease, admission)?
+        {
+            return if self.media_prepared == media {
+                Ok(())
+            } else {
+                Err(rejected(
+                    "stop before changing the prepared session purpose",
+                ))
+            };
+        }
         self.media_prepared = media;
-        self.session
-            .prepare(owner.cloned(), Instant::now(), self.lease_duration())
-            .map_err(|_| err("invalid prepare transition"))?;
         let outcome = (|| -> io::Result<()> {
+            self.checkpoint()?;
+            self.scene.reset()?;
             let missing = media::missing_tools(&self.cfg, media, false);
             if !missing.is_empty() {
                 return Err(err("SplitCast required native tools missing"));
             }
             if self.cfg.role == "capture" {
-                if self.cfg.tts_enabled && !crate::poc_speech::valid_target(&self.cfg.tts_sink) {
-                    return Err(err(
-                        "return audio requires an explicit capture playback node",
-                    ));
-                }
                 self.spawn(Worker::Tunnel, media::tunnel(&self.cfg, media))?;
                 self.wait_ready(|| self.rust_peer_ready())?;
-                self.validate_peer_transport(media)?;
-                self.prepare_remote(OwnerId::parse(&rand_hex()?)?, media)?;
+                let routes = self.validate_peer_transport(media)?;
+                let prepare_id = routes["prepare_id"]
+                    .as_str()
+                    .ok_or_else(|| err("production has no available Idle revision"))?;
+                self.prepare_remote(RemoteOwner::from_prepare(prepare_id, &rand_hex()?)?, media)?;
                 if self.cfg.tts_enabled {
                     let status = self.remote_request(&Command::TtsStatus)?;
                     self.speech_receiver = Some(return_audio::Receiver::from_status(&status)?);
                 }
             } else {
                 if self.cfg.tts_enabled {
-                    if owner.is_none() {
-                        return Err(err("speech return requires capture-owned Prepare"));
-                    }
                     self.speech_source = Some(return_audio::Source::new(&self.cfg, rand_hex()?)?);
                 }
                 if let Some(path) = &self.cfg.chat_credentials {
@@ -332,15 +335,15 @@ impl Agent {
                     })?;
                 }
             }
+            self.checkpoint()?;
+            self.session.prepared().map_err(|_| err("prepare failed"))?;
+            if let Some(owner) = owner {
+                self.renew_lease(owner)?;
+            }
             Ok(())
         })();
         if let Err(e) = outcome {
             return Err(self.fail(e));
-        }
-        self.checkpoint().map_err(|e| self.fail(e))?;
-        self.session.prepared().map_err(|_| err("prepare failed"))?;
-        if let Some(o) = owner {
-            self.renew_lease(o)?;
         }
         self.last_heartbeat = Instant::now();
         Ok(())
@@ -553,7 +556,7 @@ impl Agent {
             }
             self.obs_shutdown = Some(shutdown);
         }
-        if self.session.remote_owner().is_some() {
+        if let Some(owner) = self.session.remote_owner() {
             let release = (|| -> io::Result<()> {
                 if !self.children.contains(Worker::Tunnel) {
                     self.spawn(
@@ -563,31 +566,9 @@ impl Agent {
                     self.wait_ready(|| self.rust_peer_ready())?;
                     self.validate_peer_transport(self.media_prepared)?;
                 }
-                let mut response: Value =
-                    serde_json::from_str(&self.remote_request(&Command::Stop)?)
-                        .map_err(|_| err("invalid remote Stop completion"))?;
-                loop {
-                    if response["stop"] == "completed"
-                        && response["state"] == "idle"
-                        && response["owner"].as_str()
-                            == self.session.remote_owner().as_ref().map(OwnerId::as_str)
-                    {
-                        break;
-                    }
-                    if response["stop"] != "requested" || response["outcome"] != "accepted" {
-                        return Err(err(
-                            "remote Stop did not prove completion for the owned session",
-                        ));
-                    }
-                    // Observe the same accepted intent. Never retransmit Start
-                    // or Prepare, or silently restart incomplete cleanup.
-                    self.checkpoint()?;
-                    thread::sleep(Duration::from_millis(20));
-                    response = serde_json::from_str(&self.remote_request(&Command::Status)?)
-                        .map_err(|_| err("invalid remote Stop observation"))?;
-                }
+                let proof = self.release_peer(&owner)?;
                 self.session
-                    .remote_released()
+                    .remote_released(proof)
                     .map_err(|_| err("invalid remote release transition"))
             })();
             if release.is_err() {
@@ -800,7 +781,7 @@ impl Agent {
             Command::Start(output)=>{self.start(output,owner)?;Ok(self.status())},
             Command::Stop=>{self.stop(owner)?;Ok(self.status())},
             Command::Diagnostics=>Ok(json!({"version":1,"role":self.cfg.role,"state":json_state(self.session.state()),"output":self.session.output().map(Output::as_str),"children":self.children.names(),"mic_muted":self.mic_muted,"retries":0}).to_string()),
-            Command::Routes{media}=>Ok(json!({"transport": transport(&self.cfg,media)}).to_string()),
+            Command::Routes{media}=>Ok(json!({"transport": transport(&self.cfg,media), "prepare_id":self.session.control().prepare_id(owner)?}).to_string()),
             Command::Devices{remote}=>self.devices(remote),
             Command::TtsNext => {
                 if owner.is_none() { return Err(err("speech pull requires the production session owner")); }
@@ -960,20 +941,12 @@ impl Agent {
             work.ticket.abandon();
             return;
         }
-        if !work.ticket.begin() {
+        let preparing = matches!(work.invocation.command, Command::Prepare { .. });
+        if !preparing && !work.ticket.begin() {
             return;
         }
         let control = self.session.control();
-        let activation_owner = if self.cfg.role == "production"
-            && matches!(
-                work.invocation.command,
-                Command::Prepare { .. } | Command::Start(_)
-            ) {
-            work.invocation.owner.clone()
-        } else {
-            None
-        };
-        if !control.begin(work.generation, activation_owner) {
+        if !matches!(control.admit(false), Ok(generation) if generation == work.generation) {
             work.ticket.finish(crate::request::error_response(
                 crate::request::Failure::NotExecuted,
                 "request superseded by Stop",
@@ -986,17 +959,28 @@ impl Agent {
                 Some(Arc::clone(&work.ticket)),
                 limits.operation,
             )
-            .with_control(control.clone(), work.generation),
+            .with_control(control, work.generation),
         );
         self.expire_lease();
-        let response = self
-            .execute(work.invocation)
+        let result = if let Command::Prepare { media } = work.invocation.command {
+            self.prepare_admitted(
+                work.invocation.owner.as_ref(),
+                media,
+                PrepareAdmission::Dequeued {
+                    generation: work.generation,
+                    ticket: &work.ticket,
+                },
+            )
+            .map(|()| self.status())
+        } else {
+            self.execute(work.invocation)
+        };
+        let response = result
             .map(|body| (200, body))
             .unwrap_or_else(crate::request::command_failure);
-        control.end();
         work.ticket.finish(response);
     }
-    fn prepare_remote(&mut self, owner: OwnerId, media: bool) -> io::Result<String> {
+    fn prepare_remote(&mut self, owner: RemoteOwner, media: bool) -> io::Result<()> {
         let cap = Duration::from_secs(self.cfg.timeout as u64);
         let operation = self
             .operation
@@ -1013,22 +997,30 @@ impl Agent {
             self.cfg.remote_control_port,
             &self.cfg.token(true)?,
             "prepare",
-            &json!({"_owner":owner.as_str(),"media":media}).to_string(),
+            &json!({"_owner":owner.owner().as_str(),"media":media}).to_string(),
             timeout,
             Some(&operation),
         )
+        .map(|_| ())
     }
     fn remote_request(&self, command: &Command) -> io::Result<String> {
-        self.checkpoint()?;
         let owner = self
             .session
             .remote_owner()
             .ok_or_else(|| err("no owned remote preparation"))?;
+        self.request_owned_peer(command, owner.owner())
+            .map(control::Reply::into_body)
+    }
+    fn request_owned_peer(&self, command: &Command, owner: &OwnerId) -> io::Result<control::Reply> {
         let (name, mut args) = command.request();
         args["_owner"] = json!(owner.as_str());
-        self.request_peer(name, &args.to_string())
+        self.request_peer_reply(name, &args.to_string())
     }
     fn request_peer(&self, name: &str, args: &str) -> io::Result<String> {
+        self.request_peer_reply(name, args)
+            .map(control::Reply::into_body)
+    }
+    fn request_peer_reply(&self, name: &str, args: &str) -> io::Result<control::Reply> {
         let cap = Duration::from_secs(self.cfg.timeout as u64);
         let timeout = self.operation.as_ref().map_or(Ok(cap), |op| {
             op.deadline(cap)
@@ -1043,6 +1035,29 @@ impl Agent {
             timeout,
             self.operation.as_ref(),
         )
+    }
+    fn release_peer(&self, owner: &RemoteOwner) -> io::Result<StopProof> {
+        let parse = |body: &str| {
+            serde_json::from_str::<Value>(body).map_err(|_| err("invalid remote Stop observation"))
+        };
+        let id = match self.request_owned_peer(&Command::Stop, owner.owner())? {
+            control::Reply::Ok(body) => {
+                return owner
+                    .observe_stop(&parse(&body)?, None)?
+                    .ok_or_else(|| err("remote Stop completion is missing"))
+            }
+            control::Reply::Accepted(body) => owner.admitted_stop(&parse(&body)?)?,
+        };
+        loop {
+            self.checkpoint()?;
+            thread::sleep(Duration::from_millis(20));
+            let body = self
+                .request_owned_peer(&Command::Status, owner.owner())?
+                .into_body();
+            if let Some(proof) = owner.observe_stop(&parse(&body)?, Some(&id))? {
+                return Ok(proof);
+            }
+        }
     }
     fn peer_command(&mut self, command: &Command) -> io::Result<String> {
         let response = self.remote_request(command)?;
@@ -1122,7 +1137,7 @@ fn serve_agent(
     let (listener, pending) = crate::server::ListenerOwner::start(
         listener,
         token,
-        agent.cfg.tts_max_text as usize,
+        &agent.cfg,
         Arc::clone(&shutdown),
         crate::server::Limits {
             lease: agent.lease_duration(),
@@ -1179,15 +1194,15 @@ mod tests {
             .unwrap();
     }
 
-    fn peer_session(owner: &str, now: Instant, ttl: Duration) -> Session {
+    fn peer_session(now: Instant, ttl: Duration) -> (Session, OwnerId) {
         let mut session = Session::new(Role::Production);
-        let owner = OwnerId::parse(owner).unwrap();
+        let owner = session.fixture_owner(1);
         session
             .prepare(Some(owner.clone()), Instant::now(), ttl)
             .unwrap();
         session.prepared().unwrap();
         session.renew(&owner, now, ttl).unwrap();
-        session
+        (session, owner)
     }
 
     fn prepared_agent() -> Agent {
@@ -1227,9 +1242,10 @@ mod tests {
     fn matching_remote_owner_renews_without_starting_an_output() {
         let mut agent = prepared_agent();
         let deadline = Instant::now() + Duration::from_secs(1);
-        agent.session = peer_session("session_123", Instant::now(), Duration::from_secs(1));
+        let (session, owner) = peer_session(Instant::now(), Duration::from_secs(1));
+        agent.session = session;
         agent
-            .command("heartbeat", "{\"_owner\":\"session_123\"}")
+            .command("heartbeat", &json!({"_owner":owner.as_str()}).to_string())
             .unwrap();
         assert!(!agent
             .session
@@ -1241,14 +1257,14 @@ mod tests {
     #[test]
     fn expired_owner_cannot_revive_its_lease() {
         let mut agent = prepared_agent();
-        agent.session = peer_session(
-            "expired",
+        let (session, owner) = peer_session(
             Instant::now() - Duration::from_secs(2),
             Duration::from_secs(1),
         );
+        agent.session = session;
         assert!(
             agent
-                .command("heartbeat", "{\"_owner\":\"expired\"}")
+                .command("heartbeat", &json!({"_owner":owner.as_str()}).to_string())
                 .is_err(),
             "expired owner revived its lease"
         );
@@ -1258,11 +1274,11 @@ mod tests {
     #[test]
     fn owner_driven_expiry_fences_queued_prepare_before_the_watchdog_runs() {
         let mut agent = prepared_agent();
-        agent.session = peer_session(
-            "expired",
+        let (session, owner) = peer_session(
             Instant::now() - Duration::from_secs(2),
             Duration::from_secs(1),
         );
+        agent.session = session;
         let generation = agent.session.control().generation();
         let shutdown = Arc::new(AtomicBool::new(false));
         let queued: Vec<_> = [
@@ -1273,7 +1289,7 @@ mod tests {
         .map(|command| crate::server::Work {
             invocation: Invocation {
                 command,
-                owner: Some(OwnerId::parse("expired").unwrap()),
+                owner: Some(owner.clone()),
             },
             ticket: Arc::new(crate::request::RequestTicket::new(
                 Instant::now() + Duration::from_secs(5),
@@ -1298,7 +1314,7 @@ mod tests {
     #[test]
     fn local_operator_can_emergency_stop_a_remote_session() {
         let mut agent = prepared_agent();
-        agent.session = peer_session("remote", Instant::now(), Duration::from_secs(30));
+        agent.session = peer_session(Instant::now(), Duration::from_secs(30)).0;
         assert!(
             agent.command("stop", "{}").is_ok(),
             "local emergency stop was refused"

@@ -572,7 +572,7 @@ fn return_faults_and_replay() {
     f.capture.ok("stop", json!({}));
 
     // Lost pull reply: interrogate the real production Agent under a fresh test owner.
-    let owner = json!({"_owner":"test-capture-lease"});
+    let owner = json!({"_owner":f.production.idle_owner(1)});
     f.production
         .ok("prepare", json!({"_owner":owner["_owner"],"media":false}));
     let expired_id = next_id(&f.production);

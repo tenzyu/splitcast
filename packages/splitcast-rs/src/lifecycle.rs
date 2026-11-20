@@ -1,7 +1,9 @@
-use crate::{protocol::OwnerId, Output};
-use std::fmt;
+use crate::protocol::{OwnerId, RemoteOwner, StopProof};
+use crate::request::{rejected, RequestTicket, Response};
+use crate::Output;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+use std::{fmt, io};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
@@ -22,7 +24,7 @@ pub enum Lifecycle {
 #[derive(Clone, Debug)]
 enum CaptureAuthority {
     LocalOnly,
-    RemoteAttempt(OwnerId),
+    RemoteAttempt(RemoteOwner),
 }
 #[derive(Clone, Debug)]
 enum Authority {
@@ -39,6 +41,13 @@ impl Authority {
     }
     fn expired(&self, now: Instant) -> bool {
         matches!(self,Self::Peer{expires,..}if now>=*expires)
+    }
+
+    fn peer_owner(&self) -> Option<&OwnerId> {
+        match self {
+            Self::Peer { owner, .. } => Some(owner),
+            Self::Capture(_) | Self::Local => None,
+        }
     }
 }
 
@@ -122,26 +131,22 @@ pub struct Session {
     control: SessionControl,
 }
 
-// Only Session changes Phase. The listener can authorize intent and renew a
-// lease, but never owns effects or performs a lifecycle transition. Only a
-// nonblocking dispatch syscall may perform I/O under this metadata lock.
+// Only the effect owner changes Phase. The listener authorizes intent and
+// renews leases under the same lock. I/O under it is limited to nonblocking
+// dispatch syscalls.
 #[derive(Debug)]
 struct ControlState {
     phase: Phase,
     generation: u64,
     output_until: Option<Instant>,
     instance: String,
-    stop_id: Option<String>,
-    stop: Option<StopIntent>,
-    active_owner: Option<OwnerId>,
-    last_stop_owner: Option<OwnerId>,
-    stop_completed: bool,
+    stop: Option<StopRecord>,
 }
 impl ControlState {
-    fn stop_admission(&self, ticket: Arc<crate::request::RequestTicket>) -> StopAdmission {
-        StopAdmission {
-            id: self.stop_id.clone().expect("admitted Stop has an ID"),
-            ticket,
+    fn pending_stop(&self) -> Option<&StopIntent> {
+        match &self.stop {
+            Some(StopRecord::Pending(intent)) => Some(intent),
+            _ => None,
         }
     }
 
@@ -151,24 +156,141 @@ impl ControlState {
     }
 
     fn revoked(&self, generation: u64) -> bool {
-        self.generation != generation || self.stop.is_some() || self.expired(Instant::now())
+        self.generation != generation
+            || self.pending_stop().is_some()
+            || self.expired(Instant::now())
+    }
+
+    fn advance_generation(&mut self) -> io::Result<()> {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("control generation exhausted"))?;
+        Ok(())
+    }
+
+    fn start_id(&self, now: Instant) -> Option<String> {
+        if self.pending_stop().is_some() || self.expired(now) {
+            return None;
+        }
+        let phase = match self.phase.state() {
+            Lifecycle::Idle => "idle",
+            Lifecycle::Ready => "ready",
+            Lifecycle::Running => "running",
+            _ => return None,
+        };
+        Some(format!("{}-{}-{phase}", self.instance, self.generation))
+    }
+
+    fn idle_id(&self, now: Instant) -> Option<String> {
+        if matches!(self.phase, Phase::Idle) {
+            self.start_id(now)
+        } else {
+            None
+        }
+    }
+
+    fn prepare_authority(
+        &self,
+        role: Role,
+        owner: Option<&OwnerId>,
+        now: Instant,
+        ttl: Duration,
+    ) -> Result<Authority, TransitionError> {
+        let id = self
+            .idle_id(now)
+            .ok_or_else(|| Session::error(&self.phase, "prepare"))?;
+        match (role, owner) {
+            (Role::Production, Some(owner)) if owner.matches_prepare_id(&id) => {
+                Ok(Authority::Peer {
+                    owner: owner.clone(),
+                    expires: now + ttl,
+                })
+            }
+            (Role::Production, Some(_)) => Err(Session::error(
+                &self.phase,
+                "production Idle prepare ID or nonce",
+            )),
+            (Role::Production, None) => Ok(Authority::Local),
+            (Role::Capture, Some(_)) => Err(Session::error(&self.phase, "capture peer ownership")),
+            (Role::Capture, None) => Ok(Authority::Capture(CaptureAuthority::LocalOnly)),
+        }
+    }
+
+    fn commit_prepare(&mut self, authority: Authority) {
+        self.phase = Phase::Preparing(authority);
+        self.stop = None;
     }
 }
+
+pub(crate) enum PrepareAdmission<'a> {
+    Dequeued {
+        generation: u64,
+        ticket: &'a RequestTicket,
+    },
+    Inline {
+        generation: Option<u64>,
+    },
+}
+
+impl PrepareAdmission<'_> {
+    fn generation(&self) -> Option<u64> {
+        match self {
+            Self::Dequeued { generation, .. } => Some(*generation),
+            Self::Inline { generation } => *generation,
+        }
+    }
+}
+
+pub(crate) enum PrepareDisposition {
+    Acquired,
+    AlreadyPrepared,
+}
+
 #[derive(Debug)]
 pub(crate) struct StopAdmission {
-    pub(crate) id: String,
-    ticket: Arc<crate::request::RequestTicket>,
+    id: String,
+    ticket: Arc<RequestTicket>,
 }
 impl StopAdmission {
-    pub(crate) fn response(&self) -> Option<crate::request::Response> {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+    pub(crate) fn response(&self) -> Option<Response> {
         self.ticket.response()
     }
 }
 #[derive(Debug)]
 struct StopIntent {
-    ticket: Arc<crate::request::RequestTicket>,
+    id: String,
+    owner: Option<OwnerId>,
+    ticket: Arc<RequestTicket>,
     since: Instant,
 }
+impl StopIntent {
+    fn admission(&self) -> StopAdmission {
+        StopAdmission {
+            id: self.id.clone(),
+            ticket: Arc::clone(&self.ticket),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StopRecord {
+    Pending(StopIntent),
+    Incomplete(String),
+    Completed { id: String, owner: Option<OwnerId> },
+}
+impl StopRecord {
+    fn id(&self) -> &str {
+        match self {
+            Self::Pending(intent) => &intent.id,
+            Self::Incomplete(id) | Self::Completed { id, .. } => id,
+        }
+    }
+}
+
 const STOP_OBSERVATION_BUDGET: Duration = Duration::from_secs(15);
 #[derive(Clone, Debug)]
 pub(crate) struct SessionControl {
@@ -184,7 +306,7 @@ impl SessionControl {
     }
     pub(crate) fn admit(&self, observation: bool) -> std::io::Result<u64> {
         let state = self.lock();
-        if state.stop.is_some() && !observation {
+        if state.pending_stop().is_some() && !observation {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "Stop cleanup pending; submit a fresh command after completion",
@@ -192,17 +314,19 @@ impl SessionControl {
         }
         Ok(state.generation)
     }
-    pub(crate) fn begin(&self, generation: u64, activation_owner: Option<OwnerId>) -> bool {
-        let mut state = self.lock();
-        if state.generation != generation || state.stop.is_some() {
-            return false;
+    pub(crate) fn prepare_id(&self, owner: Option<&OwnerId>) -> io::Result<Option<String>> {
+        let state = self.lock();
+        if owner.is_some()
+            && (self.role != Role::Production
+                || state.phase.authority().is_some_and(|a| !a.matches(owner)))
+        {
+            return Err(rejected("no matching production owner"));
         }
-        state.active_owner = activation_owner;
-        true
-    }
-    pub(crate) fn end(&self) {
-        let mut state = self.lock();
-        state.active_owner = None;
+        Ok(if self.role == Role::Production {
+            state.idle_id(Instant::now())
+        } else {
+            None
+        })
     }
     pub(crate) fn cancelled(&self, generation: u64) -> bool {
         self.lock().revoked(generation)
@@ -226,56 +350,52 @@ impl SessionControl {
     pub(crate) fn dispatch_prepare(
         &self,
         generation: u64,
-        owner: &OwnerId,
+        owner: &RemoteOwner,
         write: impl FnOnce() -> std::io::Result<usize>,
     ) -> std::io::Result<usize> {
         let mut state = self.lock();
-        let preparing = match &state.phase {
-            Phase::Preparing(Authority::Capture(CaptureAuthority::LocalOnly)) => true,
-            Phase::Preparing(Authority::Capture(CaptureAuthority::RemoteAttempt(held))) => {
-                held == owner
-            }
-            _ => false,
-        };
-        if state.revoked(generation) || !preparing {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
+        let revoked = || {
+            io::Error::new(
+                io::ErrorKind::Interrupted,
                 "remote Prepare dispatch revoked",
-            ));
+            )
+        };
+        if state.revoked(generation) {
+            return Err(revoked());
+        }
+        let Phase::Preparing(Authority::Capture(authority)) = &mut state.phase else {
+            return Err(revoked());
+        };
+        if matches!(authority, CaptureAuthority::RemoteAttempt(held) if held != owner) {
+            return Err(revoked());
         }
         // The socket is nonblocking. A positive write and its obligation become
         // visible under the same lock as Stop. Err/zero prove no bytes from this
         // write; even an HTTP prefix is conservatively a remote attempt.
         let written = write()?;
-        if written > 0 {
-            state.phase = Phase::Preparing(Authority::Capture(CaptureAuthority::RemoteAttempt(
-                owner.clone(),
-            )));
+        if written > 0 && matches!(authority, CaptureAuthority::LocalOnly) {
+            *authority = CaptureAuthority::RemoteAttempt(owner.clone());
         }
         Ok(written)
     }
-    fn request_locked(state: &mut ControlState) -> std::io::Result<StopAdmission> {
-        if let Some(intent) = &state.stop {
-            return Ok(state.stop_admission(Arc::clone(&intent.ticket)));
+    fn request_locked(state: &mut ControlState) -> io::Result<StopAdmission> {
+        if let Some(intent) = state.pending_stop() {
+            return Ok(intent.admission());
         }
-        state.generation = state
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| std::io::Error::other("control generation exhausted"))?;
-        if matches!(state.phase, Phase::Idle) && state.active_owner.is_some() {
-            // Stop can win after begin but before Preparing. That reservation
-            // has no effects and cannot subsequently prepare, yet its owner
-            // still needs a matching completion proof after unwinding.
-            state.last_stop_owner = state.active_owner.clone();
-        }
-        let ticket = Arc::new(crate::request::RequestTicket::accepted());
-        state.stop_completed = false;
-        state.stop_id = Some(format!("{}-{}", state.instance, state.generation));
-        state.stop = Some(StopIntent {
-            ticket: Arc::clone(&ticket),
+        state.advance_generation()?;
+        let intent = StopIntent {
+            id: format!("{}-{}", state.instance, state.generation),
+            owner: state
+                .phase
+                .authority()
+                .and_then(Authority::peer_owner)
+                .cloned(),
+            ticket: Arc::new(RequestTicket::accepted()),
             since: Instant::now(),
-        });
-        Ok(state.stop_admission(ticket))
+        };
+        let admission = intent.admission();
+        state.stop = Some(StopRecord::Pending(intent));
+        Ok(admission)
     }
     pub(crate) fn request_stop(&self, owner: Option<&OwnerId>) -> std::io::Result<StopAdmission> {
         let mut state = self.lock();
@@ -297,76 +417,71 @@ impl SessionControl {
             // Idle has no effect to cancel. A stale remote Stop must not fence
             // another owner's queued Prepare. It can confirm already-idle.
             if matches!(state.phase, Phase::Idle) {
-                if let Some(active) = &state.active_owner {
-                    if active != owner {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            "another owner is beginning preparation",
-                        ));
+                match &state.stop {
+                    Some(StopRecord::Pending(intent)) if intent.owner.as_ref() == Some(owner) => {
+                        // The effect owner has released the phase and is about
+                        // to publish the receipt for this already-admitted Stop.
+                        return Ok(intent.admission());
                     }
-                    let ticket = Self::request_locked(&mut state)?;
-                    return Ok(ticket);
+                    Some(StopRecord::Completed {
+                        id,
+                        owner: Some(released),
+                    }) if released == owner => {
+                        let ticket = Arc::new(RequestTicket::accepted());
+                        ticket.finish((
+                            200,
+                            serde_json::json!({"state":"idle","stop":"completed","outcome":"completed","owner":owner.as_str(),"stop_id":id})
+                                .to_string(),
+                        ));
+                        return Ok(StopAdmission {
+                            id: id.clone(),
+                            ticket,
+                        });
+                    }
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "no completed Stop for this owner; in-transit effects remain unknown",
+                        ))
+                    }
                 }
-                if state.last_stop_owner.as_ref() != Some(owner) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "no completed Stop for this owner; in-transit effects remain unknown",
-                    ));
-                }
-                let ticket = Arc::new(crate::request::RequestTicket::new(Instant::now()));
-                ticket.finish((
-                    200,
-                    serde_json::json!({"state":"idle","stop":"completed","outcome":"completed","owner":owner.as_str(),"stop_id":state.stop_id})
-                        .to_string(),
-                ));
-                return Ok(state.stop_admission(ticket));
             }
         }
-        let ticket = Self::request_locked(&mut state)?;
-        Ok(ticket)
+        Self::request_locked(&mut state)
     }
     pub(crate) fn stop_id(&self) -> Option<String> {
-        self.lock().stop_id.clone()
+        self.lock().stop.as_ref().map(|stop| stop.id().to_owned())
     }
     pub(crate) fn completed_owner(&self) -> Option<OwnerId> {
-        let state = self.lock();
-        if matches!(state.phase, Phase::Idle) && state.stop.is_none() {
-            state.last_stop_owner.clone()
-        } else {
-            None
+        match &self.lock().stop {
+            Some(StopRecord::Completed { owner, .. }) => owner.clone(),
+            _ => None,
         }
     }
     pub(crate) fn stop_completed(&self) -> bool {
-        let state = self.lock();
-        state.stop_completed && state.stop.is_none() && matches!(state.phase, Phase::Idle)
+        matches!(self.lock().stop, Some(StopRecord::Completed { .. }))
     }
     pub(crate) fn stop_observation(
         &self,
         owner: Option<&OwnerId>,
     ) -> std::io::Result<Option<String>> {
         let state = self.lock();
-        let Some(intent) = &state.stop else {
+        let Some(intent) = state.pending_stop() else {
             return Ok(None);
         };
-        if owner.is_some()
-            && (self.role != Role::Production
-                || state.phase.authority().is_some_and(|a| !a.matches(owner)))
-        {
+        if owner.is_some() && (self.role != Role::Production || intent.owner.as_ref() != owner) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "no matching production owner",
             ));
         }
-        let peer = match state.phase.authority() {
-            Some(Authority::Peer { owner, .. }) => Some(owner.as_str()),
-            _ => state.active_owner.as_ref().map(OwnerId::as_str),
-        };
+        let peer = intent.owner.as_ref().map(OwnerId::as_str);
         let remote = matches!(
             state.phase.authority(),
             Some(Authority::Capture(CaptureAuthority::RemoteAttempt(_)))
         );
         let overdue = intent.since.elapsed() >= STOP_OBSERVATION_BUDGET;
-        Ok(Some(serde_json::json!({"version":1,"engine":"rust-candidate","role":match self.role {Role::Capture=>"capture",Role::Production=>"production"},"state":"stopping","stop":"requested","outcome":if overdue {"unknown"} else {"accepted"},"cleanup":if overdue {"unknown"} else {"pending"},"resource_observation":"unknown","children":null,"stop_id":state.stop_id,"output":state.phase.output().map(Output::as_str),"remote_release_pending":remote,"owner":peer}).to_string()))
+        Ok(Some(serde_json::json!({"version":1,"engine":"rust-candidate","role":match self.role {Role::Capture=>"capture",Role::Production=>"production"},"state":"stopping","stop":"requested","outcome":if overdue {"unknown"} else {"accepted"},"cleanup":if overdue {"unknown"} else {"pending"},"resource_observation":"unknown","children":null,"stop_id":intent.id,"output":state.phase.output().map(Output::as_str),"remote_release_pending":remote,"owner":peer}).to_string()))
     }
     pub(crate) fn heartbeat(
         &self,
@@ -375,7 +490,7 @@ impl SessionControl {
     ) -> std::io::Result<String> {
         let mut state = self.lock();
         if self.role != Role::Production
-            || state.stop.is_some()
+            || state.pending_stop().is_some()
             || !matches!(
                 state.phase.state(),
                 Lifecycle::Ready | Lifecycle::Running | Lifecycle::Degraded
@@ -410,22 +525,26 @@ impl SessionControl {
         }
     }
     pub(crate) fn stop_pending(&self) -> bool {
-        self.lock().stop.is_some()
+        self.lock().pending_stop().is_some()
     }
-    pub(crate) fn finish_stop(&self, mut response: crate::request::Response) {
+    pub(crate) fn finish_stop(&self, mut response: Response) {
         let mut state = self.lock();
-        if let Some(intent) = state.stop.take() {
-            state.stop_completed = response.0 == 200;
+        if let Some(intent) = state.pending_stop() {
             let mut body: serde_json::Value =
                 serde_json::from_str(&response.1).expect("Stop response is JSON");
-            body["stop_id"] = serde_json::json!(state.stop_id);
-            if response.0 == 200 {
-                if let Some(owner) = &state.last_stop_owner {
-                    body["owner"] = serde_json::json!(owner.as_str());
+            body["stop_id"] = serde_json::json!(intent.id);
+            let record = if response.0 == 200 && matches!(state.phase, Phase::Idle) {
+                body["owner"] = serde_json::json!(intent.owner.as_ref().map(OwnerId::as_str));
+                StopRecord::Completed {
+                    id: intent.id.clone(),
+                    owner: intent.owner.clone(),
                 }
-            }
+            } else {
+                StopRecord::Incomplete(intent.id.clone())
+            };
             response.1 = body.to_string();
             intent.ticket.finish(response);
+            state.stop = Some(record);
         }
     }
 }
@@ -444,11 +563,7 @@ impl Session {
                     generation: 0,
                     output_until: None,
                     instance,
-                    stop_id: None,
                     stop: None,
-                    active_owner: None,
-                    last_stop_owner: None,
-                    stop_completed: false,
                 })),
             },
         }
@@ -492,7 +607,7 @@ impl Session {
         let now = Instant::now();
         if self.role != Role::Production
             || state.phase.state() != Lifecycle::Ready
-            || state.stop.is_some()
+            || state.pending_stop().is_some()
             || state.expired(now)
         {
             return Err(Self::error(&state.phase, "arm output"));
@@ -502,17 +617,7 @@ impl Session {
     }
 
     pub(crate) fn start_id(&self) -> Option<String> {
-        let state = self.control.lock();
-        if state.stop.is_some() || state.expired(Instant::now()) {
-            return None;
-        }
-        let phase = match state.phase.state() {
-            Lifecycle::Idle => "idle",
-            Lifecycle::Ready => "ready",
-            Lifecycle::Running => "running",
-            _ => return None,
-        };
-        Some(format!("{}-{}-{phase}", state.instance, state.generation))
+        self.control.lock().start_id(Instant::now())
     }
 
     pub(crate) fn output_seconds_remaining(&self) -> Option<u64> {
@@ -528,27 +633,53 @@ impl Session {
         ttl: Duration,
     ) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
-        if state.phase.state() != Lifecycle::Idle || state.stop.is_some() {
-            return Err(Self::error(&state.phase, "prepare"));
-        }
-        let authority = match owner {
-            Some(owner) if self.role == Role::Production => Authority::Peer {
-                owner,
-                expires: now + ttl,
-            },
-            Some(_) => return Err(Self::error(&state.phase, "capture peer ownership")),
-            None if self.role == Role::Capture => Authority::Capture(CaptureAuthority::LocalOnly),
-            None => Authority::Local,
-        };
-        state.phase = Phase::Preparing(authority);
-        state.last_stop_owner = None;
-        state.stop_completed = false;
-        state.stop_id = None;
+        let authority = state.prepare_authority(self.role, owner.as_ref(), now, ttl)?;
+        state.commit_prepare(authority);
         Ok(())
     }
+
+    pub(crate) fn begin_prepare(
+        &mut self,
+        owner: Option<&OwnerId>,
+        ttl: Duration,
+        admission: PrepareAdmission<'_>,
+    ) -> io::Result<PrepareDisposition> {
+        let mut state = self.control.lock();
+        let now = Instant::now();
+        if state.pending_stop().is_some()
+            || state.expired(now)
+            || admission
+                .generation()
+                .is_some_and(|generation| generation != state.generation)
+        {
+            return Err(rejected("Prepare superseded by Stop or expiry"));
+        }
+        let authority = match &state.phase {
+            Phase::Idle => Some(state.prepare_authority(self.role, owner, now, ttl).map_err(|_| {
+                rejected("owned Prepare requires the current production Idle prepare ID and nonce")
+            })?),
+            Phase::Ready(authority) | Phase::Running { authority, .. }
+                if authority.matches(owner) => None,
+            _ => return Err(rejected("stop before preparing another session")),
+        };
+        if let PrepareAdmission::Dequeued { ticket, .. } = admission {
+            // Queue expiry, ownership and Stop are ordered at dequeue. After
+            // this ticket begins, interruption requires normal compensation.
+            if !ticket.begin() {
+                return Err(rejected("Prepare expired or was cancelled before dequeue"));
+            }
+        }
+        if let Some(authority) = authority {
+            state.commit_prepare(authority);
+            Ok(PrepareDisposition::Acquired)
+        } else {
+            Ok(PrepareDisposition::AlreadyPrepared)
+        }
+    }
+
     pub fn prepared(&mut self) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
-        if state.stop.is_some()
+        if state.pending_stop().is_some()
             || state
                 .phase
                 .authority()
@@ -568,27 +699,13 @@ impl Session {
         state.phase = Phase::Ready(authority.clone());
         Ok(())
     }
-    #[cfg(test)]
-    pub(crate) fn record_remote_attempt(&mut self, owner: OwnerId) -> Result<(), TransitionError> {
-        let mut state = self.control.lock();
-        if state.stop.is_some() {
-            return Err(Self::error(&state.phase, "cancelled remote preparation"));
-        }
-        let Phase::Preparing(Authority::Capture(authority @ CaptureAuthority::LocalOnly)) =
-            &mut state.phase
-        else {
-            return Err(Self::error(&state.phase, "remote preparation"));
-        };
-        *authority = CaptureAuthority::RemoteAttempt(owner);
-        Ok(())
-    }
-    pub(crate) fn remote_owner(&self) -> Option<OwnerId> {
+    pub(crate) fn remote_owner(&self) -> Option<RemoteOwner> {
         match self.control.lock().phase.authority() {
             Some(Authority::Capture(CaptureAuthority::RemoteAttempt(owner))) => Some(owner.clone()),
             _ => None,
         }
     }
-    pub(crate) fn remote_released(&mut self) -> Result<(), TransitionError> {
+    pub(crate) fn remote_released(&mut self, proof: StopProof) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
         if !matches!(
             state.phase.state(),
@@ -597,7 +714,8 @@ impl Session {
             return Err(Self::error(&state.phase, "remote release"));
         }
         match state.phase.authority_mut() {
-            Some(Authority::Capture(authority @ CaptureAuthority::RemoteAttempt(_))) => {
+            Some(Authority::Capture(authority)) if matches!(&*authority, CaptureAuthority::RemoteAttempt(held) if proof.proves(held)) =>
+            {
                 *authority = CaptureAuthority::LocalOnly;
                 Ok(())
             }
@@ -614,7 +732,7 @@ impl Session {
         if !matches!(
             state.phase.state(),
             Lifecycle::Ready | Lifecycle::Running | Lifecycle::Degraded
-        ) || state.stop.is_some()
+        ) || state.pending_stop().is_some()
             || state.phase.authority().is_some_and(|a| a.expired(now))
         {
             return Err(Self::error(&state.phase, "heartbeat"));
@@ -632,7 +750,7 @@ impl Session {
     }
     pub fn start(&mut self, output: Output) -> Result<(), TransitionError> {
         let mut state = self.control.lock();
-        if state.stop.is_some() || state.expired(Instant::now()) {
+        if state.pending_stop().is_some() || state.expired(Instant::now()) {
             return Err(Self::error(&state.phase, "cancelled start"));
         }
         match &state.phase {
@@ -691,12 +809,24 @@ impl Session {
         {
             return Err(Self::error(&state.phase, "stopped"));
         }
-        state.last_stop_owner = match state.phase.authority() {
-            Some(Authority::Peer { owner, .. }) => Some(owner.clone()),
-            _ => None,
-        };
+        // HTTP Stop already revoked the old Idle ID at admission. A direct
+        // lifecycle Stop must fence it too, including across local sessions.
+        if state.pending_stop().is_none() {
+            state
+                .advance_generation()
+                .map_err(|_| Self::error(&state.phase, "control generation exhausted"))?;
+            state.stop = None;
+        }
         state.phase = Phase::Idle;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Session {
+    pub(crate) fn fixture_owner(&self, nonce: u128) -> OwnerId {
+        let id = self.control.prepare_id(None).unwrap().unwrap();
+        OwnerId::parse(&format!("{id}-{nonce:032x}")).unwrap()
     }
 }
 
@@ -719,13 +849,13 @@ mod tests {
         assert!(control.cancelled(generation));
         control.expire();
         let admitted = control.request_stop(None).unwrap();
-        assert_eq!(admitted.id, "fixture-1");
+        assert_eq!(admitted.id(), "fixture-1");
         session.stop().unwrap();
         session.stopped().unwrap();
         control.finish_stop((200, r#"{"state":"idle","stop":"completed"}"#.into()));
         let reply: serde_json::Value =
             serde_json::from_str(&admitted.response().unwrap().1).unwrap();
-        assert_eq!(reply["stop_id"], admitted.id);
+        assert_eq!(reply["stop_id"], admitted.id());
         assert_ne!(session.start_id().unwrap(), old_id);
     }
     #[test]
@@ -734,7 +864,12 @@ mod tests {
         session.start(Output::Recording).unwrap();
         let control = session.control();
         control.request_stop(None).unwrap();
-        control.lock().stop.as_mut().unwrap().since = Instant::now() - STOP_OBSERVATION_BUDGET;
+        let mut state = control.lock();
+        let Some(StopRecord::Pending(intent)) = state.stop.as_mut() else {
+            panic!("expected pending Stop");
+        };
+        intent.since = Instant::now() - STOP_OBSERVATION_BUDGET;
+        drop(state);
         let snapshot: serde_json::Value =
             serde_json::from_str(&control.stop_observation(None).unwrap().unwrap()).unwrap();
         assert_eq!(snapshot["state"], "stopping");
@@ -749,57 +884,91 @@ mod tests {
     }
     #[test]
     fn queued_peer_prepare_cannot_begin_after_emergency_stop() {
-        let session = Session::new(Role::Production);
+        let mut session = Session::new(Role::Production);
         let control = session.control();
-        let owner = OwnerId::parse("queued-owner").unwrap();
+        let owner = session.fixture_owner(1);
         let admitted = control.admit(false).unwrap();
+        let queued = RequestTicket::new(Instant::now() + Duration::from_secs(30));
+        let admission = || PrepareAdmission::Dequeued {
+            generation: admitted,
+            ticket: &queued,
+        };
 
         // Admission has only queued work. No matching owner can yet claim
         // completion, but the local emergency Stop can revoke the work.
         assert!(control.request_stop(Some(&owner)).is_err());
         let stop = control.request_stop(None).unwrap();
-        assert!(!control.begin(admitted, Some(owner.clone())));
+        assert!(session
+            .begin_prepare(Some(&owner), Duration::from_secs(30), admission())
+            .is_err());
+        assert!(control.prepare_id(None).unwrap().is_none());
         control.finish_stop((200, r#"{"state":"idle","stop":"completed"}"#.into()));
         assert_eq!(stop.response().unwrap().0, 200);
-        assert!(!control.begin(admitted, Some(owner.clone())));
+        assert!(session
+            .begin_prepare(Some(&owner), Duration::from_secs(30), admission())
+            .is_err());
         assert!(control.request_stop(Some(&owner)).is_err());
         assert_eq!(session.state(), Lifecycle::Idle);
+        assert_ne!(
+            control.prepare_id(None).unwrap().as_deref(),
+            Some(owner.as_str().rsplit_once('-').unwrap().0)
+        );
         assert!(control.admit(false).is_ok());
     }
     #[test]
     fn admission_and_prepare_begin_are_ordered_with_stop() {
         let mut session = Session::new(Role::Production);
         let control = session.control();
-        let owner = OwnerId::parse("beginning-owner").unwrap();
-        let intruder = OwnerId::parse("intruder").unwrap();
+        let owner = session.fixture_owner(1);
+        let intruder = session.fixture_owner(2);
         let generation = control.admit(false).unwrap();
-        assert!(control.begin(generation, Some(owner.clone())));
+        let ticket = RequestTicket::new(Instant::now() + Duration::from_secs(30));
+        assert!(matches!(
+            session.begin_prepare(
+                Some(&owner),
+                Duration::from_secs(30),
+                PrepareAdmission::Dequeued {
+                    generation,
+                    ticket: &ticket
+                }
+            ),
+            Ok(PrepareDisposition::Acquired)
+        ));
+        assert_eq!(session.state(), Lifecycle::Preparing);
+        assert!(control.prepare_id(None).unwrap().is_none());
+        assert_eq!(control.generation(), generation);
         assert!(control.request_stop(Some(&intruder)).is_err());
-        let ticket = control.request_stop(Some(&owner)).unwrap();
+        let stop = control.request_stop(Some(&owner)).unwrap();
         assert!(
             control.admit(false).is_err(),
             "activation was parked during cleanup"
         );
-        assert!(session
-            .prepare(Some(owner), Instant::now(), Duration::from_secs(30))
-            .is_err());
-        control.end();
+        assert!(session.prepared().is_err());
+        session.stop().unwrap();
+        session.stopped().unwrap();
+        let pending: serde_json::Value =
+            serde_json::from_str(&control.stop_observation(Some(&owner)).unwrap().unwrap())
+                .unwrap();
+        assert_eq!(pending["owner"], owner.as_str());
+        assert_eq!(pending["stop_id"], stop.id());
+        assert!(control
+            .request_stop(Some(&owner))
+            .unwrap()
+            .response()
+            .is_none());
+        assert!(control.request_stop(Some(&intruder)).is_err());
         control.finish_stop((200, "{}".into()));
-        assert_eq!(ticket.response().unwrap().0, 200);
-        let proof: serde_json::Value = serde_json::from_str(&ticket.response().unwrap().1).unwrap();
-        assert_eq!(
-            proof["owner"], "beginning-owner",
-            "cancelled begin lost its remote completion proof"
-        );
-        assert!(!control.begin(generation, None));
-        assert!(control.begin(control.admit(false).unwrap(), None));
+        assert_eq!(stop.response().unwrap().0, 200);
+        let proof: serde_json::Value = serde_json::from_str(&stop.response().unwrap().1).unwrap();
+        assert_eq!(proof["owner"], owner.as_str());
+        assert_eq!(proof["stop_id"], stop.id());
+        assert!(control.cancelled(generation));
         assert_eq!(session.state(), Lifecycle::Idle);
     }
     #[test]
     fn stop_authorization_precedes_revocation_and_final_commit() {
-        let owner = OwnerId::parse("owner").unwrap();
+        let (mut session, owner) = ready_peer(1, Instant::now());
         let intruder = OwnerId::parse("intruder").unwrap();
-        let mut session = ready(Some(owner.clone()), Instant::now());
         let control = session.control();
         let generation = control.generation();
         assert!(control.request_stop(Some(&intruder)).is_err());
@@ -824,7 +993,7 @@ mod tests {
         assert_eq!(ticket.response().unwrap().0, 200);
         assert_eq!(session.state(), Lifecycle::Idle);
         assert!(
-            !control.begin(generation, None),
+            control.cancelled(generation),
             "old queued activation escaped Stop"
         );
         assert!(control.request_stop(Some(&intruder)).is_err());
@@ -832,12 +1001,9 @@ mod tests {
         let proof: serde_json::Value =
             serde_json::from_str(&completed.response().unwrap().1).unwrap();
         assert_eq!(proof["owner"], owner.as_str());
+        let newer = session.fixture_owner(2);
         session
-            .prepare(
-                Some(intruder.clone()),
-                Instant::now(),
-                Duration::from_secs(30),
-            )
+            .prepare(Some(newer), Instant::now(), Duration::from_secs(30))
             .unwrap();
         assert!(
             control.request_stop(Some(&owner)).is_err(),
@@ -850,8 +1016,8 @@ mod tests {
 
     #[test]
     fn expired_preparation_cannot_commit_or_be_revived_by_urgent_control() {
-        let owner = OwnerId::parse("expired").unwrap();
         let mut session = Session::new(Role::Production);
+        let owner = session.fixture_owner(1);
         session
             .prepare(
                 Some(owner.clone()),
@@ -900,29 +1066,42 @@ mod tests {
     #[test]
     fn capture_remote_obligation_survives_failure_until_confirmed_release() {
         let now = Instant::now();
-        let owner = OwnerId::parse("attempt").unwrap();
+        let owner = RemoteOwner::fixture(1);
+        let other = RemoteOwner::fixture(2);
+        let proof = |peer: &RemoteOwner| {
+            peer.observe_stop(&serde_json::json!({
+                "state":"idle","stop":"completed","outcome":"completed",
+                "owner":peer.owner().as_str(),"stop_id":format!("{}-1", RemoteOwner::FIXTURE_INSTANCE)
+            }), None).unwrap().unwrap()
+        };
         let mut session = Session::new(Role::Capture);
         session.prepare(None, now, Duration::from_secs(30)).unwrap();
         assert!(session.prepared().is_err());
         assert!(session.remote_owner().is_none());
-        session.record_remote_attempt(owner.clone()).unwrap();
+        let control = session.control();
+        control
+            .dispatch_prepare(control.generation(), &owner, || Ok(1))
+            .unwrap();
         session.prepared().unwrap();
         session.start(Output::Recording).unwrap();
-        assert!(session.remote_released().is_err());
+        assert!(session.remote_released(proof(&owner)).is_err());
         session.fail().unwrap();
         session.stop().unwrap();
         assert_eq!(session.remote_owner(), Some(owner.clone()));
         assert!(session.stopped().is_err());
-        session.remote_released().unwrap();
+        assert!(session.remote_released(proof(&other)).is_err());
+        session.remote_released(proof(&owner)).unwrap();
         session.stopped().unwrap();
         assert!(session.remote_owner().is_none());
-        let mut production = ready(None, now);
-        assert!(production.record_remote_attempt(owner).is_err());
+        let production = ready(None, now).control();
+        assert!(production
+            .dispatch_prepare(production.generation(), &owner, || unreachable!())
+            .is_err());
     }
     #[test]
     fn lease_expiry_does_not_retrigger_teardown_while_stopping() {
         let now = Instant::now();
-        let mut session = ready(Some(OwnerId::parse("owner").unwrap()), now);
+        let (mut session, _) = ready_peer(1, now);
         assert!(session.lease_expired(now + Duration::from_secs(31)));
         session.stop().unwrap();
         assert!(
@@ -935,6 +1114,15 @@ mod tests {
         s.prepare(owner, now, Duration::from_secs(30)).unwrap();
         s.prepared().unwrap();
         s
+    }
+    fn ready_peer(nonce: u128, now: Instant) -> (Session, OwnerId) {
+        let mut session = Session::new(Role::Production);
+        let owner = session.fixture_owner(nonce);
+        session
+            .prepare(Some(owner.clone()), now, Duration::from_secs(30))
+            .unwrap();
+        session.prepared().unwrap();
+        (session, owner)
     }
     #[test]
     fn no_output_before_explicit_start() {
@@ -955,7 +1143,7 @@ mod tests {
         let owner = OwnerId::parse("owner").unwrap();
         let mut local = ready(None, now);
         assert!(local.renew(&owner, now, Duration::from_secs(30)).is_err());
-        let mut peer = ready(Some(owner.clone()), now);
+        let (mut peer, owner) = ready_peer(1, now);
         peer.renew(&owner, now, Duration::from_secs(30)).unwrap();
         assert!(peer
             .renew(
@@ -968,5 +1156,8 @@ mod tests {
         peer.stop().unwrap();
         peer.stopped().unwrap();
         assert!(!peer.lease_expired(now + Duration::from_secs(90)));
+        assert!(peer
+            .prepare(Some(owner), now, Duration::from_secs(30))
+            .is_err());
     }
 }
