@@ -570,6 +570,13 @@ impl SessionControl {
     pub(crate) fn stop_completed(&self) -> bool {
         matches!(self.lock().stop, Some(StopRecord::Completed { .. }))
     }
+    pub(crate) fn status_during_cleanup(
+        &self,
+        owner: Option<&OwnerId>,
+    ) -> io::Result<Option<String>> {
+        self.cleanup_status(&self.lock(), owner)
+    }
+
     pub(crate) fn try_status_during_cleanup(
         &self,
         owner: Option<&OwnerId>,
@@ -581,6 +588,14 @@ impl SessionControl {
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
             Err(TryLockError::WouldBlock) => return Ok(None),
         };
+        self.cleanup_status(&state, owner)
+    }
+
+    fn cleanup_status(
+        &self,
+        state: &ControlState,
+        owner: Option<&OwnerId>,
+    ) -> io::Result<Option<String>> {
         let Some(intent) = state.pending_stop() else {
             let Phase::Failed {
                 authority,

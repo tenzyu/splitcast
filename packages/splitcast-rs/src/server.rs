@@ -269,14 +269,21 @@ fn connection(
     }
     let status_owner =
         matches!(invocation.command, Command::Status).then(|| invocation.owner.clone());
-    let observe_cleanup = || {
-        let owner = status_owner.as_ref()?;
-        match config.control.try_status_during_cleanup(owner.as_ref()) {
+    let observe_cleanup = |initial: bool| {
+        let owner = status_owner.as_ref()?.as_ref();
+        let status = if initial {
+            // Observe pending Stop before queue admission. A missed probe
+            // here would leave cancelled Status tickets behind during cleanup.
+            config.control.status_during_cleanup(owner)
+        } else {
+            config.control.try_status_during_cleanup(owner)
+        };
+        match status {
             Ok(status) => status.map(|body| (200, body)),
             Err(error) => Some((409, serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string())),
         }
     };
-    if let Some((code, body)) = observe_cleanup() {
+    if let Some((code, body)) = observe_cleanup(true) {
         let _ = control::reply(stream, code, &body);
         return;
     }
@@ -295,10 +302,12 @@ fn connection(
     // Slow unauthenticated headers can still exhaust the finite total cap.
     if config.normal_waiters.fetch_add(1, Ordering::Relaxed) >= NORMAL_WAIT_LIMIT {
         config.normal_waiters.fetch_sub(1, Ordering::Relaxed);
-        let response = error_response(
-            crate::request::Failure::NotExecuted,
-            "ordinary command capacity unavailable",
-        );
+        let response = observe_cleanup(true).unwrap_or_else(|| {
+            error_response(
+                crate::request::Failure::NotExecuted,
+                "ordinary command capacity unavailable",
+            )
+        });
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }
@@ -326,16 +335,18 @@ fn connection(
         })
         .is_err()
     {
-        error_response(
-            crate::request::Failure::NotExecuted,
-            "command queue unavailable",
-        )
+        observe_cleanup(true).unwrap_or_else(|| {
+            error_response(
+                crate::request::Failure::NotExecuted,
+                "command queue unavailable",
+            )
+        })
     } else {
         loop {
             if let Some(response) = ticket.response() {
                 break response;
             }
-            if let Some(response) = observe_cleanup() {
+            if let Some(response) = observe_cleanup(false) {
                 break response;
             }
             if cancel.load(Ordering::Relaxed) || Instant::now() >= expires + limits.operation {
