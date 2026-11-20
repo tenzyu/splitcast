@@ -1,6 +1,6 @@
 use crate::{
     control,
-    protocol::{Command, Invocation},
+    protocol::{transport, Command, Invocation},
     request::{error_response, RequestTicket},
 };
 use std::io;
@@ -83,6 +83,7 @@ struct ConnectionConfig {
     port: u16,
     token: String,
     max_text: usize,
+    transport: [serde_json::Value; 2],
     limits: Limits,
     control: crate::lifecycle::SessionControl,
     normal_waiters: AtomicUsize,
@@ -95,7 +96,7 @@ impl ListenerOwner {
     pub(crate) fn start(
         listener: TcpListener,
         token: String,
-        max_text: usize,
+        cfg: &crate::config::Config,
         shutdown: Arc<AtomicBool>,
         limits: Limits,
         control: crate::lifecycle::SessionControl,
@@ -104,7 +105,8 @@ impl ListenerOwner {
         let config = Arc::new(ConnectionConfig {
             port,
             token,
-            max_text,
+            max_text: cfg.tts_max_text as usize,
+            transport: [transport(cfg, false), transport(cfg, true)],
             limits,
             control,
             normal_waiters: AtomicUsize::new(0),
@@ -235,7 +237,7 @@ fn connection(
                         if let Some(response) = ticket.response() { break response; }
                         if cancel.load(Ordering::Relaxed) || Instant::now() >= end {
                             let cleanup = if cancel.load(Ordering::Relaxed) { "unknown" } else { "pending" };
-                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup,"stop_id":ticket.id}).to_string());
+                            break (202, serde_json::json!({"stop":"requested","outcome":"accepted","cleanup":cleanup,"stop_id":ticket.id()}).to_string());
                         }
                         thread::sleep(Duration::from_millis(10));
                     }
@@ -251,23 +253,44 @@ fn connection(
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }
-    if matches!(invocation.command, Command::Status) {
-        match config.control.stop_observation(invocation.owner.as_ref()) {
-            Ok(Some(body)) => {
-                let _ = control::reply(stream, 200, &body);
-                return;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                let _ = control::reply(stream, 409, &serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string());
-                return;
-            }
-        }
+    if let Command::Routes { media } = invocation.command {
+        let response =
+            config
+                .control
+                .prepare_id(invocation.owner.as_ref())
+                .map(|prepare_id| {
+                    (200, serde_json::json!({
+                "transport": &config.transport[usize::from(media)], "prepare_id": prepare_id
+            }).to_string())
+                })
+                .unwrap_or_else(crate::request::command_failure);
+        let _ = control::reply(stream, response.0, &response.1);
+        return;
     }
-    let generation = match config.control.admit(matches!(
-        invocation.command,
-        Command::Status | Command::Diagnostics
-    )) {
+    let status_owner =
+        matches!(invocation.command, Command::Status).then(|| invocation.owner.clone());
+    let observe_cleanup = |initial: bool| {
+        let owner = status_owner.as_ref()?.as_ref();
+        let status = if initial {
+            // Observe pending Stop before queue admission. A missed probe
+            // here would leave cancelled Status tickets behind during cleanup.
+            config.control.status_during_cleanup(owner)
+        } else {
+            config.control.try_status_during_cleanup(owner)
+        };
+        match status {
+            Ok(status) => status.map(|body| (200, body)),
+            Err(error) => Some((409, serde_json::json!({"error":error.to_string(),"code":"ownership_conflict","outcome":"not_executed"}).to_string())),
+        }
+    };
+    if let Some((code, body)) = observe_cleanup(true) {
+        let _ = control::reply(stream, code, &body);
+        return;
+    }
+    let generation = match config
+        .control
+        .admit(invocation.command.is_status_observation())
+    {
         Ok(generation) => generation,
         Err(error) => {
             let response = error_response(crate::request::Failure::NotExecuted, &error.to_string());
@@ -279,10 +302,12 @@ fn connection(
     // Slow unauthenticated headers can still exhaust the finite total cap.
     if config.normal_waiters.fetch_add(1, Ordering::Relaxed) >= NORMAL_WAIT_LIMIT {
         config.normal_waiters.fetch_sub(1, Ordering::Relaxed);
-        let response = error_response(
-            crate::request::Failure::NotExecuted,
-            "ordinary command capacity unavailable",
-        );
+        let response = observe_cleanup(true).unwrap_or_else(|| {
+            error_response(
+                crate::request::Failure::NotExecuted,
+                "ordinary command capacity unavailable",
+            )
+        });
         let _ = control::reply(stream, response.0, &response.1);
         return;
     }
@@ -310,13 +335,18 @@ fn connection(
         })
         .is_err()
     {
-        error_response(
-            crate::request::Failure::NotExecuted,
-            "command queue unavailable",
-        )
+        observe_cleanup(true).unwrap_or_else(|| {
+            error_response(
+                crate::request::Failure::NotExecuted,
+                "command queue unavailable",
+            )
+        })
     } else {
         loop {
             if let Some(response) = ticket.response() {
+                break response;
+            }
+            if let Some(response) = observe_cleanup(false) {
                 break response;
             }
             if cancel.load(Ordering::Relaxed) || Instant::now() >= expires + limits.operation {

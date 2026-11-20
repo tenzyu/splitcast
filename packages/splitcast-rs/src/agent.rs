@@ -1,6 +1,10 @@
-use crate::protocol::{Command, Invocation, MicAction, OwnerId, Start};
+use crate::lifecycle::{PrepareAdmission, PrepareDisposition};
+use crate::protocol::{
+    transport, Command, Invocation, MicAction, OwnerId, RemoteOwner, Start, StopProof,
+};
 use crate::request::rejected;
 use crate::scene::{ResultState as SceneResult, Scene};
+use crate::supervision::{Fault, Observer, RunningMedia};
 use crate::workers::{Worker, Workers};
 use crate::{config, control, media, obs, return_audio};
 use crate::{Lifecycle, Output, Role, Session};
@@ -36,26 +40,6 @@ fn rand_hex() -> io::Result<String> {
     let mut f = fs::File::open("/dev/urandom")?;
     f.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|x| format!("{x:02x}")).collect::<String>())
-}
-fn transport(cfg: &config::Config, media: bool) -> Value {
-    let mut contract = json!({"version":2});
-    if media {
-        contract["media"] = json!({
-            "video":{"codec":"H264","width":cfg.width,"height":cfg.height,"fps":cfg.fps},
-            "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
-            "ports":{"rtmp":cfg.rtmp,"rtsp":cfg.rtsp}
-        });
-        if let Some(camera) = &cfg.camera {
-            contract["media"]["camera"] = json!({
-                "location":camera.location,"codec":"H264","width":camera.width,
-                "height":camera.height,"fps":camera.fps
-            });
-        }
-    }
-    if cfg.tts_enabled {
-        contract["speech_return"] = json!({"version":1,"expiry_seconds":cfg.tts_expiry_seconds});
-    }
-    contract
 }
 fn require_rust_production(document: &str) -> io::Result<()> {
     let hello: Value = serde_json::from_str(document).map_err(|_| err("invalid peer status"))?;
@@ -113,6 +97,7 @@ impl ObsShutdown {
 
 struct Agent {
     operation: Option<crate::request::Operation>,
+    observer: Option<Observer>,
     cfg: config::Config,
     session: Session,
     children: Workers,
@@ -121,8 +106,6 @@ struct Agent {
     mic_muted: bool,
     last_heartbeat: Instant,
     _lock: fs::File,
-    receive_monitor: Option<media::ReceiveMonitor>,
-    last_health: Instant,
     media_prepared: bool,
     obs_profile: Option<obs::SessionProfile>,
     obs_shutdown: Option<ObsShutdown>,
@@ -162,6 +145,7 @@ impl Agent {
         let scene = Scene::new(instance.clone(), &cfg);
         Ok(Self {
             operation: None,
+            observer: None,
             cfg,
             session: Session::for_agent(role, instance),
             children: Workers::default(),
@@ -170,8 +154,6 @@ impl Agent {
             mic_muted: false,
             last_heartbeat: Instant::now(),
             _lock: lock,
-            receive_monitor: None,
-            last_health: Instant::now(),
             media_prepared: false,
             obs_profile: None,
             obs_shutdown: None,
@@ -201,7 +183,7 @@ impl Agent {
             "state": json_state(self.session.state()), "output": self.session.output().map(Output::as_str),
             "start_id": self.session.start_id(),
             "output_seconds_remaining": self.session.output_seconds_remaining(),
-            "output_progress": self.obs_profile.as_ref().and_then(obs::SessionProfile::progress),
+            "output_progress": control.output_progress().map(obs::ProgressSnapshot::status),
             "error": self.error, "warnings": self.warnings, "mic_muted": self.mic_muted,
             "children": self.children.names(), "stop": stop, "outcome": outcome, "stop_id": control.stop_id(),
             "owner": control.completed_owner().as_ref().map(OwnerId::as_str),
@@ -242,7 +224,7 @@ impl Agent {
             .and_then(|s| require_rust_production(&s))
             .is_ok()
     }
-    fn validate_peer_transport(&self, media: bool) -> io::Result<()> {
+    fn validate_peer_transport(&self, media: bool) -> io::Result<Value> {
         self.checkpoint()?;
         let response: Value = serde_json::from_str(
             &self.request_peer("routes", &json!({"media": media}).to_string())?,
@@ -253,7 +235,7 @@ impl Agent {
                 "peer media or speech contract differs; no capture was started",
             ));
         }
-        Ok(())
+        Ok(response)
     }
     fn guard_lease(&self, owner: Option<&OwnerId>) -> io::Result<()> {
         self.session.authorize(owner).map_err(|_| {
@@ -269,52 +251,72 @@ impl Agent {
         Duration::from_secs((self.cfg.timeout as u64 * 8).max(30))
     }
     fn prepare(&mut self, owner: Option<&OwnerId>, media: bool) -> io::Result<()> {
-        self.checkpoint()?;
-        self.guard_lease(owner)?;
-        if matches!(self.session.state(), Lifecycle::Ready | Lifecycle::Running) {
-            return if self.media_prepared == media {
-                Ok(())
-            } else {
-                Err(err("stop before changing the prepared session purpose"))
-            };
-        }
-        if self.session.state() != Lifecycle::Idle {
-            return Err(err("stop before preparing another session"));
+        let generation = self
+            .operation
+            .as_ref()
+            .and_then(crate::request::Operation::generation);
+        self.prepare_admitted(owner, media, PrepareAdmission::Inline { generation })
+    }
+    fn prepare_admitted(
+        &mut self,
+        owner: Option<&OwnerId>,
+        media: bool,
+        admission: PrepareAdmission<'_>,
+    ) -> io::Result<()> {
+        self.checkpoint()
+            .map_err(|_| rejected("Prepare superseded by Stop or expiry"))?;
+        if self.cfg.role != "production" && owner.is_some() {
+            return Err(rejected("only production accepts remote ownership"));
         }
         if !media && !self.cfg.tts_enabled && self.cfg.chat_credentials.is_none() {
-            return Err(err(
+            return Err(rejected(
                 "media-free Prepare requires speech return or production chat",
             ));
         }
-        self.scene.reset()?;
+        if self.cfg.tts_enabled {
+            if self.cfg.role == "production" && owner.is_none() {
+                return Err(rejected("speech return requires capture-owned Prepare"));
+            }
+            if self.cfg.role == "capture" && !crate::poc_speech::valid_target(&self.cfg.tts_sink) {
+                return Err(rejected(
+                    "return audio requires an explicit capture playback node",
+                ));
+            }
+        }
+        let lease = self.lease_duration();
+        if let PrepareDisposition::AlreadyPrepared =
+            self.session.begin_prepare(owner, lease, admission)?
+        {
+            return if self.media_prepared == media {
+                Ok(())
+            } else {
+                Err(rejected(
+                    "stop before changing the prepared session purpose",
+                ))
+            };
+        }
         self.media_prepared = media;
-        self.session
-            .prepare(owner.cloned(), Instant::now(), self.lease_duration())
-            .map_err(|_| err("invalid prepare transition"))?;
         let outcome = (|| -> io::Result<()> {
+            self.checkpoint()?;
+            self.scene.reset()?;
             let missing = media::missing_tools(&self.cfg, media, false);
             if !missing.is_empty() {
                 return Err(err("SplitCast required native tools missing"));
             }
             if self.cfg.role == "capture" {
-                if self.cfg.tts_enabled && !crate::poc_speech::valid_target(&self.cfg.tts_sink) {
-                    return Err(err(
-                        "return audio requires an explicit capture playback node",
-                    ));
-                }
                 self.spawn(Worker::Tunnel, media::tunnel(&self.cfg, media))?;
                 self.wait_ready(|| self.rust_peer_ready())?;
-                self.validate_peer_transport(media)?;
-                self.prepare_remote(OwnerId::parse(&rand_hex()?)?, media)?;
+                let routes = self.validate_peer_transport(media)?;
+                let prepare_id = routes["prepare_id"]
+                    .as_str()
+                    .ok_or_else(|| err("production has no available Idle revision"))?;
+                self.prepare_remote(RemoteOwner::from_prepare(prepare_id, &rand_hex()?)?, media)?;
                 if self.cfg.tts_enabled {
                     let status = self.remote_request(&Command::TtsStatus)?;
                     self.speech_receiver = Some(return_audio::Receiver::from_status(&status)?);
                 }
             } else {
                 if self.cfg.tts_enabled {
-                    if owner.is_none() {
-                        return Err(err("speech return requires capture-owned Prepare"));
-                    }
                     self.speech_source = Some(return_audio::Source::new(&self.cfg, rand_hex()?)?);
                 }
                 if let Some(path) = &self.cfg.chat_credentials {
@@ -332,18 +334,33 @@ impl Agent {
                     })?;
                 }
             }
+            self.checkpoint()?;
+            self.session.prepared().map_err(|_| err("prepare failed"))?;
+            if let Some(owner) = owner {
+                self.renew_lease(owner)?;
+            }
             Ok(())
         })();
         if let Err(e) = outcome {
             return Err(self.fail(e));
         }
-        self.checkpoint().map_err(|e| self.fail(e))?;
-        self.session.prepared().map_err(|_| err("prepare failed"))?;
-        if let Some(o) = owner {
-            self.renew_lease(o)?;
-        }
         self.last_heartbeat = Instant::now();
         Ok(())
+    }
+    fn receive_snapshot(&self) -> io::Result<media::ReceiveSnapshot> {
+        media::receive_snapshot(
+            self.cfg.api,
+            self.cfg.camera.is_some(),
+            self.operation.as_ref(),
+        )
+    }
+    fn read_output_status(&self, output: Output) -> io::Result<obs::OutputStatus> {
+        obs::read_output_status(
+            self.cfg.obs_port,
+            &self.cfg.obs_password,
+            output,
+            self.operation.as_ref(),
+        )
     }
     fn start(&mut self, start: Start, owner: Option<&OwnerId>) -> io::Result<()> {
         let output = start.output();
@@ -418,8 +435,9 @@ impl Agent {
                 }
                 let mut monitor = media::ReceiveMonitor::new(self.cfg.camera.is_some());
                 self.wait_ready(|| {
-                    media::receive_operation(&self.cfg, self.operation.as_ref())
-                        .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
+                    self.receive_snapshot().is_ok_and(|snapshot| {
+                        monitor.observe(&snapshot, Instant::now()).unwrap_or(false)
+                    })
                 })?;
                 self.spawn(Worker::AudioServer, crate::audio::server(&self.cfg)?)?;
                 self.wait_ready(|| {
@@ -473,42 +491,38 @@ impl Agent {
                     .expect("profile allocated before launching OBS")
                     .request_start(&mut o, output)?;
                 self.wait_ready(|| {
-                    media::receive_operation(&self.cfg, self.operation.as_ref())
-                        .is_ok_and(|v| monitor.observe(&v, Instant::now()).unwrap_or(false))
-                        && self
-                            .obs()
-                            .and_then(|mut o| o.output_ready(output))
-                            .unwrap_or(false)
+                    self.receive_snapshot().is_ok_and(|snapshot| {
+                        monitor.observe(&snapshot, Instant::now()).unwrap_or(false)
+                    }) && self
+                        .read_output_status(output)
+                        .is_ok_and(|sample| sample.ready())
                 })?;
-                self.receive_monitor = Some(monitor);
-                let mut studio = self.obs()?;
-                if !self
-                    .obs_profile
-                    .as_mut()
-                    .expect("profile allocated before launching OBS")
-                    .observe(&mut studio)?
-                {
-                    return Err(err(
-                        "OBS output counters were not ready before confirming Start",
-                    ));
-                }
+                let status = self.read_output_status(output)?;
+                let media = RunningMedia::new(&self.cfg, output, monitor, status)?;
+                self.checkpoint()?;
+                let generation = self
+                    .session
+                    .start_observed(output, media.baseline())
+                    .map_err(io::Error::other)?;
+                self.observer = Some(media.supervise(self.session.control(), generation)?);
+            }
+            self.checkpoint()?;
+            if self.cfg.role == "capture" {
+                self.session.start(output).map_err(io::Error::other)?;
+            }
+            if let Some(owner) = owner {
+                self.renew_lease(owner)?;
             }
             Ok(())
         })();
-        if let Err(e) = outcome {
-            return Err(self.fail(e));
-        }
-        self.checkpoint().map_err(|e| self.fail(e))?;
-        self.session
-            .start(output)
-            .map_err(|error| self.fail(io::Error::other(error)))?;
-        self.last_health = Instant::now();
-        if let Some(o) = owner {
-            self.renew_lease(o)?;
-        }
-        Ok(())
+        outcome.map_err(|error| self.fail(error))
     }
     fn cleanup(&mut self) -> io::Result<()> {
+        if let Some(mut observer) = self.observer.take() {
+            if let Err(error) = observer.shutdown() {
+                self.warn(&error.to_string());
+            }
+        }
         let previous = self.operation.replace(crate::request::Operation::new(
             Arc::new(AtomicBool::new(false)),
             None,
@@ -519,7 +533,6 @@ impl Agent {
         result
     }
     fn cleanup_owned(&mut self) -> io::Result<()> {
-        self.receive_monitor = None;
         let scene_reset = self.scene.reset();
         self.eventsub.take(); // cancels and joins the session subscription
         self.speech_source.take(); // cancels and joins any synthesis worker
@@ -553,7 +566,7 @@ impl Agent {
             }
             self.obs_shutdown = Some(shutdown);
         }
-        if self.session.remote_owner().is_some() {
+        if let Some(owner) = self.session.remote_owner() {
             let release = (|| -> io::Result<()> {
                 if !self.children.contains(Worker::Tunnel) {
                     self.spawn(
@@ -563,31 +576,9 @@ impl Agent {
                     self.wait_ready(|| self.rust_peer_ready())?;
                     self.validate_peer_transport(self.media_prepared)?;
                 }
-                let mut response: Value =
-                    serde_json::from_str(&self.remote_request(&Command::Stop)?)
-                        .map_err(|_| err("invalid remote Stop completion"))?;
-                loop {
-                    if response["stop"] == "completed"
-                        && response["state"] == "idle"
-                        && response["owner"].as_str()
-                            == self.session.remote_owner().as_ref().map(OwnerId::as_str)
-                    {
-                        break;
-                    }
-                    if response["stop"] != "requested" || response["outcome"] != "accepted" {
-                        return Err(err(
-                            "remote Stop did not prove completion for the owned session",
-                        ));
-                    }
-                    // Observe the same accepted intent. Never retransmit Start
-                    // or Prepare, or silently restart incomplete cleanup.
-                    self.checkpoint()?;
-                    thread::sleep(Duration::from_millis(20));
-                    response = serde_json::from_str(&self.remote_request(&Command::Status)?)
-                        .map_err(|_| err("invalid remote Stop observation"))?;
-                }
+                let proof = self.release_peer(&owner)?;
                 self.session
-                    .remote_released()
+                    .remote_released(proof)
                     .map_err(|_| err("invalid remote release transition"))
             })();
             if release.is_err() {
@@ -615,19 +606,19 @@ impl Agent {
         }
     }
     fn fail(&mut self, cause: io::Error) -> io::Error {
-        if self.session.control().stop_pending() {
+        if self.session.fail().is_err() && self.session.control().stop_pending() {
             // The admitted Stop owns compensation. Do not perform two cleanup
             // attempts or overwrite Stopping while unwinding cancelled work.
             let _ = self.session.stop();
             self.error = cause.to_string();
             return cause;
         }
-        let _ = self.session.fail();
         let error = match self.cleanup() {
             Ok(()) => err(&cause.to_string()),
             Err(cleanup) => err(&format!("{cause}; cleanup incomplete: {cleanup}")),
         };
         self.error = error.to_string();
+        self.session.failure_reconciled();
         error
     }
     fn stop(&mut self, owner: Option<&OwnerId>) -> io::Result<()> {
@@ -653,6 +644,9 @@ impl Agent {
     }
     fn tick(&mut self) {
         self.expire_lease();
+        if self.reconcile_observer_fault() {
+            return;
+        }
         if matches!(self.session.state(), Lifecycle::Ready | Lifecycle::Running) {
             if self.cfg.role == "capture"
                 && self.children.contains(Worker::Tunnel)
@@ -669,36 +663,25 @@ impl Agent {
                 let _ = self.fail(err(
                     "owned infrastructure or media process exited; explicit prepare required",
                 ));
+                return;
             }
             if let Err(error) = self.poll_speech() {
                 self.warn(&format!("speech return: {error}"));
             }
-            if self.cfg.role == "production"
-                && self.session.state() == Lifecycle::Running
-                && self.last_health.elapsed() >= Duration::from_secs(1)
-            {
-                self.last_health = Instant::now();
-                let health = (|| -> io::Result<bool> {
-                    let snapshot = media::receive_operation(&self.cfg, self.operation.as_ref())?;
-                    if !self
-                        .receive_monitor
-                        .as_mut()
-                        .ok_or_else(|| err("receive monitor unavailable"))?
-                        .observe(&snapshot, Instant::now())?
-                    {
-                        return Ok(false);
-                    }
-                    let mut studio = self.obs()?;
-                    self.obs_profile
-                        .as_mut()
-                        .ok_or_else(|| err("owned OBS profile unavailable"))?
-                        .observe(&mut studio)
-                })();
-                if !matches!(health, Ok(true)) {
-                    let _ = self.fail(err("incoming media or OBS output stopped progressing; output stopped without automatic publication"));
-                }
-            }
         }
+    }
+    fn reconcile_observer_fault(&mut self) -> bool {
+        let control = self.session.control();
+        if let Some(generation) = self.observer.as_ref().and_then(Observer::exited_generation) {
+            control.latch_observer_fault(generation, Fault::ObserverExited);
+        }
+        if let Some(fault) = control.observation_fault() {
+            let _ = self.fail(err(&format!(
+                "{fault}; output stopped without automatic publication"
+            )));
+            return true;
+        }
+        false
     }
     fn poll_speech(&mut self) -> io::Result<()> {
         if let Some(source) = &mut self.speech_source {
@@ -800,7 +783,7 @@ impl Agent {
             Command::Start(output)=>{self.start(output,owner)?;Ok(self.status())},
             Command::Stop=>{self.stop(owner)?;Ok(self.status())},
             Command::Diagnostics=>Ok(json!({"version":1,"role":self.cfg.role,"state":json_state(self.session.state()),"output":self.session.output().map(Output::as_str),"children":self.children.names(),"mic_muted":self.mic_muted,"retries":0}).to_string()),
-            Command::Routes{media}=>Ok(json!({"transport": transport(&self.cfg,media)}).to_string()),
+            Command::Routes{media}=>Ok(json!({"transport": transport(&self.cfg,media), "prepare_id":self.session.control().prepare_id(owner)?}).to_string()),
             Command::Devices{remote}=>self.devices(remote),
             Command::TtsNext => {
                 if owner.is_none() { return Err(err("speech pull requires the production session owner")); }
@@ -946,6 +929,7 @@ impl Agent {
             }
             _ => return Err(rejected("unknown Studio scene command")),
         };
+        self.checkpoint()?;
         self.scene.result(state);
         Ok(self.scene.snapshot(&self.cfg, generation, running))
     }
@@ -960,43 +944,60 @@ impl Agent {
             work.ticket.abandon();
             return;
         }
-        if !work.ticket.begin() {
-            return;
-        }
+        self.expire_lease();
+        self.reconcile_observer_fault();
+        let observation = work.invocation.command.is_status_observation();
         let control = self.session.control();
-        let activation_owner = if self.cfg.role == "production"
-            && matches!(
-                work.invocation.command,
-                Command::Prepare { .. } | Command::Start(_)
-            ) {
-            work.invocation.owner.clone()
-        } else {
-            None
-        };
-        if !control.begin(work.generation, activation_owner) {
+        let admitted = control.admit(observation);
+        if !observation && !matches!(admitted, Ok(generation) if generation == work.generation) {
+            let message = admitted.err().map_or_else(
+                || "request superseded by session transition".into(),
+                |error| error.to_string(),
+            );
             work.ticket.finish(crate::request::error_response(
                 crate::request::Failure::NotExecuted,
-                "request superseded by Stop",
+                &message,
             ));
             return;
         }
-        self.operation = Some(
-            crate::request::Operation::new(
-                Arc::clone(shutdown),
-                Some(Arc::clone(&work.ticket)),
-                limits.operation,
-            )
-            .with_control(control.clone(), work.generation),
+        let preparing = matches!(work.invocation.command, Command::Prepare { .. });
+        if !preparing && !work.ticket.begin() {
+            return;
+        }
+        let operation = crate::request::Operation::new(
+            Arc::clone(shutdown),
+            Some(Arc::clone(&work.ticket)),
+            limits.operation,
         );
-        self.expire_lease();
-        let response = self
-            .execute(work.invocation)
+        self.operation = Some(if observation {
+            operation
+        } else {
+            operation.with_control(control.clone(), work.generation)
+        });
+        let result = if let Command::Prepare { media } = work.invocation.command {
+            self.prepare_admitted(
+                work.invocation.owner.as_ref(),
+                media,
+                PrepareAdmission::Dequeued {
+                    generation: work.generation,
+                    ticket: &work.ticket,
+                },
+            )
+            .map(|()| self.status())
+        } else {
+            self.execute(work.invocation)
+        };
+        let response = result
+            .and_then(|body| self.checkpoint().map(|()| body))
             .map(|body| (200, body))
             .unwrap_or_else(crate::request::command_failure);
-        control.end();
-        work.ticket.finish(response);
+        if observation {
+            work.ticket.finish(response);
+        } else {
+            control.finish_ordinary(work.generation, &work.ticket, response);
+        }
     }
-    fn prepare_remote(&mut self, owner: OwnerId, media: bool) -> io::Result<String> {
+    fn prepare_remote(&mut self, owner: RemoteOwner, media: bool) -> io::Result<()> {
         let cap = Duration::from_secs(self.cfg.timeout as u64);
         let operation = self
             .operation
@@ -1013,22 +1014,30 @@ impl Agent {
             self.cfg.remote_control_port,
             &self.cfg.token(true)?,
             "prepare",
-            &json!({"_owner":owner.as_str(),"media":media}).to_string(),
+            &json!({"_owner":owner.owner().as_str(),"media":media}).to_string(),
             timeout,
             Some(&operation),
         )
+        .map(|_| ())
     }
     fn remote_request(&self, command: &Command) -> io::Result<String> {
-        self.checkpoint()?;
         let owner = self
             .session
             .remote_owner()
             .ok_or_else(|| err("no owned remote preparation"))?;
+        self.request_owned_peer(command, owner.owner())
+            .map(control::Reply::into_body)
+    }
+    fn request_owned_peer(&self, command: &Command, owner: &OwnerId) -> io::Result<control::Reply> {
         let (name, mut args) = command.request();
         args["_owner"] = json!(owner.as_str());
-        self.request_peer(name, &args.to_string())
+        self.request_peer_reply(name, &args.to_string())
     }
     fn request_peer(&self, name: &str, args: &str) -> io::Result<String> {
+        self.request_peer_reply(name, args)
+            .map(control::Reply::into_body)
+    }
+    fn request_peer_reply(&self, name: &str, args: &str) -> io::Result<control::Reply> {
         let cap = Duration::from_secs(self.cfg.timeout as u64);
         let timeout = self.operation.as_ref().map_or(Ok(cap), |op| {
             op.deadline(cap)
@@ -1043,6 +1052,29 @@ impl Agent {
             timeout,
             self.operation.as_ref(),
         )
+    }
+    fn release_peer(&self, owner: &RemoteOwner) -> io::Result<StopProof> {
+        let parse = |body: &str| {
+            serde_json::from_str::<Value>(body).map_err(|_| err("invalid remote Stop observation"))
+        };
+        let id = match self.request_owned_peer(&Command::Stop, owner.owner())? {
+            control::Reply::Ok(body) => {
+                return owner
+                    .observe_stop(&parse(&body)?, None)?
+                    .ok_or_else(|| err("remote Stop completion is missing"))
+            }
+            control::Reply::Accepted(body) => owner.admitted_stop(&parse(&body)?)?,
+        };
+        loop {
+            self.checkpoint()?;
+            thread::sleep(Duration::from_millis(20));
+            let body = self
+                .request_owned_peer(&Command::Status, owner.owner())?
+                .into_body();
+            if let Some(proof) = owner.observe_stop(&parse(&body)?, Some(&id))? {
+                return Ok(proof);
+            }
+        }
     }
     fn peer_command(&mut self, command: &Command) -> io::Result<String> {
         let response = self.remote_request(command)?;
@@ -1122,7 +1154,7 @@ fn serve_agent(
     let (listener, pending) = crate::server::ListenerOwner::start(
         listener,
         token,
-        agent.cfg.tts_max_text as usize,
+        &agent.cfg,
         Arc::clone(&shutdown),
         crate::server::Limits {
             lease: agent.lease_duration(),
@@ -1179,15 +1211,15 @@ mod tests {
             .unwrap();
     }
 
-    fn peer_session(owner: &str, now: Instant, ttl: Duration) -> Session {
+    fn peer_session(now: Instant, ttl: Duration) -> (Session, OwnerId) {
         let mut session = Session::new(Role::Production);
-        let owner = OwnerId::parse(owner).unwrap();
+        let owner = session.fixture_owner(1);
         session
             .prepare(Some(owner.clone()), Instant::now(), ttl)
             .unwrap();
         session.prepared().unwrap();
         session.renew(&owner, now, ttl).unwrap();
-        session
+        (session, owner)
     }
 
     fn prepared_agent() -> Agent {
@@ -1227,9 +1259,10 @@ mod tests {
     fn matching_remote_owner_renews_without_starting_an_output() {
         let mut agent = prepared_agent();
         let deadline = Instant::now() + Duration::from_secs(1);
-        agent.session = peer_session("session_123", Instant::now(), Duration::from_secs(1));
+        let (session, owner) = peer_session(Instant::now(), Duration::from_secs(1));
+        agent.session = session;
         agent
-            .command("heartbeat", "{\"_owner\":\"session_123\"}")
+            .command("heartbeat", &json!({"_owner":owner.as_str()}).to_string())
             .unwrap();
         assert!(!agent
             .session
@@ -1241,14 +1274,14 @@ mod tests {
     #[test]
     fn expired_owner_cannot_revive_its_lease() {
         let mut agent = prepared_agent();
-        agent.session = peer_session(
-            "expired",
+        let (session, owner) = peer_session(
             Instant::now() - Duration::from_secs(2),
             Duration::from_secs(1),
         );
+        agent.session = session;
         assert!(
             agent
-                .command("heartbeat", "{\"_owner\":\"expired\"}")
+                .command("heartbeat", &json!({"_owner":owner.as_str()}).to_string())
                 .is_err(),
             "expired owner revived its lease"
         );
@@ -1258,11 +1291,11 @@ mod tests {
     #[test]
     fn owner_driven_expiry_fences_queued_prepare_before_the_watchdog_runs() {
         let mut agent = prepared_agent();
-        agent.session = peer_session(
-            "expired",
+        let (session, owner) = peer_session(
             Instant::now() - Duration::from_secs(2),
             Duration::from_secs(1),
         );
+        agent.session = session;
         let generation = agent.session.control().generation();
         let shutdown = Arc::new(AtomicBool::new(false));
         let queued: Vec<_> = [
@@ -1273,7 +1306,7 @@ mod tests {
         .map(|command| crate::server::Work {
             invocation: Invocation {
                 command,
-                owner: Some(OwnerId::parse("expired").unwrap()),
+                owner: Some(owner.clone()),
             },
             ticket: Arc::new(crate::request::RequestTicket::new(
                 Instant::now() + Duration::from_secs(5),
@@ -1298,7 +1331,7 @@ mod tests {
     #[test]
     fn local_operator_can_emergency_stop_a_remote_session() {
         let mut agent = prepared_agent();
-        agent.session = peer_session("remote", Instant::now(), Duration::from_secs(30));
+        agent.session = peer_session(Instant::now(), Duration::from_secs(30)).0;
         assert!(
             agent.command("stop", "{}").is_ok(),
             "local emergency stop was refused"

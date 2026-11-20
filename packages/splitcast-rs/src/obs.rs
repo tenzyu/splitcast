@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tungstenite::{protocol::WebSocketConfig, Message, WebSocket};
 
 const LIMIT: usize = 4 * 1024 * 1024;
-const TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);
 
 fn err(message: &str) -> io::Error {
     io::Error::other(message)
@@ -88,8 +88,8 @@ fn response_data(response: &str) -> io::Result<Value> {
         .map(|_| value["d"]["responseData"].clone())
         .ok_or_else(|| err("OBS response data required"))
 }
-#[derive(Debug, PartialEq)]
-struct OutputStatus {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OutputStatus {
     active: bool,
     bytes: u64,
     frames: Option<u64>,
@@ -129,23 +129,90 @@ impl OutputStatus {
                 _ => false,
             }
     }
+
+    pub(crate) fn ready(&self) -> bool {
+        self.progresses_from(None)
+    }
 }
 
-// The profile and the requested output have the same lifetime. An attempted
-// Start is recorded before its RPC because a lost reply can leave output active.
+pub(crate) fn read_output_status(
+    port: u16,
+    password_path: &Path,
+    output: crate::Output,
+    operation: Option<&crate::request::Operation>,
+) -> io::Result<OutputStatus> {
+    let operation = operation
+        .cloned()
+        .map(|operation| operation.capped(TIMEOUT));
+    Obs::connect_endpoint(port, password_path, operation)?.observe(output)
+}
+
+pub(crate) struct OutputProgress(ProgressSnapshot);
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProgressSnapshot {
+    sample: OutputStatus,
+    compared: bool,
+}
+
+impl OutputProgress {
+    pub(crate) fn start(sample: OutputStatus) -> Option<Self> {
+        sample.ready().then_some(Self(ProgressSnapshot {
+            sample,
+            compared: false,
+        }))
+    }
+
+    pub(crate) fn snapshot(&self) -> ProgressSnapshot {
+        self.0
+    }
+
+    pub(crate) fn observe(&mut self, sample: OutputStatus) -> Option<ProgressSnapshot> {
+        if !sample.progresses_from(Some(&self.0.sample)) {
+            return None;
+        }
+        self.0 = ProgressSnapshot {
+            sample,
+            compared: true,
+        };
+        Some(self.0)
+    }
+}
+
+impl ProgressSnapshot {
+    pub(crate) fn status(self) -> Value {
+        let Self { sample, compared } = self;
+        let frame_health = match (sample.frames, compared) {
+            (None, _) => "unknown",
+            (Some(_), false) => "pending",
+            (Some(_), true) => "progressing",
+        };
+        json!({
+            "active": sample.active, "bytes": sample.bytes, "frames": sample.frames,
+            "frame_health": frame_health, "duration_ms": sample.duration_ms,
+        })
+    }
+}
+
+#[cfg(test)]
+impl ProgressSnapshot {
+    pub(crate) fn test_recording(bytes: u64) -> Self {
+        OutputProgress::start(OutputStatus {
+            active: true,
+            bytes,
+            frames: None,
+            duration_ms: None,
+        })
+        .unwrap()
+        .snapshot()
+    }
+}
+
+// The profile retains the attempted output independently of progress. A lost
+// Start reply can leave output active before any counters are observed.
 pub(crate) struct SessionProfile {
     directory: PathBuf,
-    phase: OutputPhase,
-}
-
-enum OutputPhase {
-    Configured,
-    Requested(crate::Output),
-    Observed {
-        output: crate::Output,
-        sample: OutputStatus,
-        compared: bool,
-    },
+    attempt: Option<crate::Output>,
 }
 
 impl SessionProfile {
@@ -153,7 +220,7 @@ impl SessionProfile {
         fs::create_dir(&directory)?;
         Ok(Self {
             directory,
-            phase: OutputPhase::Configured,
+            attempt: None,
         })
     }
 
@@ -161,7 +228,7 @@ impl SessionProfile {
     pub(crate) fn test_attempt(directory: PathBuf, output: crate::Output) -> Self {
         Self {
             directory,
-            phase: OutputPhase::Requested(output),
+            attempt: Some(output),
         }
     }
 
@@ -170,53 +237,12 @@ impl SessionProfile {
     }
 
     pub(crate) fn request_start(&mut self, obs: &mut Obs, output: crate::Output) -> io::Result<()> {
-        self.phase = OutputPhase::Requested(output);
+        self.attempt = Some(output);
         obs.start(output)
     }
 
     pub(crate) fn requested_output(&self) -> Option<crate::Output> {
-        match self.phase {
-            OutputPhase::Configured => None,
-            OutputPhase::Requested(output) | OutputPhase::Observed { output, .. } => Some(output),
-        }
-    }
-
-    pub(crate) fn observe(&mut self, obs: &mut Obs) -> io::Result<bool> {
-        let output = self
-            .requested_output()
-            .ok_or_else(|| err("owned OBS output unavailable"))?;
-        let current = obs.observe(output)?;
-        let previous = match &self.phase {
-            OutputPhase::Observed { sample, .. } => Some(sample),
-            OutputPhase::Requested(_) | OutputPhase::Configured => None,
-        };
-        if !current.progresses_from(previous) {
-            return Ok(false);
-        }
-        self.phase = OutputPhase::Observed {
-            output,
-            sample: current,
-            compared: previous.is_some(),
-        };
-        Ok(true)
-    }
-
-    pub(crate) fn progress(&self) -> Option<Value> {
-        let OutputPhase::Observed {
-            sample, compared, ..
-        } = &self.phase
-        else {
-            return None;
-        };
-        let frame_health = match (sample.frames, compared) {
-            (None, _) => "unknown",
-            (Some(_), false) => "pending",
-            (Some(_), true) => "progressing",
-        };
-        Some(json!({
-            "active": sample.active, "bytes": sample.bytes, "frames": sample.frames,
-            "frame_health": frame_health, "duration_ms": sample.duration_ms,
-        }))
+        self.attempt
     }
 
     pub(crate) fn discard(&self) -> io::Result<()> {
@@ -241,27 +267,35 @@ impl Obs {
         cfg: &Config,
         operation: Option<crate::request::Operation>,
     ) -> io::Result<Self> {
+        Self::connect_endpoint(cfg.obs_port, &cfg.obs_password, operation)
+    }
+    fn connect_endpoint(
+        port: u16,
+        password_path: &Path,
+        operation: Option<crate::request::Operation>,
+    ) -> io::Result<Self> {
         let deadline = operation
             .as_ref()
             .map_or(Ok(Instant::now() + TIMEOUT), |op| op.deadline(TIMEOUT))?;
-        let mut obs = Self::connect_context(cfg, deadline, operation.clone())?;
+        let mut obs = Self::connect_context(port, password_path, deadline, operation.clone())?;
         obs.operation = operation;
         Ok(obs)
     }
     #[cfg(test)]
     fn connect_until(cfg: &Config, deadline: Instant) -> io::Result<Self> {
-        Self::connect_context(cfg, deadline, None)
+        Self::connect_context(cfg.obs_port, &cfg.obs_password, deadline, None)
     }
     fn connect_context(
-        cfg: &Config,
+        port: u16,
+        password_path: &Path,
         deadline: Instant,
         operation: Option<crate::request::Operation>,
     ) -> io::Result<Self> {
-        let password = secret(&cfg.obs_password, 4096)?;
+        let password = secret(password_path, 4096)?;
         if password.len() < 16 {
             return Err(err("OBS password is missing or too short"));
         }
-        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, cfg.obs_port);
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         let stream = TcpStream::connect_timeout(
             &addr.into(),
             remaining(deadline)?.min(Duration::from_secs(2)),
@@ -276,7 +310,7 @@ impl Obs {
             .max_frame_size(Some(LIMIT))
             .max_write_buffer_size(LIMIT + 1024);
         let (socket, _) = tungstenite::client::client_with_config(
-            format!("ws://127.0.0.1:{}/", cfg.obs_port),
+            format!("ws://127.0.0.1:{port}/"),
             stream,
             Some(config),
         )
@@ -719,9 +753,6 @@ impl Obs {
     fn observe(&mut self, output: crate::Output) -> io::Result<OutputStatus> {
         let response = response_data(&self.call(status_request(output), "{}")?)?;
         OutputStatus::from_response(output, &response)
-    }
-    pub(crate) fn output_ready(&mut self, output: crate::Output) -> io::Result<bool> {
-        Ok(self.observe(output)?.progresses_from(None))
     }
     pub fn preview(&mut self) -> io::Result<String> {
         let image = self.screenshot(960, 540)?;
@@ -1410,9 +1441,9 @@ mod tests {
                 json!({"outputActive":true,"outputBytes":123,"outputDuration":99}),
             );
         });
-        let mut obs = Obs::connect(&fixture.config(port)).unwrap();
+        let cfg = fixture.config(port);
         assert_eq!(
-            obs.observe(crate::Output::Recording).unwrap(),
+            read_output_status(port, &cfg.obs_password, crate::Output::Recording, None).unwrap(),
             OutputStatus {
                 active: true,
                 bytes: 123,
@@ -1422,6 +1453,154 @@ mod tests {
         );
         thread.join().unwrap();
     }
+
+    #[test]
+    fn output_status_requires_typed_active_and_unsigned_counters() {
+        let valid = json!({"outputActive": true, "outputBytes": 4, "outputTotalFrames": 3});
+        for (field, malformed, expected) in [
+            (
+                "outputActive",
+                json!(1),
+                "OBS outputActive boolean required",
+            ),
+            (
+                "outputBytes",
+                json!(-1),
+                "OBS outputBytes unsigned counter required",
+            ),
+            (
+                "outputBytes",
+                json!(4.0),
+                "OBS outputBytes unsigned counter required",
+            ),
+            (
+                "outputBytes",
+                json!("4"),
+                "OBS outputBytes unsigned counter required",
+            ),
+            (
+                "outputTotalFrames",
+                json!(-1),
+                "OBS stream outputTotalFrames unsigned counter required",
+            ),
+            (
+                "outputTotalFrames",
+                json!(3.0),
+                "OBS stream outputTotalFrames unsigned counter required",
+            ),
+            (
+                "outputTotalFrames",
+                json!("3"),
+                "OBS stream outputTotalFrames unsigned counter required",
+            ),
+        ] {
+            let mut status = valid.clone();
+            status[field] = malformed;
+            for output in [crate::Output::TwitchTest, crate::Output::TwitchLive] {
+                assert_eq!(
+                    OutputStatus::from_response(output, &status)
+                        .unwrap_err()
+                        .to_string(),
+                    expected
+                );
+            }
+        }
+        for (field, expected) in [
+            ("outputActive", "OBS outputActive boolean required"),
+            ("outputBytes", "OBS outputBytes unsigned counter required"),
+            (
+                "outputTotalFrames",
+                "OBS stream outputTotalFrames unsigned counter required",
+            ),
+        ] {
+            let mut status = valid.clone();
+            status.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                OutputStatus::from_response(crate::Output::TwitchTest, &status)
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn recording_progress_uses_bytes_and_reports_unknown_frames() {
+        let sample = |active, bytes, duration: Value| {
+            OutputStatus::from_response(
+                crate::Output::Recording,
+                &json!({
+                    "outputActive": active, "outputBytes": bytes,
+                    "outputDuration": duration, "outputTotalFrames": "ignored",
+                }),
+            )
+            .unwrap()
+        };
+        assert!(!sample(false, 3_u64, Value::Null).ready());
+        assert!(!sample(true, 0, Value::Null).ready());
+        assert!(OutputProgress::start(sample(true, 0, Value::Null)).is_none());
+
+        let baseline = sample(true, 3, json!(100));
+        assert!(baseline.ready());
+        let mut progress = OutputProgress::start(baseline).unwrap();
+        let status = json!({
+            "active": true, "bytes": 3, "frames": null,
+            "frame_health": "unknown", "duration_ms": 100,
+        });
+        assert_eq!(progress.snapshot().status(), status);
+        for (active, bytes) in [(false, 10), (true, 3), (true, 2)] {
+            assert!(progress
+                .observe(sample(active, bytes, Value::Null))
+                .is_none());
+            assert_eq!(progress.snapshot().status(), status);
+        }
+        assert_eq!(
+            progress
+                .observe(sample(true, 4, json!("optional")))
+                .unwrap()
+                .status(),
+            json!({
+                "active": true, "bytes": 4, "frames": null,
+                "frame_health": "unknown", "duration_ms": null,
+            })
+        );
+    }
+
+    #[test]
+    fn stream_progress_can_move_without_moving_the_attempted_output() {
+        let output = crate::Output::TwitchTest;
+        let sample = |bytes: u64, frames: u64| {
+            OutputStatus::from_response(
+                output,
+                &json!({"outputActive": true, "outputBytes": bytes, "outputTotalFrames": frames}),
+            )
+            .unwrap()
+        };
+        let profile = SessionProfile::test_attempt(PathBuf::new(), output);
+        assert!(!sample(10, 0).ready());
+        assert!(!sample(0, 2).ready());
+        assert!(OutputProgress::start(sample(10, 0)).is_none());
+        let mut progress = OutputProgress::start(sample(10, 2)).unwrap();
+        let baseline = json!({
+            "active": true, "bytes": 10, "frames": 2,
+            "frame_health": "pending", "duration_ms": null,
+        });
+        assert_eq!(progress.snapshot().status(), baseline);
+
+        assert_eq!(profile.requested_output(), Some(output));
+        for (bytes, frames) in [(20, 2), (20, 1), (10, 4), (9, 4)] {
+            assert!(progress.observe(sample(bytes, frames)).is_none());
+            assert_eq!(progress.snapshot().status(), baseline);
+        }
+        assert_eq!(
+            progress.observe(sample(11, 3)).unwrap().status(),
+            json!({
+                "active": true, "bytes": 11, "frames": 3,
+                "frame_health": "progressing", "duration_ms": null,
+            })
+        );
+    }
+
     #[test]
     fn start_requests_private_recording() {
         let fixture = Fixture::new();

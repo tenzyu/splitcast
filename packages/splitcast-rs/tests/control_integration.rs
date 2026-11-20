@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_splitcast-rs-core");
 const TOKEN: &str = "integration-private-token-never-serialize";
+const PEER_INSTANCE: &str = "0123456789abcdef0123456789abcdef";
 const LIMIT: Duration = Duration::from_secs(5);
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 static NETWORK: Mutex<()> = Mutex::new(());
@@ -304,13 +305,37 @@ fn executable(name: &str) -> PathBuf {
 enum PeerBehavior {
     Compatible,
     Incompatible,
+    VersionTwo,
     MismatchedMedia { omit_transport: bool },
     RejectPrepare,
     LosePrepareResponse,
-    RefuseFirstStop,
-    AcceptFirstStop,
-    BareIdleFirstStop,
-    WrongOwnerFirstStop,
+    DelayedStop,
+    FirstStopFault(StopFault),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum StopFault {
+    Refusal,
+    LostReply,
+    MissingAdmissionId,
+    BareIdle,
+    WrongOwner,
+    WrongInstance,
+    WrongOutcome,
+    RequestedWith200,
+    ChangedStatusId,
+    ChangedStatusOwner,
+    MissingStatusId,
+}
+
+fn completed_stop(owner: &Value) -> Value {
+    json!({"state":"idle", "stop":"completed", "outcome":"completed",
+        "owner":owner, "stop_id":format!("{PEER_INSTANCE}-1")})
+}
+
+fn requested_stop() -> Value {
+    json!({"stop":"requested", "outcome":"accepted", "cleanup":"pending",
+        "stop_id":format!("{PEER_INSTANCE}-1")})
 }
 
 struct Peer {
@@ -332,7 +357,9 @@ impl Peer {
         let stop = Arc::clone(&shutdown);
         let thread = thread::spawn(move || {
             let mut muted = false;
+            let mut prepare_requests = 0;
             let mut stop_requests = 0;
+            let mut stop_polls = 0;
             while !stop.load(Ordering::Relaxed) {
                 let mut stream = match listener.accept() {
                     Ok((stream, _)) => stream,
@@ -346,13 +373,39 @@ impl Peer {
                     .expect("authenticated loopback peer request");
                 let request: Value = serde_json::from_str(&request.body).unwrap();
                 seen.lock().unwrap().push(request.clone());
-                if request["command"] == "prepare"
-                    && matches!(behavior, PeerBehavior::LosePrepareResponse)
-                {
-                    continue;
+                if request["command"] == "prepare" {
+                    prepare_requests += 1;
+                    if matches!(behavior, PeerBehavior::LosePrepareResponse) {
+                        continue;
+                    }
                 }
+                let owner = &request["args"]["_owner"];
                 let mut status = 200;
                 let response = match request["command"].as_str().unwrap() {
+                    "status" if owner.is_string() => {
+                        stop_polls += 1;
+                        let mut proof = completed_stop(owner);
+                        match behavior {
+                            PeerBehavior::DelayedStop if stop_polls == 1 => {
+                                proof = requested_stop();
+                                proof["state"] = json!("stopping");
+                                proof["owner"] = owner.clone();
+                            }
+                            PeerBehavior::FirstStopFault(StopFault::ChangedStatusId) => {
+                                proof["stop_id"] = json!(format!("{PEER_INSTANCE}-2"));
+                            }
+                            PeerBehavior::FirstStopFault(StopFault::MissingStatusId) => {
+                                proof["stop_id"] = Value::Null;
+                            }
+                            PeerBehavior::FirstStopFault(StopFault::ChangedStatusOwner) if stop_polls == 1 => {
+                                proof = requested_stop();
+                                proof["state"] = json!("stopping");
+                                proof["owner"] = json!("different-owner");
+                            }
+                            _ => (),
+                        }
+                        proof
+                    }
                     "status" => {
                         let mut hello = json!({"version":1,"role":"production","engine":"rust-candidate","state":"idle"});
                         if matches!(behavior, PeerBehavior::Incompatible) {
@@ -362,7 +415,7 @@ impl Peer {
                     }
                     "routes" => {
                         let mut transport = json!({
-                            "version":2,
+                            "version":if matches!(behavior, PeerBehavior::VersionTwo) { 2 } else { 3 },
                             "media":{
                                 "video":{"codec":"H264","width":cfg["capture"]["width"],"height":cfg["capture"]["height"],"fps":cfg["capture"]["fps"]},
                                 "audio":{"game":"MPEG-4 Audio","mic":"Opus","rate":48000},
@@ -376,7 +429,9 @@ impl Peer {
                                 transport["media"]["video"]["width"] = json!(1920);
                             }
                         }
-                        json!({"transport":transport})
+                        let prepare_id = (prepare_requests == 0 && !matches!(behavior, PeerBehavior::VersionTwo))
+                            .then(|| format!("{PEER_INSTANCE}-0-idle"));
+                        json!({"transport":transport, "prepare_id":prepare_id})
                     }
                     "prepare" if matches!(behavior, PeerBehavior::RejectPrepare) => {
                         status = 409;
@@ -391,21 +446,28 @@ impl Peer {
                         }
                         json!({"muted":muted})
                     }
-                    "stop" if matches!(behavior, PeerBehavior::RefuseFirstStop) && stop_requests == 0 => {
+                    "stop" => {
                         stop_requests += 1;
-                        status = 409;
-                        json!({"error":"injected unconfirmed stop"})
-                    }
-                    "stop" if stop_requests == 0 && matches!(behavior, PeerBehavior::AcceptFirstStop | PeerBehavior::BareIdleFirstStop | PeerBehavior::WrongOwnerFirstStop) => {
-                        stop_requests += 1;
-                        match behavior {
-                            PeerBehavior::AcceptFirstStop => { status = 202; json!({"stop":"requested","outcome":"accepted","cleanup":"pending"}) },
-                            PeerBehavior::BareIdleFirstStop => json!({"state":"idle"}),
-                            PeerBehavior::WrongOwnerFirstStop => json!({"state":"idle","stop":"completed","owner":"unrelated-owner"}),
-                            _ => unreachable!("injected Stop behavior checked above"),
+                        let mut proof = completed_stop(owner);
+                        if stop_requests == 1 {
+                            match behavior {
+                                PeerBehavior::DelayedStop => { status = 202; proof = requested_stop(); }
+                                PeerBehavior::FirstStopFault(fault) => match fault {
+                                    StopFault::Refusal => { status = 409; proof = json!({"error":"injected unconfirmed stop"}); }
+                                    StopFault::LostReply => continue,
+                                    StopFault::MissingAdmissionId => { status = 202; proof = requested_stop(); proof["stop_id"] = Value::Null; }
+                                    StopFault::BareIdle => proof = json!({"state":"idle"}),
+                                    StopFault::WrongOwner => proof["owner"] = json!("different-owner"),
+                                    StopFault::WrongInstance => proof["stop_id"] = json!("ffffffffffffffffffffffffffffffff-1"),
+                                    StopFault::WrongOutcome => proof["outcome"] = json!("unknown"),
+                                    StopFault::RequestedWith200 => proof = requested_stop(),
+                                    StopFault::ChangedStatusId | StopFault::ChangedStatusOwner | StopFault::MissingStatusId => { status = 202; proof = requested_stop(); }
+                                },
+                                _ => (),
+                            }
                         }
+                        proof
                     }
-                    "stop" => json!({"state":"idle","stop":"completed","owner":request["args"]["_owner"]}),
                     "prepare" | "start" | "heartbeat" => {
                         json!({"version":1,"role":"production","engine":"rust-candidate","state":"ready"})
                     }
@@ -608,10 +670,18 @@ fn native_validation_keeps_raw_and_unselected_microphones_valid() {
 
 #[test]
 fn real_agent_refuses_mismatched_media_before_remote_prepare() {
-    for omit_transport in [true, false] {
+    for behavior in [
+        PeerBehavior::MismatchedMedia {
+            omit_transport: true,
+        },
+        PeerBehavior::MismatchedMedia {
+            omit_transport: false,
+        },
+        PeerBehavior::VersionTwo,
+    ] {
         let fixture = Fixture::new();
         fixture.stub_workers();
-        let peer = Peer::new(&fixture, PeerBehavior::MismatchedMedia { omit_transport });
+        let peer = Peer::new(&fixture, behavior);
         let _agent = fixture.agent();
         let response = fixture.command("prepare", json!({}));
         assert_eq!(
@@ -621,10 +691,14 @@ fn real_agent_refuses_mismatched_media_before_remote_prepare() {
             response.json()
         );
         assert_failed_without_workers(&fixture);
+        assert_eq!(
+            fixture.get("/api/status").json()["remote_release_pending"],
+            false
+        );
         assert!(peer
             .requests()
             .iter()
-            .all(|request| !matches!(request["command"].as_str(), Some("prepare" | "start"))));
+            .all(|request| matches!(request["command"].as_str(), Some("routes" | "status"))));
     }
 }
 
@@ -677,12 +751,12 @@ fn real_agent_compatible_prepare_and_stop_release_owned_workers() {
         .iter()
         .find(|request| request["command"] == "prepare")
         .unwrap()["args"]["_owner"];
-    assert_eq!(owner.as_str().unwrap().len(), 32);
-    assert!(owner
-        .as_str()
-        .unwrap()
+    let (revision, nonce) = owner.as_str().unwrap().rsplit_once('-').unwrap();
+    assert_eq!(revision, format!("{PEER_INSTANCE}-0-idle"));
+    assert_eq!(nonce.len(), 32);
+    assert!(nonce
         .bytes()
-        .all(|byte| byte.is_ascii_hexdigit()));
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
     let stop = requests
         .iter()
         .find(|request| request["command"] == "stop")
@@ -733,7 +807,7 @@ fn real_agent_lost_prepare_response_still_requires_owned_cleanup() {
 fn real_agent_unconfirmed_stop_retains_ownership_for_explicit_retry() {
     let fixture = Fixture::new();
     fixture.stub_workers();
-    let peer = Peer::new(&fixture, PeerBehavior::RefuseFirstStop);
+    let peer = Peer::new(&fixture, PeerBehavior::FirstStopFault(StopFault::Refusal));
     let _agent = fixture.agent();
     assert_eq!(fixture.command("prepare", json!({})).code, 200);
     let pid = fixture.worker_pid("ssh");
@@ -741,6 +815,7 @@ fn real_agent_unconfirmed_stop_retains_ownership_for_explicit_retry() {
     let stopping = fixture.get("/api/status").json();
     assert_eq!(stopping["state"], "stopping");
     assert_eq!(stopping["children"], json!([]));
+    assert_eq!(stopping["remote_release_pending"], true);
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(fixture.stop()["stop"], "completed");
     assert_idle(&fixture.get("/api/status").json());
@@ -752,19 +827,26 @@ fn real_agent_unconfirmed_stop_retains_ownership_for_explicit_retry() {
 }
 
 #[test]
-fn remote_stop_requires_matching_completed_proof_not_acceptance_or_idle() {
-    for behavior in [
-        PeerBehavior::AcceptFirstStop,
-        PeerBehavior::BareIdleFirstStop,
-        PeerBehavior::WrongOwnerFirstStop,
+fn remote_stop_requires_matching_completed_proof() {
+    for (fault, polls) in [
+        (StopFault::LostReply, 0),
+        (StopFault::MissingAdmissionId, 0),
+        (StopFault::BareIdle, 0),
+        (StopFault::WrongOwner, 0),
+        (StopFault::WrongInstance, 0),
+        (StopFault::WrongOutcome, 0),
+        (StopFault::RequestedWith200, 0),
+        (StopFault::ChangedStatusId, 1),
+        (StopFault::ChangedStatusOwner, 1),
+        (StopFault::MissingStatusId, 1),
     ] {
         let fixture = Fixture::new();
         fixture.stub_workers();
-        let peer = Peer::new(&fixture, behavior);
+        let peer = Peer::new(&fixture, PeerBehavior::FirstStopFault(fault));
         let _agent = fixture.agent();
         assert_eq!(fixture.command("prepare", json!({})).code, 200);
         let first = fixture.stop();
-        assert_eq!(first["stop"], "incomplete");
+        assert_eq!(first["stop"], "incomplete", "{fault:?}: {first}");
         assert_eq!(first["outcome"], "unknown");
         assert_eq!(fixture.get("/api/status").json()["state"], "stopping");
         assert_eq!(
@@ -772,14 +854,70 @@ fn remote_stop_requires_matching_completed_proof_not_acceptance_or_idle() {
             true
         );
         assert_eq!(fixture.command("prepare", json!({})).code, 409);
-        assert_eq!(fixture.stop()["stop"], "completed");
+        let first_requests = peer.requests();
+        assert_eq!(
+            first_requests
+                .iter()
+                .filter(|r| r["command"] == "stop")
+                .count(),
+            1
+        );
+        assert_eq!(
+            first_requests
+                .iter()
+                .filter(|r| r["command"] == "status" && r["args"]["_owner"].is_string())
+                .count(),
+            polls,
+            "{fault:?}"
+        );
+        let retry = fixture.stop();
+        assert_eq!(retry["stop"], "completed");
+        assert_ne!(first["stop_id"], retry["stop_id"]);
         assert_idle(&fixture.get("/api/status").json());
         let requests = peer.requests();
         let owner = &requests.iter().find(|r| r["command"] == "prepare").unwrap()["args"]["_owner"];
         let stops: Vec<_> = requests.iter().filter(|r| r["command"] == "stop").collect();
         assert_eq!(stops.len(), 2);
         assert!(stops.iter().all(|r| &r["args"]["_owner"] == owner));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r["command"] == "prepare")
+                .count(),
+            1
+        );
     }
+}
+
+#[test]
+fn remote_accepted_stop_polls_the_same_receipt_until_completion() {
+    let fixture = Fixture::new();
+    fixture.stub_workers();
+    let peer = Peer::new(&fixture, PeerBehavior::DelayedStop);
+    let _agent = fixture.agent();
+    assert_eq!(fixture.command("prepare", json!({})).code, 200);
+    let pid = fixture.worker_pid("ssh");
+    let stopped = fixture.stop();
+    assert_eq!(stopped["stop"], "completed");
+    assert_idle(&stopped);
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "owned tunnel survived stop"
+    );
+    let requests = peer.requests();
+    let owned: Vec<_> = requests
+        .iter()
+        .filter(|r| r["args"]["_owner"].is_string())
+        .collect();
+    let commands: Vec<_> = owned
+        .iter()
+        .map(|r| r["command"].as_str().unwrap())
+        .collect();
+    assert_eq!(commands, ["prepare", "stop", "status", "status"]);
+    assert!(owned
+        .iter()
+        .all(|r| r["args"]["_owner"] == owned[0]["args"]["_owner"]));
 }
 
 #[test]

@@ -340,7 +340,20 @@ pub fn request(
     args: &str,
     timeout: Duration,
 ) -> io::Result<String> {
-    request_operation(port, host_port, token, command, args, timeout, None)
+    request_operation(port, host_port, token, command, args, timeout, None).map(Reply::into_body)
+}
+
+pub(crate) enum Reply {
+    Ok(String),
+    Accepted(String),
+}
+
+impl Reply {
+    pub(crate) fn into_body(self) -> String {
+        match self {
+            Self::Ok(body) | Self::Accepted(body) => body,
+        }
+    }
 }
 
 pub(crate) fn request_operation(
@@ -351,7 +364,7 @@ pub(crate) fn request_operation(
     args: &str,
     timeout: Duration,
     operation: Option<&crate::request::Operation>,
-) -> io::Result<String> {
+) -> io::Result<Reply> {
     let deadline = Instant::now() + timeout;
     let mut stream = TcpStream::connect_timeout(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
@@ -403,7 +416,7 @@ pub(crate) fn request_operation(
     )
     .map_err(|_| unknown_outcome(err("invalid control response")))?;
     if status == Some("HTTP/1.1 200 OK") {
-        return Ok(response);
+        return Ok(Reply::Ok(response));
     }
     let document: serde_json::Value = serde_json::from_str(&response)
         .map_err(|_| unknown_outcome(err("invalid control error response")))?;
@@ -413,9 +426,7 @@ pub(crate) fn request_operation(
         && document["outcome"] == "accepted"
         && matches!(document["cleanup"].as_str(), Some("pending" | "unknown"))
     {
-        // CLI/TUI callers receive the acknowledged intent. Remote release still
-        // requires the agent's separately checked owner-bound completion proof.
-        return Ok(response);
+        return Ok(Reply::Accepted(response));
     }
     if document["outcome"] == "not_executed" {
         return Err(io::Error::new(

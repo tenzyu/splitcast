@@ -1018,10 +1018,13 @@ def scenario(directory, binary, case, epoch):
                     "camera fixture colour missing from the expected scene inset")
             result["camera_composition"] = {"pixel": [1100, 96], "rgb": list(pixel[:3])}
         if case == "normal":
+            # The delayed audio must exercise timing checks even when the
+            # original recording is close to the accepted duration ceiling.
+            duration = str(result["decoded"]["duration"])
             delayed = directory / "bad-av-offset.mkv"
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-itsoffset",
                       str(LIMITS["av_negative_delay_seconds"]), "-i", str(recordings[0]),
-                      "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", str(delayed)])
+                      "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-t", duration, str(delayed)])
             try:
                 inspect_recording(run, delayed, epoch, evidence_tag="audio-offset")
             except AssertionError as error:
@@ -1033,7 +1036,7 @@ def scenario(directory, binary, case, epoch):
             discontinuous = directory / "bad-audio-gap.mkv"
             run.tool(["ffmpeg", "-v", "error", "-i", str(recordings[0]), "-map", "0:v:0", "-map", "0:a:0",
                       "-c:v", "copy", "-af", f"asetpts='PTS+{LIMITS['av_negative_delay_seconds']}/TB*gte(T,0.5)'",
-                      "-c:a", "aac", "-b:a", "160k", str(discontinuous)])
+                      "-c:a", "aac", "-b:a", "160k", "-t", duration, str(discontinuous)])
             try:
                 inspect_recording(run, discontinuous, epoch, evidence_tag="audio-gap")
             except AssertionError as error:

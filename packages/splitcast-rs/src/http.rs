@@ -3,6 +3,16 @@ use std::io::{self, Read};
 use std::time::Duration;
 
 pub fn get_json(port: u16, path: &str, timeout: Duration, limit: usize) -> io::Result<Value> {
+    serde_json::from_slice(&get_body(port, path, timeout, limit)?)
+        .map_err(|_| io::Error::other("invalid loopback JSON"))
+}
+
+pub(crate) fn get_body(
+    port: u16,
+    path: &str,
+    timeout: Duration,
+    limit: usize,
+) -> io::Result<Vec<u8>> {
     if !path.starts_with('/') || path.starts_with("//") || path.contains(['\r', '\n', '\0']) {
         return Err(io::Error::other("invalid loopback service path"));
     }
@@ -34,7 +44,7 @@ pub fn get_json(port: u16, path: &str, timeout: Duration, limit: usize) -> io::R
     if body.len() > limit {
         return Err(io::Error::other("loopback response exceeds its byte limit"));
     }
-    serde_json::from_slice(&body).map_err(|_| io::Error::other("invalid loopback JSON"))
+    Ok(body)
 }
 
 #[cfg(test)]
